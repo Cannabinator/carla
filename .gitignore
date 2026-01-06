@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+*.egg
+
+# CARLA Data
+data/
+*.npy
+*.png
+*.jpg
+*.jpeg
+*.ply
+*.pcd
+
+# Logs
+*.log
+logs/
+*.csv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+*.bak
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Test outputs
+test_results/
+coverage/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
