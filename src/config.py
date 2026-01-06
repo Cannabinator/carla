@@ -18,7 +18,7 @@ class SimulationConfig:
     random_seed: int = 42
     
     # Traffic Manager settings
-    tm_port: int = 8000
+    tm_port: int = 8001  # Must differ from web server port (8000)
     tm_seed: int = 42
     
     # Physics settings

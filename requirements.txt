@@ -4,6 +4,11 @@ carla==0.9.16
 # Data processing and analysis
 numpy>=1.24.0
 
+# Web server and real-time communication
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+websockets>=12.0
+
 # Visualization (optional - install as needed)
 # For LIDAR point cloud visualization
 open3d>=0.18.0

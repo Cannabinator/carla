@@ -98,7 +98,20 @@ def setup_traffic_manager(client: carla.Client, port: int = 8000,
     Returns:
         Configured TrafficManager instance
     """
-    tm = client.get_trafficmanager(port)
+    try:
+        tm = client.get_trafficmanager(port)
+    except RuntimeError as e:
+        # Port might be in use, try to reuse existing TM
+        logger.warning(f"Traffic Manager port {port} in use, attempting to reuse existing instance")
+        import time
+        time.sleep(2)  # Wait for port cleanup
+        try:
+            tm = client.get_trafficmanager(port)
+        except RuntimeError:
+            # Try different port as fallback
+            logger.warning(f"Retrying with port {port + 1}")
+            tm = client.get_trafficmanager(port + 1)
+    
     tm.set_synchronous_mode(True)
     tm.set_random_device_seed(seed)
     

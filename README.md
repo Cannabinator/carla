@@ -1,7 +1,31 @@
 # CARLA V2V Research Platform
 
-Lightweight V2V (Vehicle-to-Vehicle) communication framework for CARLA 0.9.16.
+Lightweight V2V (Vehicle-to-Vehicle) communication framework for CARLA 0.9.16 with real-time LiDAR visualization.
 
+## 🆕 New: V2V LiDAR Visualization
+
+**Real-time 3D visualization of semantic LiDAR data from multiple vehicles in your web browser!**
+
+```bash
+# Quick start
+./run_v2v_lidar.sh
+
+# Or manually
+python src/scenarios/v2v_lidar_scenario.py --carla-host 192.168.1.110
+# Then open: http://localhost:8000
+```
+
+**Features:**
+- 🌐 **Web-based 3D viewer** with Three.js
+- 🚗 **Multi-vehicle LiDAR** streaming
+- 🎨 **Semantic color coding** (vehicles, buildings, roads, etc.)
+- 🔄 **Real-time updates** at 10 Hz via WebSocket
+- 🌍 **Global coordinates** transformation from local LiDAR
+- 🎮 **Interactive controls** (rotate, pan, zoom)
+
+See [V2V_LIDAR_GUIDE.md](V2V_LIDAR_GUIDE.md) for complete documentation.
+
+---
 
 ### Run V2V Scenario
 ```bash
@@ -10,6 +34,9 @@ python tests/v2v/test_network.py
 
 # V2V communication demo
 python src/scenarios/v2v_scenario.py --host 192.168.1.110
+
+# V2V + LiDAR visualization (NEW!)
+python src/scenarios/v2v_lidar_scenario.py --carla-host 192.168.1.110
 ```
 
 ### Run Basic Scenario
