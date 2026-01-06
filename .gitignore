@@ -14,6 +14,7 @@ build/
 
 # CARLA Data
 data/
+FrameWorksV2v/
 *.npy
 *.png
 *.jpg
@@ -32,6 +33,7 @@ logs/
 *.swp
 *.swo
 *~
+.copilot/
 
 # OS
 .DS_Store
@@ -45,8 +47,18 @@ Thumbs.db
 # Test outputs
 test_results/
 coverage/
+htmlcov/
+.pytest_cache/
 
 # Temporary files
 tmp/
 temp/
 *.tmp
+
+# Documentation (keep source, ignore generated)
+*.pdf
+docs/_build/
+
+# User notes
+LaurinNotes.md
+*.notes
