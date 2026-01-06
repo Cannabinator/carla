@@ -8,28 +8,71 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import List
+from typing import List, Optional, Dict, Any
+import threading
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
 
 from .collector import LiDARDataCollector
 
 logger = logging.getLogger(__name__)
 
+# Forward declaration for run_simulation_headless (imported lazily to avoid circular import)
+_run_simulation_headless = None
+
 app = FastAPI(title="V2V LiDAR Visualizer")
 
 # Global collector instance (set by scenario)
-_collector: LiDARDataCollector = None
-_v2v_network = None
-_streaming_task = None
+_collector: Optional[LiDARDataCollector] = None
+_v2v_network: Optional[object] = None
+_streaming_task: Optional[asyncio.Task] = None
+_event_loop: Optional[asyncio.AbstractEventLoop] = None  # Store event loop reference
+
+# Simulation control
+_simulation_thread: Optional[threading.Thread] = None
+_simulation_status: Dict[str, Any] = {
+    "running": False,
+    "status": "idle",
+    "frame": 0,
+    "elapsed": 0,
+    "vehicles": 0,
+    "v2v_messages": 0,
+    "error": None
+}
+_simulation_stop_flag = False
+
+
+class SimulationConfig(BaseModel):
+    """Simulation configuration model."""
+    duration: int = 120
+    vehicles: int = 10
+    v2v_range: int = 75
+    lidar_quality: str = "high"
+    csv_logging: bool = True
+    console_output: bool = True
 
 
 def set_collector(collector: LiDARDataCollector):
-    """Set the global LiDAR collector."""
-    global _collector
+    """Set the global LiDAR collector and start streaming."""
+    global _collector, _streaming_task, _event_loop
     _collector = collector
     logger.info("LiDAR collector registered with server")
+    
+    # If there are already WebSocket connections waiting, start streaming now!
+    if len(manager.active_connections) > 0 and (_streaming_task is None or _streaming_task.done()):
+        if _event_loop is not None:
+            # Schedule the task in the main event loop from worker thread
+            future = asyncio.run_coroutine_threadsafe(
+                stream_lidar_data(_collector, update_rate=0.1),
+                _event_loop
+            )
+            logger.info(f"LiDAR streaming task scheduled for {len(manager.active_connections)} waiting clients")
+        else:
+            logger.warning("Event loop not available - streaming will start on next WebSocket connection")
+    else:
+        logger.info("LiDAR streaming will start automatically when clients connect")
 
 
 def set_v2v_network(v2v_network):
@@ -96,6 +139,15 @@ async def lidar_viewer():
     if viewer_path.exists():
         return HTMLResponse(content=viewer_path.read_text())
     return HTMLResponse(content="<h1>LiDAR viewer not found</h1>", status_code=404)
+
+
+@app.get("/control")
+async def control_panel():
+    """Serve control panel."""
+    control_path = Path(__file__).parent.parent / 'web' / 'control_panel.html'
+    if control_path.exists():
+        return HTMLResponse(content=control_path.read_text())
+    return HTMLResponse(content="<h1>Control panel not found</h1>", status_code=404)
 
 
 @app.get("/v2v")
@@ -186,8 +238,13 @@ async def v2v_dashboard():
 
 @app.on_event("startup")
 async def startup_event():
-    """Start streaming task when FastAPI starts."""
-    global _streaming_task
+    """Store event loop reference when FastAPI starts."""
+    global _streaming_task, _event_loop
+    
+    # Store event loop reference for cross-thread scheduling
+    _event_loop = asyncio.get_running_loop()
+    logger.info(f"Event loop stored: {id(_event_loop)}")
+    
     if _collector is not None:
         _streaming_task = asyncio.create_task(stream_lidar_data(_collector, update_rate=0.1))
         logger.info("Streaming task started in FastAPI event loop")
@@ -217,7 +274,15 @@ async def get_viewer():
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for streaming LiDAR data."""
+    global _streaming_task
+    
     await manager.connect(websocket)
+    
+    # Start streaming task if collector is now available and task isn't running
+    if _collector is not None and (_streaming_task is None or _streaming_task.done()):
+        _streaming_task = asyncio.create_task(stream_lidar_data(_collector, update_rate=0.1))
+        logger.info("LiDAR streaming task started on WebSocket connection")
+    
     try:
         while True:
             # Keep connection alive and receive pings
@@ -227,9 +292,11 @@ async def websocket_endpoint(websocket: WebSocket):
     except Exception as e:
         logger.error(f"WebSocket error: {e}")
         manager.disconnect(websocket)
+        logger.error(f"WebSocket error: {e}")
+        manager.disconnect(websocket)
 
 
-async def stream_lidar_data(collector: LiDARDataCollector = None, update_rate: float = 0.1):
+async def stream_lidar_data(collector: Optional[LiDARDataCollector] = None, update_rate: float = 0.1):
     """Background task to stream LiDAR data to clients.
     
     Args:
@@ -249,7 +316,10 @@ async def stream_lidar_data(collector: LiDARDataCollector = None, update_rate: f
             if len(manager.active_connections) > 0:
                 data = collector.get_combined_pointcloud()
                 if data and data.get('num_points', 0) > 0:
+                    logger.info(f"📡 Broadcasting {data['num_points']} points to {len(manager.active_connections)} clients")
                     await manager.broadcast(json.dumps(data))
+                else:
+                    logger.warning(f"❌ No data: data={data is not None}, points={data.get('num_points', 0) if data else 0}")
             await asyncio.sleep(update_rate)
         except asyncio.CancelledError:
             logger.info("Streaming task cancelled")
@@ -339,10 +409,11 @@ async def get_threats(vehicle_id: int):
         return []
     
     threats = _v2v_network.get_threats(vehicle_id)
+    import math
     return [{
         "other_vehicle_id": t['other_vehicle_id'],
         "threat_level": t['level'],
-        "time_to_collision": t['ttc'],
+        "time_to_collision": None if (math.isinf(t['ttc']) or math.isnan(t['ttc'])) else t['ttc'],
         "distance": t['distance'],
         "timestamp": t['timestamp']
     } for t in threats]
@@ -373,6 +444,94 @@ async def get_vehicle_bsm(vehicle_id: int):
             "vertical": bsm.vertical_accel
         }
     }
+
+
+# Simulation Control API Endpoints
+@app.post("/api/simulation/start")
+async def start_simulation(config: SimulationConfig):
+    """Start CARLA simulation with specified configuration."""
+    global _simulation_thread, _simulation_status, _simulation_stop_flag
+    
+    if _simulation_status["running"]:
+        return {"error": "Simulation already running"}
+    
+    # Reset stop flag
+    _simulation_stop_flag = False
+    
+    # Update status
+    _simulation_status = {
+        "running": True,
+        "status": "starting",
+        "frame": 0,
+        "elapsed": 0,
+        "vehicles": config.vehicles,
+        "v2v_messages": 0,
+        "error": None
+    }
+    
+    # Run simulation in background thread
+    def run_simulation():
+        try:
+            from src.scenarios.v2v_complete_demo import run_simulation_headless
+            # Pass server module reference to avoid thread isolation
+            import sys
+            server_module = sys.modules[__name__]
+            run_simulation_headless(
+                duration=config.duration,
+                vehicles=config.vehicles,
+                v2v_range=config.v2v_range,
+                lidar_quality=config.lidar_quality,
+                csv_logging=config.csv_logging,
+                console_output=config.console_output,
+                status_callback=update_simulation_status,
+                server_module=server_module
+            )
+            _simulation_status["running"] = False
+            _simulation_status["status"] = "completed"
+        except Exception as e:
+            logger.error(f"Simulation error: {e}", exc_info=True)
+            _simulation_status["running"] = False
+            _simulation_status["status"] = "error"
+            _simulation_status["error"] = str(e)
+    
+    _simulation_thread = threading.Thread(target=run_simulation, daemon=True)
+    _simulation_thread.start()
+    
+    return {"status": "started", "config": config.dict()}
+
+
+@app.post("/api/simulation/stop")
+async def stop_simulation():
+    """Stop running simulation."""
+    global _simulation_stop_flag, _simulation_status
+    
+    if not _simulation_status["running"]:
+        return {"error": "No simulation running"}
+    
+    _simulation_stop_flag = True
+    _simulation_status["status"] = "stopping"
+    
+    return {"status": "stopping"}
+
+
+@app.get("/api/simulation/status")
+async def get_simulation_status():
+    """Get current simulation status."""
+    return _simulation_status
+
+
+def update_simulation_status(frame: int, elapsed: float, v2v_msgs: int):
+    """Callback to update simulation status from running thread."""
+    global _simulation_status
+    _simulation_status["frame"] = frame
+    _simulation_status["elapsed"] = int(elapsed)
+    _simulation_status["v2v_messages"] = v2v_msgs
+    _simulation_status["status"] = "running"
+
+
+def should_stop_simulation() -> bool:
+    """Check if simulation should stop."""
+    return _simulation_stop_flag
 
 
 def run_server(host: str = '0.0.0.0', port: int = 8000):

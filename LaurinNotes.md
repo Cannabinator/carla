@@ -1,6 +1,6 @@
 ### goals of this program
     - repeatable scenario with vehicle2vehicle communication
-
+    - controll all from a frontend
 
 ### NOTES 
 

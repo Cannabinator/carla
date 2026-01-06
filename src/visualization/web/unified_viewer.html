@@ -76,11 +76,22 @@
             height: 100%;
             border: none;
         }
+        
+        /* Control Panel iframe */
+        #controlFrame {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
     </style>
 </head>
 <body>
     <div class="nav-tabs">
-        <button class="tab-button active" onclick="switchTab('lidar')">
+        <button class="tab-button active" onclick="switchTab('control')">
+            <span class="tab-icon">🎮</span>
+            Control Panel
+        </button>
+        <button class="tab-button" onclick="switchTab('lidar')">
             <span class="tab-icon">🎯</span>
             LiDAR 3D Viewer
         </button>
@@ -90,7 +101,11 @@
         </button>
     </div>
     
-    <div id="lidar-tab" class="tab-content active">
+    <div id="control-tab" class="tab-content active">
+        <iframe id="controlFrame" src="/control"></iframe>
+    </div>
+    
+    <div id="lidar-tab" class="tab-content">
         <iframe id="lidarFrame" src="/lidar"></iframe>
     </div>
     
@@ -115,8 +130,9 @@
         
         // Keyboard shortcuts
         document.addEventListener('keydown', (e) => {
-            if (e.key === '1') switchTab('lidar');
-            if (e.key === '2') switchTab('v2v');
+            if (e.key === '1') switchTab('control');
+            if (e.key === '2') switchTab('lidar');
+            if (e.key === '3') switchTab('v2v');
         });
     </script>
 </body>

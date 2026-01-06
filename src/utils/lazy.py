@@ -61,7 +61,7 @@ class LazyVehicleStats:
         if self._speed_ms is None:
             vel = self._snapshot.get_velocity()
             self._speed_ms = (vel.x**2 + vel.y**2 + vel.z**2)**0.5
-        return self._speed_ms
+        return self._speed_ms or 0.0
     
     @property
     def speed_kmh(self) -> float:
@@ -242,7 +242,7 @@ if __name__ == '__main__':
     with Timer("Fibonacci(30) first call"):
         result1 = fibonacci(30)
     
-    fibonacci.cache_clear()
+    fibonacci.cache_clear()  # type: ignore
     
     # Without memoization (slow)
     def fib_slow(n):

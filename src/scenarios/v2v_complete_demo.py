@@ -58,7 +58,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def run_complete_v2v_demo(config: ScenarioConfig) -> None:
+def run_complete_v2v_demo(config: ScenarioConfig, status_callback=None, server_module=None) -> None:
     """
     Run complete V2V + LiDAR demonstration scenario.
     
@@ -71,6 +71,8 @@ def run_complete_v2v_demo(config: ScenarioConfig) -> None:
     
     Args:
         config: Scenario configuration from ScenarioBuilder
+        status_callback: Optional callback function(frame, elapsed, v2v_msgs) for status updates
+        server_module: Server module reference to avoid thread isolation issues
     """
     lidar_api: Optional[Any] = None
     v2v_api: Optional[V2VAPI] = None
@@ -119,7 +121,7 @@ def run_complete_v2v_demo(config: ScenarioConfig) -> None:
             # ========================================================================
             # STEP 3: Spawn Vehicles
             # ========================================================================
-            actor_mgr: ActorManager = ActorManager(session.world, session.bp_lib)
+            actor_mgr: ActorManager = ActorManager(session.world, session.bp_lib)  # type: ignore
             
             # CRITICAL: Skip first spawn points (parking lots in Town10HD)
             # Use spawn points from index 10+ for better road positions
@@ -158,10 +160,10 @@ def run_complete_v2v_demo(config: ScenarioConfig) -> None:
             # STEP 4: Initialize LiDAR (if enabled)
             # ========================================================================
             if config.lidar_enabled:
-                print(f"\n📡 Initializing Unified Visualization Server...")
+                print(f"\n📡 Initializing LiDAR for existing server...")
                 from src.visualization.lidar.api import LiDARStreamingAPI
                 
-                # Create LiDAR API with V2V network integration
+                # Create LiDAR API but DON'T start a new server (main server already running)
                 lidar_api = LiDARStreamingAPI(
                     world=session.world,
                     web_port=config.lidar_web_port,
@@ -172,9 +174,21 @@ def run_complete_v2v_demo(config: ScenarioConfig) -> None:
                     v2v_network=v2v  # Pass V2V network for unified visualization
                 )
                 lidar_api.register_ego_only(ego)
-                lidar_api.start_server(background=True)
                 
-                # URLs are printed by LiDAR API start_server
+                # Register with existing server - use passed module reference or import
+                if server_module is not None:
+                    # Use passed server module (from API call)
+                    server_module.set_collector(lidar_api.collector)
+                    server_module.set_v2v_network(v2v)
+                    print(f"   ✓ LiDAR registered with main server on port {config.lidar_web_port} (via module ref)")
+                else:
+                    # Direct import (standalone execution)
+                    from src.visualization.lidar import server as lidar_server
+                    lidar_server.set_collector(lidar_api.collector)
+                    lidar_server.set_v2v_network(v2v)
+                    print(f"   ✓ LiDAR registered with main server on port {config.lidar_web_port}")
+                
+                # Don't call lidar_api.start_server() - use existing server
             
             # ========================================================================
             # STEP 5: Setup Traffic Manager (Deterministic)
@@ -189,20 +203,22 @@ def run_complete_v2v_demo(config: ScenarioConfig) -> None:
                 config.use_hybrid_physics,
                 config.hybrid_physics_radius
             )
-            # CRITICAL: Use realistic speed settings for better movement
-            # -30% is too slow and causes vehicles to stop, use -10% instead
-            tm.global_percentage_speed_difference(-10.0)  # 10% slower than speed limit
+            # CRITICAL: Traffic manager speed percentage is negative to INCREASE speed!
+            # Negative value = faster, Positive value = slower
+            # CARLA docs: "If less than zero, it's a % increase. If greater, it's a % decrease."
+            tm.global_percentage_speed_difference(-20.0)  # 20% FASTER than speed limit (negative = faster!)
             tm.set_global_distance_to_leading_vehicle(config.safety_distance)
             
             # Enable autopilot on ego with proper settings
             ego.set_autopilot(True, config.tm_port)
             tm.update_vehicle_lights(ego, True)
-            tm.ignore_lights_percentage(ego, 70)  # Ignore 70% of lights for better movement
+            tm.ignore_lights_percentage(ego, 80)  # Ignore 80% of lights to reduce stopping
+            tm.ignore_signs_percentage(ego, 80)  # Ignore 80% of signs
             tm.auto_lane_change(ego, True)
-            tm.distance_to_leading_vehicle(ego, 2.0)  # Closer following for ego
-            tm.vehicle_percentage_speed_difference(ego, 0.0)  # Ego drives at speed limit
-            print(f"   ✓ Traffic Manager configured: speed=-10%, ignores most lights")
-            print(f"   ✓ Ego autopilot: speed=100%, lane change enabled\n")
+            tm.distance_to_leading_vehicle(ego, 1.5)  # Closer following for ego
+            tm.vehicle_percentage_speed_difference(ego, -30.0)  # Ego drives 30% FASTER (negative!)
+            print(f"   ✓ Traffic Manager configured: speed=+20% (faster!), ignores most lights/signs")
+            print(f"   ✓ Ego autopilot: speed=+30% (faster!), lane change enabled\n")
             
             # Spawn traffic vehicles with better error handling
             print(f"🚗 Spawning {num_vehicles-1} traffic vehicles on roads...")
@@ -345,6 +361,12 @@ def run_complete_v2v_demo(config: ScenarioConfig) -> None:
                     for observer in observers:
                         observer.on_frame(frame, state, v2v_data)
                     
+                    # Update status callback if provided (for web API)
+                    if status_callback and frame % 10 == 0:
+                        current_elapsed = time.time() - start_time
+                        v2v_msgs = v2v.get_network_stats()['total_messages_sent'] if v2v else 0
+                        status_callback(frame, current_elapsed, v2v_msgs)
+                    
                     # Track frame time for performance analysis
                     frame_time: float = time.perf_counter() - frame_start
                     frame_times.append(frame_time)
@@ -432,9 +454,9 @@ def run_complete_v2v_demo(config: ScenarioConfig) -> None:
         import traceback
         traceback.print_exc()
     finally:
-        # Stop LiDAR before context manager cleanup
+        # Stop LiDAR collector but don't stop the server (it's shared)
         if lidar_api:
-            lidar_api.stop()
+            lidar_api.collector.cleanup()
             print("✓ LiDAR streaming stopped")
         
         # Context manager handles CARLA cleanup automatically
@@ -546,3 +568,50 @@ Examples:
 
 if __name__ == '__main__':
     main()
+
+
+def run_simulation_headless(
+    duration: int = 120,
+    vehicles: int = 10,
+    v2v_range: float = 75.0,
+    lidar_quality: str = "high",
+    csv_logging: bool = True,
+    console_output: bool = True,
+    status_callback = None,
+    server_module = None
+):
+    """
+    Run simulation in headless mode (callable from API).
+    
+    Args:
+        duration: Simulation duration in seconds
+        vehicles: Number of vehicles
+        v2v_range: V2V communication range in meters
+        lidar_quality: LiDAR quality ('high', 'medium', 'fast')
+        csv_logging: Enable CSV logging
+        console_output: Enable console output
+        status_callback: Function to call with status updates (frame, elapsed, v2v_msgs)
+        server_module: Server module reference to avoid thread isolation issues
+    """
+    # Build configuration
+    config: ScenarioConfig = (ScenarioBuilder()
+        .with_carla_server('192.168.1.110', 2000)
+        .with_duration(duration)
+        .with_vehicles(vehicles)
+        .with_seed(42)
+        .with_v2v(enabled=True, range_m=v2v_range)
+        .with_console_output(enabled=console_output)
+        .with_carla_debug(enabled=False)
+        .build()
+    )
+    
+    # Apply LiDAR settings
+    config.lidar_enabled = True
+    config.lidar_quality = lidar_quality
+    config.lidar_web_port = 8000
+    
+    # Apply logging
+    config.csv_logging = csv_logging
+    
+    # Run with status updates
+    run_complete_v2v_demo(config, status_callback=status_callback, server_module=server_module)

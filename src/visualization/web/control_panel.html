@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>V2V Simulation Control Panel</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #333;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+        
+        .card {
+            background: white;
+            border-radius: 10px;
+            padding: 25px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        
+        h1 {
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+        
+        h2 {
+            color: #764ba2;
+            font-size: 1.3em;
+            margin-bottom: 15px;
+            border-bottom: 2px solid #f0f0f0;
+            padding-bottom: 8px;
+        }
+        
+        .status-badge {
+            display: inline-block;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            font-weight: bold;
+            margin-bottom: 15px;
+        }
+        
+        .status-idle {
+            background: #9ca3af;
+            color: white;
+        }
+        
+        .status-running {
+            background: #4ade80;
+            color: white;
+        }
+        
+        .status-error {
+            background: #ef4444;
+            color: white;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 5px;
+            color: #555;
+        }
+        
+        input[type="number"],
+        input[type="text"],
+        select {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #e5e7eb;
+            border-radius: 5px;
+            font-size: 1em;
+            transition: border-color 0.3s;
+        }
+        
+        input:focus,
+        select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+        
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
+        }
+        
+        .btn {
+            padding: 12px 30px;
+            border: none;
+            border-radius: 5px;
+            font-size: 1em;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-right: 10px;
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .btn-danger {
+            background: #ef4444;
+            color: white;
+        }
+        
+        .btn-secondary {
+            background: #6b7280;
+            color: white;
+        }
+        
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .log-box {
+            background: #1f2937;
+            color: #10b981;
+            padding: 15px;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+            max-height: 300px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
+        
+        .info-text {
+            color: #6b7280;
+            font-size: 0.9em;
+            margin-top: 5px;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+        
+        .stat-item {
+            text-align: center;
+            padding: 15px;
+            background: #f9fafb;
+            border-radius: 8px;
+        }
+        
+        .stat-value {
+            font-size: 1.8em;
+            font-weight: bold;
+            color: #667eea;
+        }
+        
+        .stat-label {
+            font-size: 0.9em;
+            color: #6b7280;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card">
+            <h1>🚗 V2V Simulation Control Panel</h1>
+            <p class="info-text">Configure and control your CARLA V2V simulation from the browser</p>
+            <div id="statusBadge" class="status-badge status-idle">IDLE</div>
+        </div>
+
+        <div class="card">
+            <h2>⚙️ Simulation Configuration</h2>
+            
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="duration">Duration (seconds)</label>
+                    <input type="number" id="duration" value="120" min="10" max="3600">
+                    <p class="info-text">Simulation runtime</p>
+                </div>
+                
+                <div class="form-group">
+                    <label for="vehicles">Number of Vehicles</label>
+                    <input type="number" id="vehicles" value="10" min="1" max="50">
+                    <p class="info-text">Total traffic vehicles</p>
+                </div>
+            </div>
+            
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="v2vRange">V2V Range (meters)</label>
+                    <input type="number" id="v2vRange" value="75" min="10" max="300">
+                    <p class="info-text">Communication range</p>
+                </div>
+                
+                <div class="form-group">
+                    <label for="lidarQuality">LiDAR Quality</label>
+                    <select id="lidarQuality">
+                        <option value="fast">Fast (32ch, 500k pts/s)</option>
+                        <option value="high" selected>High (64ch, 1M pts/s)</option>
+                    </select>
+                </div>
+            </div>
+            
+            <div class="form-group checkbox-group">
+                <input type="checkbox" id="csvLogging" checked>
+                <label for="csvLogging">Enable CSV Data Logging</label>
+            </div>
+            
+            <div class="form-group checkbox-group">
+                <input type="checkbox" id="consoleOutput" checked>
+                <label for="consoleOutput">Console Output (Stats every 2s)</label>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>🎮 Simulation Control</h2>
+            <button class="btn btn-primary" id="startBtn" onclick="startSimulation()">
+                ▶️ Start Simulation
+            </button>
+            <button class="btn btn-danger" id="stopBtn" onclick="stopSimulation()" disabled>
+                ⏹️ Stop Simulation
+            </button>
+            <button class="btn btn-secondary" onclick="clearLogs()">
+                🗑️ Clear Logs
+            </button>
+        </div>
+
+        <div class="card">
+            <h2>📊 Simulation Stats</h2>
+            <div class="stats-grid">
+                <div class="stat-item">
+                    <div class="stat-value" id="statFrames">0</div>
+                    <div class="stat-label">Frames</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="statElapsed">0s</div>
+                    <div class="stat-label">Elapsed</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="statVehicles">0</div>
+                    <div class="stat-label">Vehicles</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="statV2V">0</div>
+                    <div class="stat-label">V2V Msgs</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>📝 Simulation Log</h2>
+            <div class="log-box" id="logBox">Waiting for simulation to start...</div>
+        </div>
+    </div>
+
+    <script>
+        let statusPollInterval = null;
+        
+        function updateStatus(badge, text, className) {
+            const el = document.getElementById('statusBadge');
+            el.textContent = text;
+            el.className = `status-badge status-${className}`;
+        }
+        
+        function addLog(message) {
+            const logBox = document.getElementById('logBox');
+            const timestamp = new Date().toLocaleTimeString();
+            logBox.textContent += `[${timestamp}] ${message}\n`;
+            logBox.scrollTop = logBox.scrollHeight;
+        }
+        
+        function clearLogs() {
+            document.getElementById('logBox').textContent = '';
+            addLog('Logs cleared');
+        }
+        
+        async function startSimulation() {
+            const config = {
+                duration: parseInt(document.getElementById('duration').value),
+                vehicles: parseInt(document.getElementById('vehicles').value),
+                v2v_range: parseInt(document.getElementById('v2vRange').value),
+                lidar_quality: document.getElementById('lidarQuality').value,
+                csv_logging: document.getElementById('csvLogging').checked,
+                console_output: document.getElementById('consoleOutput').checked
+            };
+            
+            addLog('Starting simulation with config: ' + JSON.stringify(config, null, 2));
+            updateStatus('statusBadge', 'STARTING...', 'idle');
+            
+            document.getElementById('startBtn').disabled = true;
+            
+            try {
+                const response = await fetch('/api/simulation/start', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(config)
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    addLog('✓ Simulation started successfully');
+                    updateStatus('statusBadge', 'RUNNING', 'running');
+                    document.getElementById('stopBtn').disabled = false;
+                    
+                    // Start polling for status
+                    if (!statusPollInterval) {
+                        statusPollInterval = setInterval(pollStatus, 1000);
+                    }
+                } else {
+                    addLog('✗ Error: ' + result.error);
+                    updateStatus('statusBadge', 'ERROR', 'error');
+                    document.getElementById('startBtn').disabled = false;
+                }
+            } catch (error) {
+                addLog('✗ Connection error: ' + error.message);
+                updateStatus('statusBadge', 'ERROR', 'error');
+                document.getElementById('startBtn').disabled = false;
+            }
+        }
+        
+        async function stopSimulation() {
+            addLog('Stopping simulation...');
+            
+            try {
+                const response = await fetch('/api/simulation/stop', {method: 'POST'});
+                const result = await response.json();
+                
+                if (response.ok) {
+                    addLog('✓ Simulation stopped');
+                    updateStatus('statusBadge', 'IDLE', 'idle');
+                    document.getElementById('startBtn').disabled = false;
+                    document.getElementById('stopBtn').disabled = true;
+                    
+                    if (statusPollInterval) {
+                        clearInterval(statusPollInterval);
+                        statusPollInterval = null;
+                    }
+                } else {
+                    addLog('✗ Error: ' + result.error);
+                }
+            } catch (error) {
+                addLog('✗ Connection error: ' + error.message);
+            }
+        }
+        
+        async function pollStatus() {
+            try {
+                const response = await fetch('/api/simulation/status');
+                const status = await response.json();
+                
+                if (status.running) {
+                    updateStatus('statusBadge', 'RUNNING', 'running');
+                    document.getElementById('statFrames').textContent = status.frame || 0;
+                    document.getElementById('statElapsed').textContent = (status.elapsed || 0) + 's';
+                    document.getElementById('statVehicles').textContent = status.vehicles || 0;
+                    document.getElementById('statV2V').textContent = status.v2v_messages || 0;
+                } else if (status.status === 'completed') {
+                    updateStatus('statusBadge', 'COMPLETED', 'idle');
+                    addLog('✓ Simulation completed');
+                    document.getElementById('startBtn').disabled = false;
+                    document.getElementById('stopBtn').disabled = true;
+                    
+                    if (statusPollInterval) {
+                        clearInterval(statusPollInterval);
+                        statusPollInterval = null;
+                    }
+                } else if (status.status === 'error') {
+                    updateStatus('statusBadge', 'ERROR', 'error');
+                    addLog('✗ Simulation error: ' + status.error);
+                    document.getElementById('startBtn').disabled = false;
+                    document.getElementById('stopBtn').disabled = true;
+                    
+                    if (statusPollInterval) {
+                        clearInterval(statusPollInterval);
+                        statusPollInterval = null;
+                    }
+                }
+            } catch (error) {
+                console.error('Status poll error:', error);
+            }
+        }
+        
+        // Initial status check
+        pollStatus();
+    </script>
+</body>
+</html>

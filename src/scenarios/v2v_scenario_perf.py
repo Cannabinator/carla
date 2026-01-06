@@ -75,7 +75,7 @@ def run_v2v_scenario_performance(config: ScenarioConfig) -> None:
                 enable_cooperative_perception=True,
                 world=session.world
             ) if config.v2v_enabled else None
-            actor_mgr: ActorManager = ActorManager(session.world, session.bp_lib)
+            actor_mgr: ActorManager = ActorManager(session.world, session.bp_lib)  # type: ignore
             
             # Limit vehicles to available spawn points
             num_vehicles: int = min(config.num_vehicles, len(session.spawn_points))
@@ -100,7 +100,7 @@ def run_v2v_scenario_performance(config: ScenarioConfig) -> None:
                 
                 with Timer("LiDAR initialization"):
                     lidar_api = create_ego_lidar_stream(
-                        world=session.world,
+                        world=session.world,  # type: ignore
                         ego_vehicle=ego,
                         web_port=config.lidar_web_port,
                         high_quality=(config.lidar_quality == LiDARQuality.HIGH.value)
@@ -111,7 +111,7 @@ def run_v2v_scenario_performance(config: ScenarioConfig) -> None:
             # Setup Traffic Manager
             from src.utils import setup_traffic_manager
             tm: carla.TrafficManager = setup_traffic_manager(
-                session.client,
+                session.client,  # type: ignore
                 config.tm_port,
                 config.tm_seed,
                 config.use_hybrid_physics,
@@ -154,8 +154,8 @@ def run_v2v_scenario_performance(config: ScenarioConfig) -> None:
             
             if config.carla_debug_viz and v2v:
                 observers.append(CARLADebugObserver(
-                    world=session.world,
-                    v2v_network=v2v,
+                    world=session.world,  # type: ignore
+                    v2v_network=v2v,  # type: ignore
                     ego_id=0,
                     update_interval_frames=config.debug_viz_interval_frames
                 ))

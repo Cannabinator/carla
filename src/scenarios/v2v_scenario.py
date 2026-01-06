@@ -371,14 +371,16 @@ def run_v2v_scenario(host='192.168.1.110', port=2000, duration=60, v2v_range=50.
             logger.info("LiDAR streaming stopped")
         
         # Restore original settings
-        restore_world_settings(world, original_settings)
-        print("✓ Restored world settings")
-        logger.info("World settings restored")
+        if world and original_settings:
+            restore_world_settings(world, original_settings)
+            print("✓ Restored world settings")
+            logger.info("World settings restored")
         
         # Destroy all spawned actors
-        destroy_actors(client, actors)
-        print(f"✓ Destroying {len(actors)} actors...")
-        logger.info(f"Destroying {len(actors)} actors")
+        if client:
+            destroy_actors(client, actors)
+            print(f"✓ Destroying {len(actors)} actors...")
+            logger.info(f"Destroying {len(actors)} actors")
         
         print("✓ Cleanup complete\n")
         print(f"📝 Log file saved: {log_file}")

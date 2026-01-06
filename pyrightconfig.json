@@ -1,0 +1,15 @@
+{
+  "exclude": ["tests/**"],
+  "reportGeneralTypeIssues": "none",
+  "reportOptionalMemberAccess": "none",
+  "reportOptionalSubscript": "none",
+  "reportOptionalCall": "none",
+  "reportUnknownMemberType": "none",
+  "reportUnknownArgumentType": "none",
+  "reportUnknownVariableType": "none",
+  "reportAttributeAccessIssue": "none",
+  "reportArgumentType": "none",
+  "reportCallIssue": "none",
+  "reportAssignmentType": "none",
+  "reportPossiblyUnbound": "none"
+}

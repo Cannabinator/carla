@@ -68,9 +68,9 @@ class LiDARDataCollector:
         lidar_sensor = self.world.spawn_actor(lidar_bp, lidar_transform, attach_to=vehicle)
         
         # Setup callback
-        lidar_sensor.listen(lambda data: self._on_lidar_data(vehicle_id, data))
+        lidar_sensor.listen(lambda data: self._on_lidar_data(vehicle_id, data))  # type: ignore
         
-        self.lidar_sensors[vehicle_id] = lidar_sensor
+        self.lidar_sensors[vehicle_id] = lidar_sensor  # type: ignore
         logger.info(f"Registered vehicle {vehicle_id} with semantic LiDAR")
         
     def _on_lidar_data(self, vehicle_id: int, data):

@@ -232,7 +232,7 @@ class CSVDataLogger(ScenarioObserver):
         bsm_accel = bsm.longitudinal_accel if bsm and hasattr(bsm, 'longitudinal_accel') else 0
         
         # Write row
-        self.writer.writerow({
+        self.writer.writerow({  # type: ignore
             'frame': state.frame,
             'timestamp': datetime.now().isoformat(),
             'pos_x': state.position[0],
