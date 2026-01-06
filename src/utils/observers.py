@@ -11,7 +11,7 @@ from pathlib import Path
 import csv
 
 from .session import VehicleState
-from ..v2v import V2VNetwork
+from ..v2v import V2VNetwork, V2VNetworkEnhanced
 from ..config import DEFAULT_VIZ_CONFIG
 
 
@@ -75,7 +75,12 @@ class ConsoleObserver(ScenarioObserver):
             max_display = DEFAULT_VIZ_CONFIG.max_neighbors_displayed
             for i, neighbor in enumerate(neighbors[:max_display], 1):
                 from ..utils import calculate_distance_3d
-                dist = calculate_distance_3d(neighbor.location, state.position)
+                # Support both BSMCore (enhanced) and V2VState (old)
+                if hasattr(neighbor, 'latitude'):
+                    neighbor_loc = (neighbor.latitude, neighbor.longitude, neighbor.elevation)
+                else:
+                    neighbor_loc = neighbor.location
+                dist = calculate_distance_3d(neighbor_loc, state.position)
                 neighbor_speed_kmh = neighbor.speed * 3.6
                 rel_speed = neighbor_speed_kmh - state.speed_kmh
                 print(f"      {i}. ID {neighbor.vehicle_id:3d}: {neighbor_speed_kmh:6.2f} km/h | "
@@ -120,11 +125,22 @@ class CARLADebugObserver(ScenarioObserver):
         """Draw V2V range and connections."""
         import numpy as np
         
-        ego_state = self.v2v.get_state(self.ego_id)
-        if not ego_state:
+        # Get ego BSM - supports both old V2VNetwork and new V2VNetworkEnhanced
+        if hasattr(self.v2v, 'get_bsm'):
+            # Enhanced V2V network
+            ego_bsm = self.v2v.get_bsm(self.ego_id)
+            if not ego_bsm:
+                return
+            ego_loc = carla.Location(ego_bsm.latitude, ego_bsm.longitude, ego_bsm.elevation)
+        elif hasattr(self.v2v, 'get_state'):
+            # Old V2V network
+            ego_state = self.v2v.get_state(self.ego_id)
+            if not ego_state:
+                return
+            ego_loc = carla.Location(*ego_state.location)
+        else:
             return
         
-        ego_loc = carla.Location(*ego_state.location)
         debug = self.world.debug
         frame_duration = 0.25  # Slightly longer than update interval
         
@@ -151,7 +167,16 @@ class CARLADebugObserver(ScenarioObserver):
         # Draw connection lines
         neighbors = self.v2v.get_neighbors(self.ego_id)
         for neighbor in neighbors:
-            neighbor_loc = carla.Location(*neighbor.location)
+            # Support both BSMCore (enhanced) and V2VState (old) formats
+            if hasattr(neighbor, 'latitude'):
+                # BSMCore from enhanced network
+                neighbor_loc = carla.Location(neighbor.latitude, neighbor.longitude, neighbor.elevation)
+            elif hasattr(neighbor, 'location'):
+                # V2VState from old network
+                neighbor_loc = carla.Location(*neighbor.location)
+            else:
+                continue
+                
             debug.draw_line(
                 ego_loc + carla.Location(z=self.config.connection_line_z_offset),
                 neighbor_loc + carla.Location(z=self.config.connection_line_z_offset),

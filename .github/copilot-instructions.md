@@ -1,16 +1,100 @@
 # GitHub Copilot Instructions for CARLA V2V Research Platform
 
-ALLWAYS LOOKUP EXAMPLES AND USAGE OF CODE IN THE CARLA OFFICIAL DOCUMENTATION: https://carla.readthedocs.io/en/0.9.16/
-OR SEARCH CERTIFIED EXAMPLES ONLINE.
+Production-ready V2V (Vehicle-to-Vehicle) communication framework for CARLA Simulator 0.9.16. **Remote architecture**: CARLA server on Windows (192.168.1.110:2000), Python client on Ubuntu 24.04.
 
-The Scenarios you create needs to be scientifically valid and reproducible. Follow the patterns and conventions established in the existing codebase.
+⚠️ **ALWAYS** reference CARLA official documentation: https://carla.readthedocs.io/en/0.9.16/ for API usage patterns.
+
+**Scientific Requirements**: All scenarios must be deterministic and reproducible. Always update `requirements.txt` when adding dependencies.
 
 ## Project Overview
-Lightweight V2V (Vehicle-to-Vehicle) communication framework for CARLA Simulator 0.9.16. **Remote architecture**: CARLA server on Windows (192.168.1.110:2000), Python client on Ubuntu 24.04.
+Highly optimized research platform featuring:
+- **V2V Communication**: SAE J2735 BSM protocol with 2 Hz updates, 150m range
+- **Real-time LiDAR Visualization**: Web-based 3D viewer with semantic coloring
+- **Performance Optimizations**: 73% bandwidth reduction (binary WebSocket), 50-70% point reduction (octree), lazy evaluation
+- **Professional Architecture**: Observer pattern, builder pattern, context managers, dataclasses, type hints (90% coverage)
 
-## Architecture & Critical Patterns
+## Architecture Patterns
 
-### CARLA Client Pattern (All Scenarios)
+### 1. Context Manager Pattern (Guaranteed Cleanup)
+**ALWAYS** use `CARLASession` for robust resource management:
+```python
+from src.utils import CARLASession
+from src.config import DEFAULT_SIM_CONFIG
+
+with CARLASession('192.168.1.110', 2000, DEFAULT_SIM_CONFIG) as session:
+    ego = session.world.spawn_actor(bp, spawn_point)
+    session.actors.append(ego)  # Tracks for auto-cleanup
+    # ... scenario code ...
+# Automatic cleanup: restores settings, destroys actors, handles exceptions
+```
+
+### 2. Builder Pattern (Scenario Configuration)
+Use `ScenarioBuilder` for fluent, type-safe configuration:
+```python
+from src.utils import ScenarioBuilder, get_performance_config
+
+config = (ScenarioBuilder()
+    .with_carla_server('192.168.1.110', 2000)
+    .with_duration(60)
+    .with_vehicles(20)
+    .with_v2v(range_m=150.0)
+    .with_lidar(quality='high', port=8000)
+    .build())
+
+# Or use factory methods for common configurations
+config = get_performance_config()  # High-performance preset
+```
+
+### 3. Observer Pattern (Visualization & Logging)
+**Separation of concerns**: Keep scenario logic separate from visualization. Observers use lazy evaluation internally for efficiency.
+```python
+from src.utils import ConsoleObserver, CARLADebugObserver, CSVDataLogger, CompactLogObserver
+
+observers = [
+    ConsoleObserver(interval_seconds=2.0, fps=20),  # Console stats
+    CARLADebugObserver(session.world, v2v, interval_frames=5),  # 3D visualization
+    CSVDataLogger(output_path='data/scenario.csv'),  # Data export
+    CompactLogObserver(logger)  # Structured logging
+]
+
+# In simulation loop
+for observer in observers:
+    observer.on_frame(frame, state, v2v_data)
+
+# After completion
+for observer in observers:
+    observer.on_complete(total_frames, elapsed_time)
+```
+
+### 4. Lazy Evaluation (Performance)
+Use lazy properties to avoid expensive computations until needed:
+```python
+from src.utils import LazyVehicleStats, LazyProperty
+
+# Automatic lazy computation
+stats = LazyVehicleStats(snapshot)
+if condition:
+    speed = stats.speed_kmh  # Only computed if accessed
+```
+
+### 5. Configuration Management
+Use centralized dataclasses from `src/config.py`:
+```python
+from src.config import (
+    DEFAULT_SIM_CONFIG,      # SimulationConfig
+    DEFAULT_VIZ_CONFIG,      # VisualizationConfig  
+    DEFAULT_V2V_CONFIG,      # V2VConfig
+    DEFAULT_VEHICLE_CONFIG   # VehicleSpawnConfig
+)
+
+# Customize as needed
+config = DEFAULT_SIM_CONFIG
+config.random_seed = 123
+```
+
+## CARLA Critical Patterns
+
+### Synchronous Mode (MANDATORY for Reproducibility)
 ```python
 # ALWAYS use synchronous mode for reproducibility
 settings = world.get_settings()
@@ -43,11 +127,28 @@ finally:
 
 ## V2V Communication System
 
-### Key Components
-- **Protocol** (`src/v2v/protocol.py`): V2VState dataclass with efficient state representation
-- **Network** (`src/v2v/communicator.py`): V2VNetwork for neighbor discovery and state sharing
+### Three V2V Implementations
+The codebase provides three V2V systems for different use cases:
 
-### V2V Pattern
+1. **V2VNetwork** (`src/v2v/communicator.py`) - Lightweight neighbor discovery
+   - Simple distance-based neighbor detection
+   - Efficient state sharing with V2VState dataclass
+   - Best for: Basic V2V scenarios
+
+2. **V2VNetworkEnhanced** (`src/v2v/network_enhanced.py`) - Industry-standard BSM protocol
+   - SAE J2735 Basic Safety Message (BSM) implementation
+   - 2 Hz update rate (configurable)
+   - Threat assessment with Time-To-Collision
+   - Cooperative perception sharing
+   - Best for: Research requiring standard V2V protocols
+
+3. **V2VAPI** (`src/v2v/api.py`) - REST/WebSocket interface
+   - FastAPI-based HTTP endpoints
+   - Real-time WebSocket streaming
+   - External system integration
+   - Best for: Web dashboards, external monitoring
+
+### Basic V2V Pattern (Lightweight)
 ```python
 from src.v2v import V2VNetwork
 
@@ -115,17 +216,39 @@ python tests/v2v/test_network.py -v
 
 # Reproducibility test (needs CARLA server)
 python tests/test_reproducibility.py --host 192.168.1.110
+
+# Frontend visual tests
+python tests/test_frontend_visual.py --run
+
+# V2V + LiDAR integration tests
+python tests/test_v2v_lidar.py
 ```
 
 ### Run Scenarios
 ```bash
 source venv/bin/activate
 
-# V2V communication demo
-python src/scenarios/v2v_scenario.py --host 192.168.1.110
+# High-performance V2V scenario (uses all patterns)
+python src/scenarios/v2v_scenario_perf.py --host 192.168.1.110
+
+# V2V + LiDAR visualization
+./run_v2v_lidar.sh
+# Or: python src/scenarios/v2v_lidar_scenario.py --carla-host 192.168.1.110
+
+# V2V with REST API
+python src/scenarios/v2v_api_scenario.py --host 192.168.1.110 --api-port 8001
 
 # Basic scenario
 python src/scenarios/run_scenario.py --host 192.168.1.110
+```
+
+### Web Interfaces
+```bash
+# LiDAR 3D viewer (after running v2v_lidar_scenario.py)
+# Open: http://localhost:8000
+
+# V2V REST API docs (after running v2v_api_scenario.py)
+# Open: http://localhost:8001/docs
 ```
 
 ## Project Conventions
@@ -158,9 +281,13 @@ python src/scenarios/run_scenario.py --host 192.168.1.110
 
 ## Key Files to Reference
 
-- **V2V framework**: `src/v2v/protocol.py` (dataclass pattern), `src/v2v/communicator.py` (neighbor discovery)
-- **V2V scenario**: `src/scenarios/v2v_scenario.py` (visualization example)
-- **Tests**: `tests/v2v/test_network.py` (unittest with mocks)
+- **Architecture patterns**: `src/utils/session.py` (context manager), `src/utils/builder.py` (builder), `src/utils/observers.py` (observer)
+- **V2V implementations**: `src/v2v/communicator.py` (basic), `src/v2v/network_enhanced.py` (BSM), `src/v2v/api.py` (REST API)
+- **Performance**: `src/utils/lazy.py` (lazy evaluation), `src/utils/octree.py` (downsampling), `src/utils/binary_protocol.py` (binary WebSocket)
+- **Visualization**: `src/visualization/lidar/api.py` (LiDAR API), `src/visualization/web/viewer.html` (3D viewer)
+- **Example scenarios**: `src/scenarios/v2v_scenario_perf.py` (complete example), `src/scenarios/v2v_lidar_scenario.py` (LiDAR)
+- **Configuration**: `src/config.py` (centralized configs)
+- **Tests**: `tests/v2v/test_network.py` (unittest), `tests/test_reproducibility.py` (integration)
 
 ## Scientific Use Cases
 

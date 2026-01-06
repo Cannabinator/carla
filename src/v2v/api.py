@@ -158,7 +158,14 @@ class V2VAPI:
                 raise HTTPException(status_code=404, detail="Vehicle not found")
             
             threats = self.v2v.get_threats(vehicle_id)
-            return [ThreatInfo(**t) for t in threats]
+            # Map field names from internal format to API format
+            return [ThreatInfo(
+                other_vehicle_id=t['other_vehicle_id'],
+                threat_level=t['level'],
+                time_to_collision=t['ttc'],
+                distance=t['distance'],
+                timestamp=t['timestamp']
+            ) for t in threats]
         
         @self.app.get("/bsm", response_model=List[BSMResponse])
         async def get_all_bsm():

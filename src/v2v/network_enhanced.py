@@ -187,14 +187,21 @@ class V2VNetworkEnhanced:
         """Discover neighboring vehicles within communication range"""
         vehicle_ids = list(self.vehicles.keys())
         
+        # Reset neighbors for all vehicles
+        for vid in vehicle_ids:
+            self.neighbors[vid] = []
+        
+        # Check all vehicle pairs
         for i, vid1 in enumerate(vehicle_ids):
             bsm1 = self.bsm_messages.get(vid1)
             if not bsm1:
                 continue
             
-            neighbors = []
-            
-            for vid2 in vehicle_ids[i+1:]:
+            # Check against all OTHER vehicles (not just forward in list)
+            for vid2 in vehicle_ids:
+                if vid1 == vid2:  # Skip self
+                    continue
+                    
                 bsm2 = self.bsm_messages.get(vid2)
                 if not bsm2:
                     continue
@@ -204,21 +211,14 @@ class V2VNetworkEnhanced:
                 dy = bsm2.longitude - bsm1.longitude
                 distance = math.sqrt(dx**2 + dy**2)
                 
-                # Store distance
-                self.distances[(vid1, vid2)] = distance
-                self.distances[(vid2, vid1)] = distance
+                # Store distance (only once per pair)
+                if (vid2, vid1) not in self.distances:
+                    self.distances[(vid1, vid2)] = distance
+                    self.distances[(vid2, vid1)] = distance
                 
-                # Check if within range
+                # Check if within range and add to neighbors
                 if distance <= self.max_range:
-                    neighbors.append(vid2)
-                    
-                    # Bidirectional - vid2 can also see vid1
-                    if vid1 not in self.neighbors.get(vid2, []):
-                        if vid2 not in self.neighbors:
-                            self.neighbors[vid2] = []
-                        self.neighbors[vid2].append(vid1)
-            
-            self.neighbors[vid1] = neighbors
+                    self.neighbors[vid1].append(vid2)
     
     def _assess_threats(self):
         """Assess collision threats between vehicles"""

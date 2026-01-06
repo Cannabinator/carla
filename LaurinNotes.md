@@ -1,6 +1,11 @@
+### goals of this program
+    - repeatable scenario with vehicle2vehicle communication
+
+
 ### NOTES 
 
 - ist richtung, beschleunigung ect als sensordatensatz aktuell aktiviert ? 
+- ist autopilot aktiviert ? 
 - 
 
 ## how to implement better v2v communication and sensor data handling that fit my needs 
@@ -31,4 +36,5 @@
 ``` 
 
 in der klasse `messages.py` sind verschiedene V2V Message Standards und funktionen nach standards definiert BSM (Basic Safety Message) Implementation Based on SAE J2735 and ETSI ITS-G5 standard. Desweiteren befinden sich in der klasse noch collision detections scripts ect. 
+
 
