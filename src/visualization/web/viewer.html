@@ -230,8 +230,9 @@
         <div id="controls">
             <h3>Controls</h3>
             <button onclick="resetCamera()">Reset Camera</button>
-            <button id="follow-btn" onclick="toggleFollowMode()" style="background-color: #f44336;">Disable Follow</button>
-            <button onclick="togglePointSize()">Toggle Point Size</button>
+            <button id="follow-btn" onclick="toggleFollowMode()">Enable Follow</button>
+            <button id="freefly-btn" onclick="toggleFreeFly()">Enable Free-Fly</button>
+            <button id="size-btn" onclick="togglePointSize()">Point Size: 0.5</button>
             <button onclick="toggleGrid()">Toggle Grid</button>
         </div>
         
@@ -241,6 +242,7 @@
     <!-- Three.js and OrbitControls -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/PointerLockControls.js"></script>
     
     <script>
         // CARLA Semantic Tag Colors (based on CARLA documentation)
@@ -271,16 +273,19 @@
         };
         
         // Scene setup
-        let scene, camera, renderer, controls;
+        let scene, camera, renderer;
+        let orbitControls;
+        let pointerControls;
         let pointCloud, gridHelper;
         let ws;
         let frameCount = 0;
         let lastFrameTime = Date.now();
         let lastDataTime = Date.now();
-        let pointSize = 0.1;  // Larger points for better visibility
+        let pointSize = 0.5;  // Larger points for better visibility
         let showGrid = true;
+        let followMode = false;  // Start in orbit mode for easier initial orientation
+        let freeFlyMode = false;
         let egoPosition = { x: 0, y: 0, z: 0 };  // Track ego vehicle position
-        let followMode = true;  // Auto-follow ego vehicle
         
         function init() {
             // Scene
@@ -304,12 +309,28 @@
             renderer.setPixelRatio(window.devicePixelRatio);
             document.getElementById('canvas-container').appendChild(renderer.domElement);
             
-            // OrbitControls
-            controls = new THREE.OrbitControls(camera, renderer.domElement);
-            controls.enableDamping = true;
-            controls.dampingFactor = 0.05;
-            controls.screenSpacePanning = false;
-            controls.maxPolarAngle = Math.PI;
+            // Dual control system: FlyControls for free movement OR follow mode
+            // Use PointerLockControls for FPS-style free movement
+            pointerControls = new THREE.PointerLockControls(camera, renderer.domElement);
+            
+            // OrbitControls as fallback (when not in free-fly mode)
+            orbitControls = new THREE.OrbitControls(camera, renderer.domElement);
+            orbitControls.enableDamping = true;
+            orbitControls.dampingFactor = 0.05;
+            orbitControls.screenSpacePanning = false;
+            orbitControls.maxPolarAngle = Math.PI;
+            orbitControls.enabled = true;  // Start with orbit controls
+            
+            // Movement state for free-fly mode
+            const moveState = {
+                forward: false,
+                backward: false,
+                left: false,
+                right: false,
+                up: false,
+                down: false,
+                speed: 0.5
+            };
             
             // Grid helper (XY plane since Z is up)
             gridHelper = new THREE.GridHelper(100, 50, 0x444444, 0x222222);
@@ -329,14 +350,25 @@
             directionalLight.position.set(10, 10, 20);
             scene.add(directionalLight);
             
-            // Initialize point cloud
+            // Initialize point cloud with better visibility settings
             const geometry = new THREE.BufferGeometry();
             const material = new THREE.PointsMaterial({
                 size: pointSize,
-                vertexColors: true
+                vertexColors: true,
+                sizeAttenuation: true,  // Points get smaller with distance (realistic)
+                transparent: false,
+                opacity: 1.0,
+                depthTest: true,
+                depthWrite: true
             });
             pointCloud = new THREE.Points(geometry, material);
             scene.add(pointCloud);
+            
+            // Setup keyboard controls for free-fly mode
+            setupKeyboardControls(moveState);
+            
+            // Setup pointer lock for free-fly mode
+            setupPointerLock(pointerControls, moveState);
             
             // Handle window resize
             window.addEventListener('resize', onWindowResize, false);
@@ -395,56 +427,63 @@
             const positions = new Float32Array(data.num_points * 3);
             const colors = new Float32Array(data.num_points * 3);
             
-            // Find approximate ego vehicle position (center of mass of all points)
-            let sumX = 0, sumY = 0, sumZ = 0;
-            let vehiclePointCount = 0;
+            // Update ego position from server data (more accurate than calculating from points)
+            if (data.ego_transform) {
+                egoPosition.x = data.ego_transform.x;
+                egoPosition.y = data.ego_transform.y;
+                egoPosition.z = data.ego_transform.z;
+                
+                // Update camera to follow ego vehicle (smooth interpolation)
+                if (followMode) {
+                    // Calculate vehicle's forward direction from rotation (if available)
+                    let forwardX = -50;  // Default: behind vehicle (doubled distance)
+                    let forwardY = 0;
+                    
+                    if (data.ego_transform.yaw !== undefined) {
+                        const yawRad = data.ego_transform.yaw * Math.PI / 180;
+                        // Camera positioned behind vehicle (opposite to forward direction)
+                        forwardX = -50 * Math.cos(yawRad);
+                        forwardY = -50 * Math.sin(yawRad);
+                    }
+                    
+                    const targetCamPos = new THREE.Vector3(
+                        egoPosition.x + forwardX,  // Behind vehicle
+                        -(egoPosition.y + forwardY),  // Offset to side (negated for coordinate fix)
+                        egoPosition.z + 40         // Above (doubled height)
+                    );
+                    
+                    const targetLookAt = new THREE.Vector3(
+                        egoPosition.x,  // Look at vehicle position
+                        -egoPosition.y,  // Negated for coordinate fix
+                        egoPosition.z
+                    );
+                    
+                    // Smooth camera movement (lerp factor 0.1 for smooth but responsive)
+                    camera.position.lerp(targetCamPos, 0.1);
+                    
+                    // Make camera look at ego vehicle
+                    const currentLookAt = new THREE.Vector3();
+                    camera.getWorldDirection(currentLookAt);
+                    currentLookAt.multiplyScalar(100).add(camera.position);
+                    currentLookAt.lerp(targetLookAt, 0.15);
+                    camera.lookAt(currentLookAt);
+                }
+            }
             
+            // Build point cloud geometry
             for (let i = 0; i < data.num_points; i++) {
                 // Positions (CARLA uses X-forward, Y-right, Z-up)
+                // IMPORTANT: Negate Y to fix left/right mirroring
                 positions[i * 3] = data.points.x[i];
-                positions[i * 3 + 1] = data.points.y[i];
+                positions[i * 3 + 1] = -data.points.y[i];  // Negate Y to fix mirroring
                 positions[i * 3 + 2] = data.points.z[i];
                 
-                // Track vehicle points for camera following
-                const tag = data.points.tag[i];
-                if (tag === 10) {  // Vehicle tag
-                    sumX += data.points.x[i];
-                    sumY += data.points.y[i];
-                    sumZ += data.points.z[i];
-                    vehiclePointCount++;
-                }
-                
                 // Colors based on semantic tag
+                const tag = data.points.tag[i];
                 const color = new THREE.Color(SEMANTIC_COLORS[tag] || 0x808080);
                 colors[i * 3] = color.r;
                 colors[i * 3 + 1] = color.g;
                 colors[i * 3 + 2] = color.b;
-            }
-            
-            // Update ego position (weighted average of vehicle points)
-            if (vehiclePointCount > 0) {
-                egoPosition.x = sumX / vehiclePointCount;
-                egoPosition.y = sumY / vehiclePointCount;
-                egoPosition.z = sumZ / vehiclePointCount;
-                
-                // Update camera to follow ego vehicle (smooth interpolation)
-                if (followMode) {
-                    const targetCamPos = new THREE.Vector3(
-                        egoPosition.x - 25,  // Behind
-                        egoPosition.y,       // Centered
-                        egoPosition.z + 20   // Above
-                    );
-                    
-                    const targetLookAt = new THREE.Vector3(
-                        egoPosition.x,
-                        egoPosition.y,
-                        egoPosition.z
-                    );
-                    
-                    // Smooth camera movement (lerp)
-                    camera.position.lerp(targetCamPos, 0.1);
-                    controls.target.lerp(targetLookAt, 0.1);
-                }
             }
             
             const geometry = new THREE.BufferGeometry();
@@ -466,7 +505,14 @@
         function animate() {
             requestAnimationFrame(animate);
             
-            controls.update();
+            // Update appropriate controls based on mode
+            if (freeFlyMode && pointerControls.isLocked) {
+                updateFreeFlyMovement(moveState);
+            } else if (!freeFlyMode && !followMode) {
+                orbitControls.update();
+            }
+            // Follow mode updates are handled in updatePointCloud
+            
             renderer.render(scene, camera);
             
             // Calculate FPS
@@ -477,6 +523,121 @@
                 document.getElementById('fps').textContent = fps;
                 frameCount = 0;
                 lastFrameTime = now;
+            }
+        }
+        
+        function setupKeyboardControls(moveState) {
+            orbitControls.target.set(0, 0, 0);
+            orbitControls.update();
+            
+            // Exit any special modes
+            followMode = false;
+            freeFlyMode = false;
+            orbitControls.enabled = true;
+            updateControlButtons();
+        }
+        
+        function toggleFollowMode() {
+            followMode = !followMode;
+            
+            if (followMode) {
+                // Disable other modes
+                freeFlyMode = false;
+                orbitControls.enabled = false;
+                if (pointerControls.isLocked) pointerControls.unlock();
+            } else {
+                orbitControls.enabled = true;
+            }
+            
+            updateControlButtons();
+        }
+        
+        function toggleFreeFly() {
+            freeFlyMode = !freeFlyMode;
+            
+            if (freeFlyMode) {
+                // Disable other modes
+                followMode = false;
+                orbitControls.enabled = false;
+                console.log('Free-fly mode enabled. Click canvas and use WASD + mouse to fly around.');
+            } else {
+                orbitControls.enabled = true;
+                if (pointerControls.isLocked) pointerControls.unlock();
+            }
+            
+            updateControlButtons();
+        }
+        
+        function updateControlButtons() {
+            const followBtn = document.getElementById('follow-btn');
+            const freeFlyBtn = document.getElementById('freefly-btn');
+            
+            followBtn.textContent = followMode ? 'Disable Follow' : 'Enable Follow';
+            followBtn.style.backgroundColor = followMode ? '#f44336' : '#4CAF50';
+            
+            freeFlyBtn.textContent = freeFlyMode ? 'Disable Free-Fly' : 'Enable Free-Fly';
+            freeFlyBtn.style.backgroundColor = freeFlyMode ? '#f44336' : '#4CAF50';
+        }
+        
+        function togglePointSize() {
+            // Cycle through sizes: 0.2 -> 0.5 -> 1.0 -> 0.2
+            if (pointSize < 0.3) pointSize = 0.5;
+            else if (pointSize < 0.7) pointSize = 1.0;
+            else pointSize = 0.2;
+            
+            pointCloud.material.size = pointSize;
+            document.getElementById('size-btn').textContent = `Point Size: ${pointSize.toFixed(1)}`
+            document.addEventListener('keyup', (event) => {
+                switch(event.code) {
+                    case 'KeyW': moveState.forward = false; break;
+                    case 'KeyS': moveState.backward = false; break;
+                    case 'KeyA': moveState.left = false; break;
+                    case 'KeyD': moveState.right = false; break;
+                    case 'Space': moveState.up = false; break;
+                    case 'ShiftLeft': moveState.down = false; break;
+                }
+            });
+        }
+        
+        function setupPointerLock(controls, moveState) {
+            // Click to lock pointer in free-fly mode
+            renderer.domElement.addEventListener('click', () => {
+                if (freeFlyMode && !controls.isLocked) {
+                    controls.lock();
+                }
+            });
+            
+            controls.addEventListener('lock', () => {
+                console.log('Pointer locked - Use WASD to move, Space/Shift for up/down, ESC to exit');
+            });
+            
+            controls.addEventListener('unlock', () => {
+                console.log('Pointer unlocked');
+            });
+        }
+        
+        function updateFreeFlyMovement(moveState) {
+            const direction = new THREE.Vector3();
+            const right = new THREE.Vector3();
+            
+            camera.getWorldDirection(direction);
+            right.crossVectors(camera.up, direction).normalize();
+            
+            const velocity = new THREE.Vector3();
+            
+            if (moveState.forward) velocity.add(direction.multiplyScalar(moveState.speed));
+            if (moveState.backward) velocity.add(direction.multiplyScalar(-moveState.speed));
+            if (moveState.right) velocity.add(right.multiplyScalar(-moveState.speed));
+            if (moveState.left) velocity.add(right.multiplyScalar(moveState.speed));
+            if (moveState.up) velocity.z += moveState.speed;
+            if (moveState.down) velocity.z -= moveState.speed;
+            
+            camera.position.add(velocity);
+        }
+        
+        function exitFreeFly() {
+            if (pointerControls.isLocked) {
+                pointerControls.unlock();
             }
         }
         

@@ -15,16 +15,18 @@ logger = logging.getLogger(__name__)
 class LiDARDataCollector:
     """Collects and processes semantic LiDAR data from multiple vehicles."""
     
-    def __init__(self, world: carla.World, downsample_factor: int = 1):
+    def __init__(self, world: carla.World, downsample_factor: int = 1, **lidar_config):
         """
         Initialize LiDAR data collector.
         
         Args:
             world: CARLA world instance
             downsample_factor: Keep every Nth point (1=no downsampling, higher=more downsampling)
+            **lidar_config: LiDAR sensor configuration (channels, range, points_per_second, etc.)
         """
         self.world = world
         self.downsample_factor = downsample_factor
+        self.lidar_config = lidar_config  # Store custom config
         self.vehicles: Dict[int, carla.Actor] = {}
         self.lidar_sensors: Dict[int, carla.Sensor] = {}
         self.latest_data: Dict[int, Optional[np.ndarray]] = {}
@@ -46,14 +48,20 @@ class LiDARDataCollector:
         bp_lib = self.world.get_blueprint_library()
         lidar_bp = bp_lib.find('sensor.lidar.ray_cast_semantic')
         
-        # Configure high-quality LiDAR parameters for dense point cloud
-        lidar_bp.set_attribute('channels', '64')  # More laser beams (32 → 64)
-        lidar_bp.set_attribute('range', '100.0')  # Longer range (50 → 100m)
-        lidar_bp.set_attribute('points_per_second', '1000000')  # 10x more points (100k → 1M)
-        lidar_bp.set_attribute('rotation_frequency', '20.0')  # Faster rotation (10 → 20 Hz)
-        lidar_bp.set_attribute('upper_fov', '15.0')  # Wider vertical FOV (10 → 15)
-        lidar_bp.set_attribute('lower_fov', '-25.0')  # Better ground coverage
-        lidar_bp.set_attribute('horizontal_fov', '360.0')  # Full 360° coverage
+        # Apply custom config or use defaults
+        config = {
+            'channels': '64',
+            'range': '100.0',
+            'points_per_second': '1000000',
+            'rotation_frequency': '20.0',
+            'upper_fov': '15.0',
+            'lower_fov': '-25.0',
+            'horizontal_fov': '360.0',
+        }
+        config.update({k: str(v) for k, v in self.lidar_config.items()})
+        
+        for key, value in config.items():
+            lidar_bp.set_attribute(key, value)
         
         # Attach LiDAR to vehicle roof
         lidar_transform = carla.Transform(carla.Location(x=0.0, z=2.4))
@@ -159,6 +167,7 @@ class LiDARDataCollector:
         """
         all_points = []
         vehicle_ids = []
+        ego_transform = None
         
         for vehicle_id, points in self.latest_data.items():
             if points is not None and len(points) > 0:
@@ -166,6 +175,18 @@ class LiDARDataCollector:
                 world_points = self.transform_to_world_coords(vehicle_id, points)
                 all_points.append(world_points)
                 vehicle_ids.extend([vehicle_id] * len(world_points))
+                
+                # Get ego vehicle transform (vehicle_id=0)
+                if vehicle_id == 0 and vehicle_id in self.vehicle_transforms:
+                    transform = self.vehicle_transforms[vehicle_id]
+                    ego_transform = {
+                        'x': float(transform.location.x),
+                        'y': float(transform.location.y),
+                        'z': float(transform.location.z),
+                        'yaw': float(transform.rotation.yaw),
+                        'pitch': float(transform.rotation.pitch),
+                        'roll': float(transform.rotation.roll)
+                    }
         
         if not all_points:
             return None
@@ -183,7 +204,8 @@ class LiDARDataCollector:
                 'tag': combined['object_tag'].astype(int).tolist(),
             },
             'vehicle_ids': vehicle_ids,
-            'num_vehicles': len(self.vehicles)
+            'num_vehicles': len(self.vehicles),
+            'ego_transform': ego_transform  # Add ego vehicle position for camera following
         }
         
         return data

@@ -3,6 +3,8 @@
 ALLWAYS LOOKUP EXAMPLES AND USAGE OF CODE IN THE CARLA OFFICIAL DOCUMENTATION: https://carla.readthedocs.io/en/0.9.16/
 OR SEARCH CERTIFIED EXAMPLES ONLINE.
 
+The Scenarios you create needs to be scientifically valid and reproducible. Follow the patterns and conventions established in the existing codebase.
+
 ## Project Overview
 Lightweight V2V (Vehicle-to-Vehicle) communication framework for CARLA Simulator 0.9.16. **Remote architecture**: CARLA server on Windows (192.168.1.110:2000), Python client on Ubuntu 24.04.
 

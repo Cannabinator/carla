@@ -23,6 +23,7 @@ from src.utils.carla_utils import (
     restore_world_settings, setup_traffic_manager, get_fresh_velocity,
     spawn_vehicle, destroy_actors
 )
+from src.visualization.lidar import create_ego_lidar_stream
 
 # Setup logging
 log_dir = Path(__file__).parent.parent.parent / 'logs'
@@ -90,12 +91,25 @@ def visualize_v2v_connections(world, network, ego_id, frame_duration=0.2, config
         )
 
 
-def run_v2v_scenario(host='192.168.1.110', port=2000, duration=60, v2v_range=50.0, num_vehicles=15):
-    """Run V2V communication scenario with proper physics and control."""
+def run_v2v_scenario(host='192.168.1.110', port=2000, duration=60, v2v_range=50.0, num_vehicles=15, 
+                     enable_lidar=True, web_port=8000, lidar_quality='high'):
+    """Run V2V communication scenario with proper physics and control.
+    
+    Args:
+        host: CARLA server IP
+        port: CARLA server port
+        duration: Scenario duration in seconds
+        v2v_range: V2V communication range in meters
+        num_vehicles: Number of vehicles to spawn
+        enable_lidar: Enable ego vehicle LiDAR streaming to web viewer
+        web_port: Web server port for LiDAR visualization
+        lidar_quality: 'high' or 'fast' - LiDAR quality/performance tradeoff
+    """
     client = None
     world = None
     actors = []
     original_settings = None
+    lidar_api = None
     
     try:
         # Connect to CARLA server
@@ -141,6 +155,18 @@ def run_v2v_scenario(host='192.168.1.110', port=2000, duration=60, v2v_range=50.
         v2v.register(v2v_config.ego_vehicle_id, ego)
         logger.info(f"Ego vehicle spawned - ID: {ego.id}, Type: {ego_bp.id}, Location: {spawn_points[0].location}")
         print(f"👑 Ego vehicle spawned (RED) at {spawn_points[0].location}")
+        
+        # Initialize ego-only LiDAR streaming if enabled
+        if enable_lidar:
+            print(f"\n📡 Initializing ego LiDAR streaming...")
+            lidar_api = create_ego_lidar_stream(
+                world=world,
+                ego_vehicle=ego,
+                web_port=web_port,
+                high_quality=(lidar_quality == 'high')
+            )
+            logger.info(f"Ego LiDAR streaming initialized on port {web_port} ({lidar_quality} quality)")
+            print(f"✓ LiDAR viewer ready\n")
         
         # Setup Traffic Manager with proper configuration
         tm = setup_traffic_manager(client, config.tm_port, config.tm_seed, 
@@ -294,6 +320,9 @@ def run_v2v_scenario(host='192.168.1.110', port=2000, duration=60, v2v_range=50.
                 print(f"🎮 Control:       Throttle={control.throttle:.3f}  Brake={control.brake:.3f}  Steer={control.steer:.3f}")
                 print(f"🔄 Angular Vel:   ωx={ang_vel_x:7.2f}  ωy={ang_vel_y:7.2f}  ωz={ang_vel_z:7.2f} °/s")
                 print(f"📡 V2V Comms:     {num_neighbors}/{len(actors)-1} vehicles in range")
+                if lidar_api:
+                    point_count = lidar_api.get_point_count()
+                    print(f"🎯 LiDAR Points:  {point_count:,} points/frame")
                 
                 if num_neighbors > 0:
                     viz_config = DEFAULT_VIZ_CONFIG
@@ -334,6 +363,12 @@ def run_v2v_scenario(host='192.168.1.110', port=2000, duration=60, v2v_range=50.
         # Cleanup - CRITICAL: Restore settings and destroy actors
         print("\n🧹 Cleaning up...")
         logger.info("Starting cleanup...")
+        
+        # Stop LiDAR streaming first
+        if lidar_api:
+            lidar_api.stop()
+            print("✓ LiDAR streaming stopped")
+            logger.info("LiDAR streaming stopped")
         
         # Restore original settings
         restore_world_settings(world, original_settings)
@@ -389,6 +424,10 @@ if __name__ == '__main__':
     parser.add_argument('--duration', type=int, default=60, help='Scenario duration (seconds)')
     parser.add_argument('--v2v-range', type=float, default=50.0, dest='v2v_range', help='V2V range (meters)')
     parser.add_argument('--vehicles', type=int, default=15, help='Number of vehicles')
+    parser.add_argument('--enable-lidar', action='store_true', default=True, help='Enable ego LiDAR streaming (default: True)')
+    parser.add_argument('--no-lidar', action='store_false', dest='enable_lidar', help='Disable LiDAR streaming')
+    parser.add_argument('--web-port', type=int, default=8000, help='Web server port for LiDAR viewer')
+    parser.add_argument('--lidar-quality', choices=['high', 'fast'], default='high', help='LiDAR quality (high=dense, fast=lighter)')
     
     args = parser.parse_args()
     
@@ -397,5 +436,8 @@ if __name__ == '__main__':
         port=args.port,
         duration=args.duration,
         v2v_range=args.v2v_range,
-        num_vehicles=args.vehicles
+        num_vehicles=args.vehicles,
+        enable_lidar=args.enable_lidar,
+        web_port=args.web_port,
+        lidar_quality=args.lidar_quality
     )
