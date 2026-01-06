@@ -17,6 +17,12 @@ import math
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from src.v2v import V2VNetwork
+from src.config import DEFAULT_SIM_CONFIG, DEFAULT_VIZ_CONFIG, DEFAULT_V2V_CONFIG, DEFAULT_VEHICLE_CONFIG
+from src.utils.carla_utils import (
+    calculate_speed, calculate_distance_3d, setup_synchronous_mode,
+    restore_world_settings, setup_traffic_manager, get_fresh_velocity,
+    spawn_vehicle, destroy_actors
+)
 
 # Setup logging
 log_dir = Path(__file__).parent.parent.parent / 'logs'
@@ -34,8 +40,16 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def visualize_v2v_connections(world, network, ego_id, frame_duration=0.2):
-    """Draw V2V range and connections - minimal visualization for scientific clarity."""
+def visualize_v2v_connections(world, network, ego_id, frame_duration=0.2, config=DEFAULT_VIZ_CONFIG):
+    """Draw V2V range and connections - minimal visualization for scientific clarity.
+    
+    Args:
+        world: CARLA world instance
+        network: V2VNetwork instance
+        ego_id: ID of the ego vehicle
+        frame_duration: How long to display the visualization
+        config: VisualizationConfig instance
+    """
     ego_state = network.get_state(ego_id)
     if not ego_state:
         return
@@ -43,8 +57,8 @@ def visualize_v2v_connections(world, network, ego_id, frame_duration=0.2):
     ego_loc = carla.Location(*ego_state.location)
     debug = world.debug
     
-    # Draw minimal range indicator circle (16 segments, subtle color)
-    num_segments = 16
+    # Draw minimal range indicator circle
+    num_segments = config.range_circle_segments
     range_m = network.max_range
     
     for i in range(num_segments):
@@ -56,23 +70,22 @@ def visualize_v2v_connections(world, network, ego_id, frame_duration=0.2):
         x2 = ego_loc.x + range_m * np.cos(angle2)
         y2 = ego_loc.y + range_m * np.sin(angle2)
         
-        p1 = carla.Location(x=x1, y=y1, z=ego_loc.z + 0.2)
-        p2 = carla.Location(x=x2, y=y2, z=ego_loc.z + 0.2)
+        p1 = carla.Location(x=x1, y=y1, z=ego_loc.z + config.range_circle_z_offset)
+        p2 = carla.Location(x=x2, y=y2, z=ego_loc.z + config.range_circle_z_offset)
         
-        # Subtle green circle with low alpha
-        debug.draw_line(p1, p2, thickness=0.02, color=carla.Color(0, 200, 0, 40), 
+        debug.draw_line(p1, p2, thickness=config.range_circle_thickness,
+                       color=carla.Color(*config.range_circle_color), 
                        life_time=frame_duration)
     
     # Draw thin lines to neighbors
     neighbors = network.get_neighbors(ego_id)
     for neighbor in neighbors:
         neighbor_loc = carla.Location(*neighbor.location)
-        # Subtle connection line
         debug.draw_line(
-            ego_loc + carla.Location(z=1.0),
-            neighbor_loc + carla.Location(z=1.0),
-            thickness=0.02,
-            color=carla.Color(100, 200, 255, 80),
+            ego_loc + carla.Location(z=config.connection_line_z_offset),
+            neighbor_loc + carla.Location(z=config.connection_line_z_offset),
+            thickness=config.connection_line_thickness,
+            color=carla.Color(*config.connection_line_color),
             life_time=frame_duration
         )
 
@@ -86,30 +99,22 @@ def run_v2v_scenario(host='192.168.1.110', port=2000, duration=60, v2v_range=50.
     
     try:
         # Connect to CARLA server
+        config = DEFAULT_SIM_CONFIG
         print(f"🔄 Connecting to {host}:{port}")
         logger.info(f"Connecting to CARLA server at {host}:{port}")
         client = carla.Client(host, port)
-        client.set_timeout(30.0)
+        client.set_timeout(config.timeout)
         world = client.get_world()
         print(f"✓ Connected to {world.get_map().name}\n")
         logger.info(f"Connected to map: {world.get_map().name}")
-        logger.info(f"Connected to map: {world.get_map().name}")
-        
-        # Save original settings
-        original_settings = world.get_settings()
         
         # Configure synchronous mode for deterministic physics
-        settings = world.get_settings()
-        settings.synchronous_mode = True
-        settings.fixed_delta_seconds = 0.05  # 20 FPS for stable physics
-        settings.no_rendering_mode = False  # Keep rendering for visualization
-        world.apply_settings(settings)
-        logger.info(f"Synchronous mode enabled: delta={settings.fixed_delta_seconds}s (20 FPS)")
-        logger.info(f"Synchronous mode enabled: delta={settings.fixed_delta_seconds}s (20 FPS)")
+        original_settings = setup_synchronous_mode(world, config.fixed_delta_seconds)
+        logger.info(f"Synchronous mode enabled: delta={config.fixed_delta_seconds}s (20 FPS)")
         
         # Set deterministic seeds
-        random.seed(42)
-        np.random.seed(42)
+        random.seed(config.random_seed)
+        np.random.seed(config.random_seed)
         
         # Initialize V2V network
         v2v = V2VNetwork(max_range=v2v_range)
@@ -126,41 +131,38 @@ def run_v2v_scenario(host='192.168.1.110', port=2000, duration=60, v2v_range=50.
         random.shuffle(spawn_points)
         
         # Spawn ego vehicle (leader) with specific attributes
-        ego_bp = bp_lib.filter('vehicle.tesla.model3')[0]
-        ego_bp.set_attribute('color', '255,0,0')   # Red color
+        vehicle_config = DEFAULT_VEHICLE_CONFIG
+        v2v_config = DEFAULT_V2V_CONFIG
+        
+        ego_bp = bp_lib.filter(vehicle_config.ego_blueprint)[0]
+        ego_bp.set_attribute('color', vehicle_config.ego_color)
         ego = world.spawn_actor(ego_bp, spawn_points[0])
         actors.append(ego)
-        v2v.register(0, ego)
+        v2v.register(v2v_config.ego_vehicle_id, ego)
         logger.info(f"Ego vehicle spawned - ID: {ego.id}, Type: {ego_bp.id}, Location: {spawn_points[0].location}")
         print(f"👑 Ego vehicle spawned (RED) at {spawn_points[0].location}")
-        logger.info(f"Ego vehicle spawned - ID: {ego.id}, Type: {ego_bp.id}, Location: {spawn_points[0].location}")
         
         # Setup Traffic Manager with proper configuration
-        tm = client.get_trafficmanager(8000)
-        tm.set_synchronous_mode(True)
-        tm.set_random_device_seed(42)
-        # DISABLE hybrid physics - it causes vehicles to teleport instead of drive!
-        # tm.set_hybrid_physics_mode(True)  # DISABLED - causes zero velocity
-        # tm.set_hybrid_physics_radius(70.0)  # DISABLED
-        logger.info("Traffic Manager configured: sync=True, seed=42, hybrid_physics=False")
+        tm = setup_traffic_manager(client, config.tm_port, config.tm_seed, 
+                                   config.use_hybrid_physics, config.hybrid_physics_radius)
+        logger.info(f"Traffic Manager configured: sync=True, seed={config.tm_seed}, hybrid_physics={config.use_hybrid_physics}")
         
         # Configure traffic manager behavior for realistic speeds
-        # Default speed is 70% of speed limit, we reduce to 30% for smoother city driving
-        tm.global_percentage_speed_difference(30.0)  # 70% of speed limit
-        tm.set_global_distance_to_leading_vehicle(2.5)  # 2.5m safety distance
-        logger.info("TM behavior: speed_diff=30%, safety_distance=2.5m")
+        tm.global_percentage_speed_difference(config.global_speed_difference)
+        tm.set_global_distance_to_leading_vehicle(config.safety_distance)
+        logger.info(f"TM behavior: speed_diff={config.global_speed_difference}%, safety_distance={config.safety_distance}m")
         
         # Enable autopilot on ego vehicle for reproducible behavior
-        ego.set_autopilot(True, 8000)
-        tm.update_vehicle_lights(ego, True)  # Auto-update lights
-        tm.ignore_lights_percentage(ego, 0)  # Ego respects traffic lights
-        tm.auto_lane_change(ego, True)  # Enable lane changes for natural movement
-        tm.vehicle_percentage_speed_difference(ego, 20.0)  # Ego slightly slower for safety
-        logger.info(f"Ego autopilot enabled on TM port 8000 - speed_diff=20%, lane_change=True, respect_lights=True")
+        ego.set_autopilot(True, config.tm_port)
+        tm.update_vehicle_lights(ego, True)
+        tm.ignore_lights_percentage(ego, 0)
+        tm.auto_lane_change(ego, True)
+        tm.vehicle_percentage_speed_difference(ego, config.ego_speed_difference)
+        logger.info(f"Ego autopilot enabled on TM port {config.tm_port} - speed_diff={config.ego_speed_difference}%, lane_change=True, respect_lights=True")
         
         # Spawn traffic vehicles with variety
         vehicle_bps = [x for x in bp_lib.filter('vehicle.*') 
-                      if int(x.get_attribute('number_of_wheels')) == 4]
+                      if int(x.get_attribute('number_of_wheels')) == vehicle_config.min_wheels]
         
         print(f"🚗 Spawning {num_vehicles-1} traffic vehicles...")
         spawned_count = 0
@@ -175,8 +177,8 @@ def run_v2v_scenario(host='192.168.1.110', port=2000, duration=60, v2v_range=50.
                     veh_bp.set_attribute('color', color)
                 
                 veh = world.spawn_actor(veh_bp, spawn_points[i])
-                veh.set_autopilot(True, 8000)
-                tm.update_vehicle_lights(veh, True)  # Auto-update lights
+                veh.set_autopilot(True, config.tm_port)
+                tm.update_vehicle_lights(veh, True)
                 actors.append(veh)
                 v2v.register(i, veh)
                 spawned_count += 1
@@ -191,12 +193,12 @@ def run_v2v_scenario(host='192.168.1.110', port=2000, duration=60, v2v_range=50.
         # Warm-up: tick world to let Traffic Manager initialize routes
         print("⏱️  Warming up simulation (initializing routes)...")
         logger.info("Starting warmup phase...")
-        for i in range(50):  # Longer warmup for TM route planning
+        for i in range(config.warmup_frames):
             world.tick()
-            if i % 10 == 0:
+            if i % config.debug_log_interval_frames == 0:
                 vel = ego.get_velocity()
-                speed = 3.6 * np.sqrt(vel.x**2 + vel.y**2 + vel.z**2)
-                logger.debug(f"Warmup frame {i}: ego speed={speed:.2f} km/h")
+                _, speed_kmh = calculate_speed(vel)
+                logger.debug(f"Warmup frame {i}: ego speed={speed_kmh:.2f} km/h")
         logger.info("Warmup complete")
         
         # Simulation loop
@@ -216,9 +218,9 @@ def run_v2v_scenario(host='192.168.1.110', port=2000, duration=60, v2v_range=50.
             
             # Update V2V network every 0.2s (4 frames at 20 FPS)
             # CRITICAL: Pass snapshot from tick to ensure fresh velocity data
-            if frame % 4 == 0:
-                v2v.update(force=True, snapshot=snapshot)  # Pass fresh snapshot!
-                visualize_v2v_connections(world, v2v, 0, frame_duration=0.25)
+            if frame % config.v2v_update_interval_frames == 0:
+                v2v.update(force=True, snapshot=snapshot)
+                visualize_v2v_connections(world, v2v, v2v_config.ego_vehicle_id, frame_duration=0.25)
             
             # CRITICAL: Use snapshot from IMMEDIATELY after tick - it contains FRESH velocity data
             # Using actor.get_velocity() returns CACHED data from previous tick
@@ -237,8 +239,8 @@ def run_v2v_scenario(host='192.168.1.110', port=2000, duration=60, v2v_range=50.
             control = ego.get_control()
             
             # Log detailed debug state every 0.5s
-            if frame % 10 == 0:
-                speed_kmh = 3.6 * np.sqrt(vel_snapshot.x**2 + vel_snapshot.y**2 + vel_snapshot.z**2)
+            if frame % config.debug_log_interval_frames == 0:
+                _, speed_kmh = calculate_speed(vel_snapshot)
                 acc_snapshot = ego_snapshot.get_acceleration()
                 
                 logger.debug(f"Frame {frame}: speed={speed_kmh:.2f}km/h, "
@@ -248,8 +250,8 @@ def run_v2v_scenario(host='192.168.1.110', port=2000, duration=60, v2v_range=50.
             
             # Print detailed stats every 2s (using snapshot data from above)
             current_time = time.time()
-            if current_time - last_stats_time >= 2:
-                neighbors = v2v.get_neighbors(0)
+            if current_time - last_stats_time >= config.stats_display_interval_seconds:
+                neighbors = v2v.get_neighbors(v2v_config.ego_vehicle_id)
                 
                 # Use velocity and transform from snapshot collected above (guaranteed fresh)
                 # Velocity components in world frame (m/s) - FROM SNAPSHOT
@@ -259,8 +261,7 @@ def run_v2v_scenario(host='192.168.1.110', port=2000, duration=60, v2v_range=50.
                 vel_z = vel_snapshot.z
                 
                 # Calculate speed magnitude
-                speed_ms = np.linalg.norm([vel_x, vel_y, vel_z])
-                speed_kmh = 3.6 * speed_ms
+                speed_ms, speed_kmh = calculate_speed(vel_snapshot)
                 
                 # Position in world frame (meters)
                 pos_x = trans.location.x
@@ -295,18 +296,17 @@ def run_v2v_scenario(host='192.168.1.110', port=2000, duration=60, v2v_range=50.
                 print(f"📡 V2V Comms:     {num_neighbors}/{len(actors)-1} vehicles in range")
                 
                 if num_neighbors > 0:
+                    viz_config = DEFAULT_VIZ_CONFIG
                     print(f"\n   🔗 Connected Vehicles:")
-                    for i, neighbor in enumerate(neighbors[:5], 1):
-                        dist = np.linalg.norm([neighbor.location[0] - pos_x,
-                                              neighbor.location[1] - pos_y,
-                                              neighbor.location[2] - pos_z])
+                    for i, neighbor in enumerate(neighbors[:viz_config.max_neighbors_displayed], 1):
+                        dist = calculate_distance_3d(neighbor.location, (pos_x, pos_y, pos_z))
                         # Convert neighbor speed from m/s to km/h
                         neighbor_speed_kmh = neighbor.speed * 3.6
                         rel_speed = neighbor_speed_kmh - speed_kmh
                         print(f"      {i}. ID {neighbor.vehicle_id:3d}: {neighbor_speed_kmh:6.2f} km/h | "
                               f"Dist: {dist:6.2f}m | Δv: {rel_speed:+6.2f} km/h")
-                    if num_neighbors > 5:
-                        print(f"      ... and {num_neighbors - 5} more")
+                    if num_neighbors > viz_config.max_neighbors_displayed:
+                        print(f"      ... and {num_neighbors - viz_config.max_neighbors_displayed} more")
                 
                 print(f"{'='*85}\n")
                 
@@ -336,16 +336,14 @@ def run_v2v_scenario(host='192.168.1.110', port=2000, duration=60, v2v_range=50.
         logger.info("Starting cleanup...")
         
         # Restore original settings
-        if world and original_settings:
-            world.apply_settings(original_settings)
-            print("✓ Restored world settings")
-            logger.info("World settings restored")
+        restore_world_settings(world, original_settings)
+        print("✓ Restored world settings")
+        logger.info("World settings restored")
         
         # Destroy all spawned actors
-        if client and actors:
-            print(f"✓ Destroying {len(actors)} actors...")
-            logger.info(f"Destroying {len(actors)} actors")
-            client.apply_batch([carla.command.DestroyActor(x) for x in actors])
+        destroy_actors(client, actors)
+        print(f"✓ Destroying {len(actors)} actors...")
+        logger.info(f"Destroying {len(actors)} actors")
         
         print("✓ Cleanup complete\n")
         print(f"📝 Log file saved: {log_file}")

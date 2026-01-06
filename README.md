@@ -2,35 +2,6 @@
 
 Lightweight V2V (Vehicle-to-Vehicle) communication framework for CARLA 0.9.16.
 
-## 📁 Project Structure
-
-```
-carla/
-├── src/
-│   ├── scenarios/          # Scenario scripts
-│   │   ├── run_scenario.py           # Main scenario
-│   │   ├── full_sensor_scenario.py   # Full sensor suite
-│   │   └── v2v_scenario.py           # V2V communication demo
-│   ├── utils/              # Utilities
-│   │   └── data_collector.py         # Data collection
-│   ├── visualization/      # Visualization
-│   │   └── realtime_viewer.py        # LIDAR/camera viewer
-│   └── v2v/                # V2V framework
-│       ├── protocol.py               # V2VState dataclass
-│       └── communicator.py           # V2VNetwork
-├── tests/                  # Tests
-│   ├── test_reproducibility.py       # Reproducibility test
-│   └── v2v/
-│       └── test_network.py           # V2V unit tests
-└── data/                   # Data output
-```
-
-## 🚀 Quick Start
-
-### Activate Environment
-```bash
-source venv/bin/activate
-```
 
 ### Run V2V Scenario
 ```bash
