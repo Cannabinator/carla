@@ -22,7 +22,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from src.v2v import V2VNetwork
+from src.v2v import V2VNetworkEnhanced  # Use enhanced V2V network
 from src.utils import (
     CARLASession, VehicleState, ActorManager,
     ScenarioBuilder, ScenarioConfig,
@@ -68,8 +68,13 @@ def run_v2v_scenario_performance(config: ScenarioConfig) -> None:
             random.seed(config.random_seed)
             np.random.seed(config.random_seed)
             
-            # Initialize systems
-            v2v: Optional[V2VNetwork] = V2VNetwork(max_range=config.v2v_range) if config.v2v_enabled else None
+            # Initialize enhanced V2V system with 2 Hz update rate
+            v2v: Optional[V2VNetworkEnhanced] = V2VNetworkEnhanced(
+                max_range=config.v2v_range,
+                update_rate_hz=2.0,
+                enable_cooperative_perception=True,
+                world=session.world
+            ) if config.v2v_enabled else None
             actor_mgr: ActorManager = ActorManager(session.world, session.bp_lib)
             
             # Limit vehicles to available spawn points
@@ -118,7 +123,6 @@ def run_v2v_scenario_performance(config: ScenarioConfig) -> None:
             # Enable autopilot on ego
             ego.set_autopilot(True, config.tm_port)
             tm.update_vehicle_lights(ego, True)
-            tm.ignore_lights_percentage(ego, 0)
             tm.auto_lane_change(ego, True)
             tm.vehicle_percentage_speed_difference(ego, config.ego_speed_difference)
             
@@ -234,6 +238,25 @@ def run_v2v_scenario_performance(config: ScenarioConfig) -> None:
             print(f"   Min frame time:  {min_frame_time*1000:.2f}ms")
             print(f"   Max frame time:  {max_frame_time*1000:.2f}ms")
             print(f"   Std frame time:  {std_frame_time*1000:.2f}ms")
+            
+            # Enhanced V2V statistics
+            if v2v:
+                stats = v2v.get_network_stats()
+                print(f"\n📡 V2V Network Statistics:")
+                print(f"   Update rate:      {v2v.update_rate_hz} Hz")
+                print(f"   Communication range: {v2v.max_range} m")
+                print(f"   Total BSM sent:   {stats['total_messages_sent']}")
+                print(f"   Avg neighbors:    {stats['average_neighbors']:.1f}")
+                print(f"   Max neighbors:    {stats['max_neighbors']}")
+                print(f"   Cooperative shares: {stats['cooperative_shares']}")
+                
+                # Show final BSM example
+                ego_bsm = v2v.get_bsm(0)
+                if ego_bsm:
+                    print(f"\n   Final ego BSM:")
+                    print(f"     Speed: {ego_bsm.speed:.1f} m/s ({ego_bsm.speed*3.6:.1f} km/h)")
+                    print(f"     Heading: {ego_bsm.heading:.1f}°")
+                    print(f"     Message count: {ego_bsm.msg_count}")
             
             # Notify completion
             for observer in observers:
