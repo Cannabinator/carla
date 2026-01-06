@@ -191,7 +191,7 @@ class CARLADebugObserver(ScenarioObserver):
 
 
 class CSVDataLogger(ScenarioObserver):
-    """Log vehicle and V2V data to CSV file."""
+    """Log vehicle and V2V data to CSV file with detailed BSM information."""
     
     def __init__(self, output_path: Optional[Path] = None):
         """
@@ -210,12 +210,26 @@ class CSVDataLogger(ScenarioObserver):
         self.total_rows = 0
     
     def on_frame(self, frame: int, state: VehicleState, v2v_data: Dict[str, Any]):
-        """Log frame data to CSV."""
+        """Log frame data to CSV with detailed V2V information."""
         # Lazy file opening
         if self.csv_file is None:
             self._open_csv()
         
         neighbors = v2v_data.get('neighbors', [])
+        threats = v2v_data.get('threats', [])
+        bsm = v2v_data.get('bsm', None)
+        
+        # Prepare neighbor data (IDs and distances)
+        neighbor_ids = ','.join([str(n.vehicle_id) for n in neighbors[:5]]) if neighbors else ''
+        neighbor_distances = ','.join([f"{n.distance:.1f}" for n in neighbors[:5] if hasattr(n, 'distance')]) or ''
+        
+        # Threat data
+        threat_count = len([t for t in threats if t.get('level', 0) >= 2]) if threats else 0
+        min_ttc = min([t.get('ttc', 999) for t in threats], default=999) if threats else 999
+        
+        # BSM data
+        bsm_heading = bsm.heading if bsm and hasattr(bsm, 'heading') else 0
+        bsm_accel = bsm.longitudinal_accel if bsm and hasattr(bsm, 'longitudinal_accel') else 0
         
         # Write row
         self.writer.writerow({
@@ -236,6 +250,12 @@ class CSVDataLogger(ScenarioObserver):
             'brake': state.control.brake if state.control else 0,
             'steer': state.control.steer if state.control else 0,
             'v2v_neighbors': len(neighbors),
+            'neighbor_ids': neighbor_ids,
+            'neighbor_distances': neighbor_distances,
+            'threats': threat_count,
+            'min_ttc': min_ttc,
+            'bsm_heading': bsm_heading,
+            'bsm_accel': bsm_accel,
             'lidar_points': v2v_data.get('lidar_points', 0)
         })
         self.total_rows += 1
@@ -250,7 +270,10 @@ class CSVDataLogger(ScenarioObserver):
             'speed_kmh', 'speed_ms',
             'yaw', 'pitch', 'roll',
             'throttle', 'brake', 'steer',
-            'v2v_neighbors', 'lidar_points'
+            'v2v_neighbors', 'neighbor_ids', 'neighbor_distances',
+            'threats', 'min_ttc',
+            'bsm_heading', 'bsm_accel',
+            'lidar_points'
         ]
         self.writer = csv.DictWriter(self.csv_file, fieldnames=fieldnames)
         self.writer.writeheader()

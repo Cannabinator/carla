@@ -47,6 +47,7 @@ class LiDARStreamingAPI:
         points_per_second: int = 1000000,
         lidar_range: float = 100.0,
         rotation_frequency: float = 20.0,
+        v2v_network = None,
     ):
         """
         Initialize LiDAR streaming API.
@@ -60,10 +61,12 @@ class LiDARStreamingAPI:
             points_per_second: LiDAR point generation rate
             lidar_range: LiDAR maximum range in meters
             rotation_frequency: LiDAR rotation speed in Hz
+            v2v_network: Optional V2VNetworkEnhanced instance for combined visualization
         """
         self.world = world
         self.web_host = web_host
         self.web_port = web_port
+        self.v2v_network = v2v_network
         
         # LiDAR configuration
         self.lidar_config = {
@@ -121,8 +124,11 @@ class LiDARStreamingAPI:
             logger.warning("Server already running")
             return
         
-        # Register collector with FastAPI
+        # Register collector and V2V network with FastAPI
         set_collector(self.collector)
+        if self.v2v_network:
+            from .server import set_v2v_network
+            set_v2v_network(self.v2v_network)
         
         if background:
             self.server_thread = threading.Thread(
@@ -147,9 +153,15 @@ class LiDARStreamingAPI:
             network_ip = "localhost"
         
         print(f"\n{'='*80}")
-        print(f"🌐 LiDAR Viewer URLs:")
-        print(f"   Local:   http://localhost:{self.web_port}")
-        print(f"   Network: http://{network_ip}:{self.web_port}")
+        if self.v2v_network:
+            print(f"🌐 Unified Visualization Server:")
+            print(f"   Dashboard: http://localhost:{self.web_port}")
+            print(f"   Network:   http://{network_ip}:{self.web_port}")
+            print(f"   Endpoints: /lidar (3D viewer) | /v2v (V2V dashboard)")
+        else:
+            print(f"🌐 LiDAR Viewer URLs:")
+            print(f"   Local:   http://localhost:{self.web_port}")
+            print(f"   Network: http://{network_ip}:{self.web_port}")
         print(f"{'='*80}\n")
         logger.info(f"Web server started on {self.web_host}:{self.web_port}")
     

@@ -21,6 +21,7 @@ app = FastAPI(title="V2V LiDAR Visualizer")
 
 # Global collector instance (set by scenario)
 _collector: LiDARDataCollector = None
+_v2v_network = None
 _streaming_task = None
 
 
@@ -29,6 +30,13 @@ def set_collector(collector: LiDARDataCollector):
     global _collector
     _collector = collector
     logger.info("LiDAR collector registered with server")
+
+
+def set_v2v_network(v2v_network):
+    """Set the global V2V network."""
+    global _v2v_network
+    _v2v_network = v2v_network
+    logger.info("V2V network registered with server")
 
 
 class ConnectionManager:
@@ -69,6 +77,111 @@ class ConnectionManager:
 
 
 manager = ConnectionManager()
+
+
+@app.get("/")
+async def root():
+    """Serve unified viewer with LiDAR and V2V tabs."""
+    unified_viewer_path = Path(__file__).parent.parent / 'web' / 'unified_viewer.html'
+    if unified_viewer_path.exists():
+        return HTMLResponse(content=unified_viewer_path.read_text())
+    # Fallback to LiDAR only
+    return HTMLResponse(content="<h1>Visualization Server</h1><p><a href='/lidar'>LiDAR Viewer</a></p>")
+
+
+@app.get("/lidar")
+async def lidar_viewer():
+    """Serve LiDAR 3D viewer."""
+    viewer_path = Path(__file__).parent.parent / 'web' / 'viewer.html'
+    if viewer_path.exists():
+        return HTMLResponse(content=viewer_path.read_text())
+    return HTMLResponse(content="<h1>LiDAR viewer not found</h1>", status_code=404)
+
+
+@app.get("/v2v")
+async def v2v_dashboard():
+    """Serve V2V dashboard."""
+    # Import V2V dashboard HTML
+    v2v_dashboard_path = Path(__file__).parent.parent.parent / 'v2v' / 'dashboard.html'
+    if v2v_dashboard_path.exists():
+        # Replace API endpoint URLs to match server routes
+        content = v2v_dashboard_path.read_text()
+        # Fix all fetch URLs to use correct API endpoints
+        content = content.replace('${window.location.hostname}:8001/network/stats', '${window.location.hostname}:8000/api/v2v/network/stats')
+        content = content.replace('${window.location.hostname}:8001/vehicles/0/neighbors', '${window.location.hostname}:8000/api/v2v/vehicles/0/neighbors')
+        content = content.replace('${window.location.hostname}:8001/vehicles/0/threats', '${window.location.hostname}:8000/api/v2v/vehicles/0/threats')
+        content = content.replace('${window.location.hostname}:8001/vehicles/0', '${window.location.hostname}:8000/api/v2v/vehicles/0')
+        
+        # Replace WebSocket connection logic with REST API polling
+        ws_connect = '''// Connect to WebSocket
+        function connect() {
+            const wsUrl = `ws://${window.location.hostname}:8001/ws/v2v`;
+            ws = new WebSocket(wsUrl);
+            
+            ws.onopen = () => {
+                console.log('Connected to V2V WebSocket');
+                statusEl.textContent = 'Connected';
+                statusEl.className = 'status connected';
+                if (reconnectInterval) {
+                    clearInterval(reconnectInterval);
+                    reconnectInterval = null;
+                }
+            };
+            
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                updateDashboard(data);
+            };
+            
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                statusEl.textContent = 'Error';
+                statusEl.className = 'status disconnected';
+            };
+            
+            ws.onclose = () => {
+                console.log('Disconnected from V2V WebSocket');
+                statusEl.textContent = 'Disconnected';
+                statusEl.className = 'status disconnected';
+                
+                // Try to reconnect
+                if (!reconnectInterval) {
+                    reconnectInterval = setInterval(() => {
+                        console.log('Attempting to reconnect...');
+                        connect();
+                    }, 2000);
+                }
+            };
+        }'''
+        
+        rest_polling = '''// Use REST API polling instead of WebSocket
+        function connect() {
+            console.log('Using REST API polling');
+            statusEl.textContent = 'Connected';
+            statusEl.className = 'status connected';
+            // Initial fetch
+            updateDashboard({});
+        }'''
+        
+        content = content.replace(ws_connect, rest_polling)
+        
+        # Update the periodic refresh to not check WebSocket state
+        ws_check = '''if (ws && ws.readyState === WebSocket.OPEN) {
+                fetchNetworkStats();
+                updateEgoInfo();
+                fetchNeighbors();
+                fetchThreats();
+            }'''
+        
+        rest_refresh = '''fetchNetworkStats();
+            updateEgoInfo();
+            fetchNeighbors();
+            fetchThreats();'''
+        
+        content = content.replace(ws_check, rest_refresh)
+        
+        return HTMLResponse(content=content)
+    return HTMLResponse(content="<h1>V2V dashboard not found</h1>", status_code=404)
 
 
 @app.on_event("startup")
@@ -144,6 +257,122 @@ async def stream_lidar_data(collector: LiDARDataCollector = None, update_rate: f
         except Exception as e:
             logger.error(f"Error streaming data: {e}", exc_info=True)
             await asyncio.sleep(1.0)
+
+
+# V2V API Endpoints
+@app.get("/api/v2v/vehicles")
+async def get_vehicles():
+    """Get list of all vehicle IDs in V2V network."""
+    if _v2v_network is None:
+        return []
+    return list(_v2v_network.vehicles.keys())
+
+
+@app.get("/api/v2v/network/stats")
+async def get_network_stats():
+    """Get V2V network statistics."""
+    if _v2v_network is None:
+        return {"error": "V2V network not available"}
+    
+    stats = _v2v_network.get_network_stats()
+    return {
+        "total_vehicles": len(_v2v_network.vehicles),
+        "total_messages_sent": stats['total_messages_sent'],
+        "average_neighbors": stats['average_neighbors'],
+        "max_neighbors": stats['max_neighbors'],
+        "cooperative_shares": stats['cooperative_shares'],
+        "update_rate_hz": _v2v_network.update_rate_hz,
+        "max_range_m": _v2v_network.max_range
+    }
+
+
+@app.get("/api/v2v/vehicles/{vehicle_id}/neighbors")
+async def get_neighbors(vehicle_id: int):
+    """Get neighbors for specific vehicle."""
+    if _v2v_network is None:
+        return []
+    
+    if vehicle_id not in _v2v_network.vehicles:
+        return []
+    
+    neighbor_bsms = _v2v_network.get_neighbors(vehicle_id)
+    ego_bsm = _v2v_network.get_bsm(vehicle_id)
+    
+    if not ego_bsm:
+        return []
+    
+    neighbors = []
+    for neighbor_bsm in neighbor_bsms:
+        distance = _v2v_network.get_distance(vehicle_id, neighbor_bsm.vehicle_id)
+        rel_speed = abs(neighbor_bsm.speed - ego_bsm.speed)
+        
+        neighbors.append({
+            "vehicle_id": neighbor_bsm.vehicle_id,
+            "distance": distance if distance else 0.0,
+            "relative_speed": rel_speed,
+            "bsm": {
+                "speed": neighbor_bsm.speed,
+                "heading": neighbor_bsm.heading,
+                "position": {
+                    "x": neighbor_bsm.latitude,
+                    "y": neighbor_bsm.longitude,
+                    "z": neighbor_bsm.elevation
+                },
+                "acceleration": {
+                    "longitudinal": neighbor_bsm.longitudinal_accel,
+                    "lateral": neighbor_bsm.lateral_accel,
+                    "vertical": neighbor_bsm.vertical_accel
+                }
+            }
+        })
+    
+    return neighbors
+
+
+@app.get("/api/v2v/vehicles/{vehicle_id}/threats")
+async def get_threats(vehicle_id: int):
+    """Get threat assessment for vehicle."""
+    if _v2v_network is None:
+        return []
+    
+    if vehicle_id not in _v2v_network.vehicles:
+        return []
+    
+    threats = _v2v_network.get_threats(vehicle_id)
+    return [{
+        "other_vehicle_id": t['other_vehicle_id'],
+        "threat_level": t['level'],
+        "time_to_collision": t['ttc'],
+        "distance": t['distance'],
+        "timestamp": t['timestamp']
+    } for t in threats]
+
+
+@app.get("/api/v2v/vehicles/{vehicle_id}")
+async def get_vehicle_bsm(vehicle_id: int):
+    """Get BSM for specific vehicle."""
+    if _v2v_network is None:
+        return {"error": "V2V network not available"}
+    
+    bsm = _v2v_network.get_bsm(vehicle_id)
+    if not bsm:
+        return {"error": "Vehicle not found"}
+    
+    return {
+        "vehicle_id": bsm.vehicle_id,
+        "speed": bsm.speed,
+        "heading": bsm.heading,
+        "position": {
+            "x": bsm.latitude,
+            "y": bsm.longitude,
+            "z": bsm.elevation
+        },
+        "acceleration": {
+            "longitudinal": bsm.longitudinal_accel,
+            "lateral": bsm.lateral_accel,
+            "vertical": bsm.vertical_accel
+        }
+    }
 
 
 def run_server(host: str = '0.0.0.0', port: int = 8000):

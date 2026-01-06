@@ -5,11 +5,13 @@ FastAPI-based REST API for accessing V2V network data.
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from typing import List, Optional, Dict
 from pydantic import BaseModel
 import asyncio
 import json
 from datetime import datetime
+from pathlib import Path
 
 from .messages import BSMCore, VehicleType, BrakingStatus
 from .network_enhanced import V2VNetworkEnhanced
@@ -99,6 +101,7 @@ class V2VAPI:
                 "service": "V2V Network API",
                 "version": "1.0.0",
                 "endpoints": [
+                    "/dashboard",
                     "/vehicles",
                     "/vehicles/{vehicle_id}",
                     "/vehicles/{vehicle_id}/neighbors",
@@ -109,6 +112,14 @@ class V2VAPI:
                     "/ws/v2v"
                 ]
             }
+        
+        @self.app.get("/dashboard", response_class=HTMLResponse)
+        async def dashboard():
+            """Serve V2V Dashboard HTML"""
+            dashboard_path = Path(__file__).parent / "dashboard.html"
+            if dashboard_path.exists():
+                return HTMLResponse(content=dashboard_path.read_text())
+            return HTMLResponse(content="<h1>Dashboard not found</h1>", status_code=404)
         
         @self.app.get("/vehicles", response_model=List[int])
         async def get_vehicles():

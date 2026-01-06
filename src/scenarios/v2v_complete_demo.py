@@ -30,7 +30,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from src.v2v import V2VNetworkEnhanced
+from src.v2v import V2VNetworkEnhanced, V2VAPI
 from src.utils import (
     CARLASession, VehicleState, ActorManager,
     ScenarioBuilder, ScenarioConfig,
@@ -39,6 +39,8 @@ from src.utils import (
     LazyVehicleStats, Timer, calculate_distance_3d
 )
 from src.config import DEFAULT_SIM_CONFIG, DEFAULT_V2V_CONFIG
+import uvicorn
+import threading
 
 # Setup logging
 log_dir = Path(__file__).parent.parent.parent / 'logs'
@@ -63,6 +65,7 @@ def run_complete_v2v_demo(config: ScenarioConfig) -> None:
     This scenario showcases:
     - V2V communication between all vehicles within range
     - Real-time LiDAR visualization in web browser
+    - V2V REST API for programmatic access
     - Multiple observation/logging methods
     - Proper resource management and cleanup
     
@@ -70,6 +73,8 @@ def run_complete_v2v_demo(config: ScenarioConfig) -> None:
         config: Scenario configuration from ScenarioBuilder
     """
     lidar_api: Optional[Any] = None
+    v2v_api: Optional[V2VAPI] = None
+    api_thread: Optional[threading.Thread] = None
     observers: List[Any] = []
     
     try:
@@ -105,7 +110,11 @@ def run_complete_v2v_demo(config: ScenarioConfig) -> None:
                     enable_cooperative_perception=True,
                     world=session.world
                 )
-                print(f"   ✓ V2V initialized: {config.v2v_range}m range, 2 Hz update rate\n")
+                print(f"   ✓ V2V initialized: {config.v2v_range}m range, 2 Hz update rate")
+                
+                # Note: V2V REST API available at separate scenario (v2v_api_scenario.py)
+                # to avoid threading conflicts with LiDAR API server
+                print(f"   💡 Tip: Run 'v2v_api_scenario.py' for REST API access\n")
             
             # ========================================================================
             # STEP 3: Spawn Vehicles
@@ -149,21 +158,23 @@ def run_complete_v2v_demo(config: ScenarioConfig) -> None:
             # STEP 4: Initialize LiDAR (if enabled)
             # ========================================================================
             if config.lidar_enabled:
-                print(f"\n📡 Initializing LiDAR streaming...")
-                from src.visualization.lidar import create_ego_lidar_stream
+                print(f"\n📡 Initializing Unified Visualization Server...")
+                from src.visualization.lidar.api import LiDARStreamingAPI
                 
-                lidar_api = create_ego_lidar_stream(
+                # Create LiDAR API with V2V network integration
+                lidar_api = LiDARStreamingAPI(
                     world=session.world,
-                    ego_vehicle=ego,
                     web_port=config.lidar_web_port,
-                    high_quality=(config.lidar_quality == LiDARQuality.HIGH.value)
+                    channels=32 if config.lidar_quality == LiDARQuality.FAST.value else 64,
+                    points_per_second=500000 if config.lidar_quality == LiDARQuality.FAST.value else 1000000,
+                    lidar_range=80.0,
+                    downsample_factor=1 if config.lidar_quality == LiDARQuality.HIGH.value else 2,
+                    v2v_network=v2v  # Pass V2V network for unified visualization
                 )
+                lidar_api.register_ego_only(ego)
+                lidar_api.start_server(background=True)
                 
-                print(f"\n{'='*80}")
-                print(f"🌐 LiDAR Viewer URLs:")
-                print(f"   Local:   http://localhost:{config.lidar_web_port}")
-                print(f"   Network: http://192.168.1.113:{config.lidar_web_port}")
-                print(f"{'='*80}\n")
+                # URLs are printed by LiDAR API start_server
             
             # ========================================================================
             # STEP 5: Setup Traffic Manager (Deterministic)
@@ -324,6 +335,8 @@ def run_complete_v2v_demo(config: ScenarioConfig) -> None:
                     # Prepare V2V data for observers
                     v2v_data: Dict[str, Any] = {
                         'neighbors': v2v.get_neighbors(0) if v2v else [],
+                        'threats': v2v.get_threats(0) if v2v else [],
+                        'bsm': v2v.get_bsm(0) if v2v else None,
                         'total_vehicles': actor_mgr.count(),
                         'lidar_points': lidar_api.get_point_count() if lidar_api else 0
                     }
