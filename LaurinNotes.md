@@ -37,4 +37,8 @@
 
 in der klasse `messages.py` sind verschiedene V2V Message Standards und funktionen nach standards definiert BSM (Basic Safety Message) Implementation Based on SAE J2735 and ETSI ITS-G5 standard. Desweiteren befinden sich in der klasse noch collision detections scripts ect. 
 
+### usefull implementations and ideas
 
+    - implement synchronous mode between swrver and vlient
+    - set tick rate to 2 hertz
+    - synchronous mode + fixed time step
