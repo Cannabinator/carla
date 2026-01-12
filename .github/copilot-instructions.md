@@ -1,10 +1,35 @@
 # GitHub Copilot Instructions for CARLA V2V Research Platform
 
-Production-ready V2V (Vehicle-to-Vehicle) communication framework for CARLA Simulator 0.9.16. **Remote architecture**: CARLA server on Windows (192.168.1.110:2000), Python client on Ubuntu 24.04.
+Production-ready V2V (Vehicle-to-Vehicle) communication framework for CARLA Simulator 0.9.16. **Remote architecture**: CARLA server on Windows (192.168.1.103:2000), Python client on Ubuntu 24.04.
 
 ⚠️ **ALWAYS** reference CARLA official documentation: https://carla.readthedocs.io/en/0.9.16/ for API usage patterns.
 
 **Scientific Requirements**: All scenarios must be deterministic and reproducible. Always update `requirements.txt` when adding dependencies.
+
+## Critical Fixes & Known Issues
+
+### Thread Isolation for Server-Based Scenarios
+When running scenarios from the web server (FastAPI), imports fail due to thread isolation. **Solution**:
+```python
+# In server.py - MUST add project root to sys.path BEFORE any imports
+import sys
+from pathlib import Path
+project_root = Path(__file__).parent.parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+```
+Pass `server_module` reference to scenarios to avoid re-importing in threads.
+
+### Three.js Geometry Update Bug
+Point clouds won't render until camera moves unless you force geometry updates:
+```javascript
+// After creating new geometry in updatePointCloud()
+geometry.computeBoundingSphere();  // Essential for proper culling
+pointCloud.geometry = geometry;
+pointCloud.geometry.attributes.position.needsUpdate = true;
+pointCloud.geometry.attributes.color.needsUpdate = true;
+```
+Without these flags, Three.js won't re-upload buffers to GPU.
 
 ## Project Overview
 Highly optimized research platform featuring:
@@ -21,7 +46,7 @@ Highly optimized research platform featuring:
 from src.utils import CARLASession
 from src.config import DEFAULT_SIM_CONFIG
 
-with CARLASession('192.168.1.110', 2000, DEFAULT_SIM_CONFIG) as session:
+with CARLASession('192.168.1.103', 2000, DEFAULT_SIM_CONFIG) as session:
     ego = session.world.spawn_actor(bp, spawn_point)
     session.actors.append(ego)  # Tracks for auto-cleanup
     # ... scenario code ...
@@ -34,7 +59,7 @@ Use `ScenarioBuilder` for fluent, type-safe configuration:
 from src.utils import ScenarioBuilder, get_performance_config
 
 config = (ScenarioBuilder()
-    .with_carla_server('192.168.1.110', 2000)
+    .with_carla_server('192.168.1.103', 2000)
     .with_duration(60)
     .with_vehicles(20)
     .with_v2v(range_m=150.0)
@@ -215,7 +240,7 @@ spectator.set_transform(carla.Transform(
 python tests/v2v/test_network.py -v
 
 # Reproducibility test (needs CARLA server)
-python tests/test_reproducibility.py --host 192.168.1.110
+python tests/test_reproducibility.py --host 192.168.1.103
 
 # Frontend visual tests
 python tests/test_frontend_visual.py --run
@@ -228,24 +253,30 @@ python tests/test_v2v_lidar.py
 ```bash
 source venv/bin/activate
 
-# High-performance V2V scenario (uses all patterns)
-python src/scenarios/v2v_scenario_perf.py --host 192.168.1.110
+# Complete V2V + LiDAR demo (recommended - uses all patterns)
+python src/scenarios/v2v_complete_demo.py --host 192.168.1.103
 
-# V2V + LiDAR visualization
+# Or use the web control panel (start server first)
+python -m src.visualization.lidar.server
+# Then open: http://localhost:8000/control
+
+# V2V + LiDAR visualization (shell script)
 ./run_v2v_lidar.sh
-# Or: python src/scenarios/v2v_lidar_scenario.py --carla-host 192.168.1.110
 
 # V2V with REST API
-python src/scenarios/v2v_api_scenario.py --host 192.168.1.110 --api-port 8001
+python src/scenarios/v2v_api_scenario.py --host 192.168.1.103 --api-port 8001
 
 # Basic scenario
-python src/scenarios/run_scenario.py --host 192.168.1.110
+python src/scenarios/run_scenario.py --host 192.168.1.103
 ```
 
 ### Web Interfaces
 ```bash
-# LiDAR 3D viewer (after running v2v_lidar_scenario.py)
-# Open: http://localhost:8000
+# Unified Control Panel (Control + LiDAR + V2V tabs)
+python -m src.visualization.lidar.server
+# Open: http://localhost:8000 (main interface)
+# Or directly: http://localhost:8000/control (control panel)
+# Or directly: http://localhost:8000/lidar (3D viewer)
 
 # V2V REST API docs (after running v2v_api_scenario.py)
 # Open: http://localhost:8001/docs
@@ -285,7 +316,7 @@ python src/scenarios/run_scenario.py --host 192.168.1.110
 - **V2V implementations**: `src/v2v/communicator.py` (basic), `src/v2v/network_enhanced.py` (BSM), `src/v2v/api.py` (REST API)
 - **Performance**: `src/utils/lazy.py` (lazy evaluation), `src/utils/octree.py` (downsampling), `src/utils/binary_protocol.py` (binary WebSocket)
 - **Visualization**: `src/visualization/lidar/api.py` (LiDAR API), `src/visualization/web/viewer.html` (3D viewer)
-- **Example scenarios**: `src/scenarios/v2v_scenario_perf.py` (complete example), `src/scenarios/v2v_lidar_scenario.py` (LiDAR)
+- **Example scenarios**: `src/scenarios/v2v_complete_demo.py` (complete example), `src/scenarios/v2v_lidar_scenario.py` (LiDAR)
 - **Configuration**: `src/config.py` (centralized configs)
 - **Tests**: `tests/v2v/test_network.py` (unittest), `tests/test_reproducibility.py` (integration)
 
