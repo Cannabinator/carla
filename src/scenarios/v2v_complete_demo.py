@@ -493,8 +493,8 @@ Examples:
     )
     
     # CARLA Connection
-    parser.add_argument('--host', default='192.168.1.110', 
-                       help='CARLA server IP (default: 192.168.1.110)')
+    parser.add_argument('--host', default='192.168.1.108', 
+                       help='CARLA server IP (default: 192.168.1.108)')
     parser.add_argument('--port', type=int, default=2000, 
                        help='CARLA server port (default: 2000)')
     
@@ -595,7 +595,7 @@ def run_simulation_headless(
     """
     # Build configuration
     config: ScenarioConfig = (ScenarioBuilder()
-        .with_carla_server('192.168.1.110', 2000)
+        .with_carla_server('192.168.1.108', 2000)
         .with_duration(duration)
         .with_vehicles(vehicles)
         .with_seed(42)
