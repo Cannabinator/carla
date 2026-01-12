@@ -490,8 +490,15 @@
             geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
             geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
             
+            // Compute bounding sphere for proper culling and rendering
+            geometry.computeBoundingSphere();
+            
             pointCloud.geometry.dispose();
             pointCloud.geometry = geometry;
+            
+            // Force geometry update
+            pointCloud.geometry.attributes.position.needsUpdate = true;
+            pointCloud.geometry.attributes.color.needsUpdate = true;
         }
         
         function updateStats(data) {

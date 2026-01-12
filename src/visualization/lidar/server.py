@@ -4,10 +4,18 @@ FastAPI WebSocket Server for Real-time V2V LiDAR Visualization
 Streams semantic LiDAR data from multiple vehicles to web browser.
 """
 
+import sys
+from pathlib import Path
+
+# CRITICAL: Add project root to Python path BEFORE any imports
+# This allows the server to import from 'src' package in threads
+project_root = Path(__file__).parent.parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
 import asyncio
 import json
 import logging
-from pathlib import Path
 from typing import List, Optional, Dict, Any
 import threading
 
@@ -15,7 +23,11 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from .collector import LiDARDataCollector
+# Support both direct execution and module import
+try:
+    from .collector import LiDARDataCollector
+except ImportError:
+    from collector import LiDARDataCollector
 
 logger = logging.getLogger(__name__)
 
@@ -310,16 +322,20 @@ async def stream_lidar_data(collector: Optional[LiDARDataCollector] = None, upda
         logger.error("No collector available for streaming")
         return
     
-    logger.info("Streaming loop started")
+    logger.info(f"🟢 Streaming loop started - collector has {len(collector.vehicles)} vehicles registered")
+    frame_count = 0
     while True:
         try:
             if len(manager.active_connections) > 0:
+                frame_count += 1
                 data = collector.get_combined_pointcloud()
                 if data and data.get('num_points', 0) > 0:
-                    logger.info(f"📡 Broadcasting {data['num_points']} points to {len(manager.active_connections)} clients")
+                    if frame_count % 50 == 0:  # Log every 50 frames to reduce spam
+                        logger.info(f"📡 Broadcasting {data['num_points']} points to {len(manager.active_connections)} clients")
                     await manager.broadcast(json.dumps(data))
                 else:
-                    logger.warning(f"❌ No data: data={data is not None}, points={data.get('num_points', 0) if data else 0}")
+                    if frame_count % 10 == 0:  # Log every 10 failed attempts
+                        logger.warning(f"❌ No data (frame {frame_count}): collector.vehicles={list(collector.vehicles.keys())}, collector.latest_data={list(collector.latest_data.keys())}")
             await asyncio.sleep(update_rate)
         except asyncio.CancelledError:
             logger.info("Streaming task cancelled")
@@ -497,7 +513,7 @@ async def start_simulation(config: SimulationConfig):
     _simulation_thread = threading.Thread(target=run_simulation, daemon=True)
     _simulation_thread.start()
     
-    return {"status": "started", "config": config.dict()}
+    return {"status": "started", "config": config.model_dump()}
 
 
 @app.post("/api/simulation/stop")
