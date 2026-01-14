@@ -6,6 +6,30 @@ Production-ready V2V (Vehicle-to-Vehicle) communication framework for CARLA Simu
 
 **Scientific Requirements**: All scenarios must be deterministic and reproducible. Always update `requirements.txt` when adding dependencies.
 
+## Quick Reference
+
+**Essential Commands:**
+```bash
+# Activate environment
+source venv/bin/activate
+
+# Run complete demo (recommended starting point)
+python src/scenarios/v2v_complete_demo.py --host 192.168.1.103
+
+# Start web server only (then control via browser)
+python start_server.py  # http://localhost:8000
+
+# Run tests
+python tests/v2v/test_network.py -v
+python tests/test_frontend_visual.py --run
+```
+
+**Key Files to Read First:**
+- [src/scenarios/v2v_complete_demo.py](src/scenarios/v2v_complete_demo.py) - Complete example using all patterns
+- [src/config.py](src/config.py) - Centralized configuration constants
+- [src/utils/session.py](src/utils/session.py) - Context manager pattern
+- [V2V_GUIDE.md](V2V_GUIDE.md) - V2V protocol documentation
+
 ## Critical Fixes & Known Issues
 
 ### Thread Isolation for Server-Based Scenarios
@@ -32,11 +56,15 @@ pointCloud.geometry.attributes.color.needsUpdate = true;
 Without these flags, Three.js won't re-upload buffers to GPU.
 
 ## Project Overview
+
 Highly optimized research platform featuring:
 - **V2V Communication**: SAE J2735 BSM protocol with 2 Hz updates, 150m range
-- **Real-time LiDAR Visualization**: Web-based 3D viewer with semantic coloring
+- **Real-time LiDAR Visualization**: Web-based 3D viewer with semantic coloring, three camera modes (Orbit/Follow/Free-Fly)
 - **Performance Optimizations**: 73% bandwidth reduction (binary WebSocket), 50-70% point reduction (octree), lazy evaluation
 - **Professional Architecture**: Observer pattern, builder pattern, context managers, dataclasses, type hints (90% coverage)
+- **Web Control Panel**: Unified interface for running simulations from browser (http://localhost:8000)
+
+**Data Flow**: CARLA Server (Windows) → Python Client (Ubuntu) → WebSocket → Browser (Three.js)
 
 ## Architecture Patterns
 
@@ -242,7 +270,7 @@ python tests/v2v/test_network.py -v
 # Reproducibility test (needs CARLA server)
 python tests/test_reproducibility.py --host 192.168.1.103
 
-# Frontend visual tests
+# Frontend visual tests (20 automated tests)
 python tests/test_frontend_visual.py --run
 
 # V2V + LiDAR integration tests
@@ -257,26 +285,28 @@ source venv/bin/activate
 python src/scenarios/v2v_complete_demo.py --host 192.168.1.103
 
 # Or use the web control panel (start server first)
-python -m src.visualization.lidar.server
-# Then open: http://localhost:8000/control
+python start_server.py
+# Then open: http://localhost:8000 and configure/run from browser
 
-# V2V + LiDAR visualization (shell script)
+# V2V + LiDAR visualization (shell script - legacy)
 ./run_v2v_lidar.sh
 
 # V2V with REST API
 python src/scenarios/v2v_api_scenario.py --host 192.168.1.103 --api-port 8001
 
-# Basic scenario
+# Basic scenario (minimal example)
 python src/scenarios/run_scenario.py --host 192.168.1.103
 ```
 
 ### Web Interfaces
 ```bash
 # Unified Control Panel (Control + LiDAR + V2V tabs)
-python -m src.visualization.lidar.server
+python start_server.py
+# OR: python -m src.visualization.lidar.server
 # Open: http://localhost:8000 (main interface)
-# Or directly: http://localhost:8000/control (control panel)
-# Or directly: http://localhost:8000/lidar (3D viewer)
+# Tab 1: Control Panel - configure and run simulations
+# Tab 2: LiDAR Viewer - 3D point cloud visualization
+# Tab 3: V2V Dashboard - vehicle communication status
 
 # V2V REST API docs (after running v2v_api_scenario.py)
 # Open: http://localhost:8001/docs
@@ -286,16 +316,18 @@ python -m src.visualization.lidar.server
 
 ### Module Structure
 - `src/scenarios/`: Executable scenarios with `if __name__ == "__main__"`
-- `src/utils/`: Reusable utilities
-- `src/v2v/`: V2V framework (lightweight, efficient)
-- `src/visualization/`: Visualization tools
+- `src/utils/`: Reusable utilities (patterns, helpers)
+- `src/v2v/`: V2V framework (three implementations: lightweight, enhanced BSM, REST API)
+- `src/visualization/`: Visualization tools (LiDAR, web server)
+- `src/config.py`: Centralized configuration dataclasses
 - `tests/`: Unit and integration tests
 
 ### Naming
-- Scenarios: `*_scenario.py`
+- Scenarios: `*_scenario.py` or `*_demo.py`
 - Classes: PascalCase (e.g., `V2VNetwork`, `V2VState`)
 - Functions: snake_case with docstrings
-- Use dataclasses for data structures
+- Use dataclasses for data structures (see `src/config.py`)
+- Type hints preferred (90% coverage target)
 
 ### Reproducibility Requirements
 1. **Fixed seed**: `random.seed()` and `np.random.seed()` before randomization
@@ -303,12 +335,21 @@ python -m src.visualization.lidar.server
 3. **Traffic manager seed**: `tm.set_random_device_seed(seed)`
 4. **Fixed spawn points**: Use deterministic spawn point selection
 
+### Dependency Management
+- Always update `requirements.txt` when adding dependencies
+- Core: `carla==0.9.16`, `numpy>=1.24.0`
+- Web: `fastapi>=0.104.0`, `uvicorn[standard]>=0.24.0`, `websockets>=12.0`
+- Optional: `selenium>=4.15.0` (tests), `open3d>=0.18.0` (viz), `opencv-python>=4.8.0`
+
 ## Common Pitfalls
 
 1. **Forgetting `world.tick()`**: In sync mode, nothing happens until you tick
-2. **Wrong TM port**: Traffic manager port must match in `get_trafficmanager()` and `set_autopilot()`
+2. **Wrong TM port**: Traffic manager port (8001) must differ from web server (8000) and match in `get_trafficmanager()` and `set_autopilot()`
 3. **Not checking `if world:`**: Cleanup runs even if connection fails
 4. **Blocking operations**: Keep update loops fast, avoid heavy computation per frame
+5. **Stale velocity data**: Always get snapshot AFTER `world.tick()` for fresh velocity (see "Getting Fresh Velocity Data")
+6. **Hybrid physics mode**: Never enable - causes zero velocity readings and vehicle teleportation
+7. **Thread isolation in FastAPI**: Must add project root to `sys.path` before imports in server modules
 
 ## Key Files to Reference
 
@@ -319,14 +360,16 @@ python -m src.visualization.lidar.server
 - **Example scenarios**: `src/scenarios/v2v_complete_demo.py` (complete example), `src/scenarios/v2v_lidar_scenario.py` (LiDAR)
 - **Configuration**: `src/config.py` (centralized configs)
 - **Tests**: `tests/v2v/test_network.py` (unittest), `tests/test_reproducibility.py` (integration)
+- **Documentation**: `V2V_GUIDE.md` (V2V protocol), `README.md` (overview)
 
 ## Scientific Use Cases
 
 This codebase supports:
-- **V2V protocol research**: Efficient neighbor discovery within configurable range
-- **Cooperative perception**: Vehicles share state information
-- **Reproducible experiments**: Same seed → identical simulation
-- **Multi-vehicle coordination**: State sharing and neighbor awareness
+- **V2V protocol research**: SAE J2735 BSM and ETSI CAM implementations with 2 Hz updates
+- **Cooperative perception**: Vehicles share state information and sensor data
+- **Reproducible experiments**: Same seed → identical simulation (deterministic Traffic Manager)
+- **Multi-vehicle coordination**: State sharing, neighbor awareness, and threat assessment
+- **Real-time visualization**: Web-based 3D LiDAR viewer with semantic coloring
 
 ---
 
