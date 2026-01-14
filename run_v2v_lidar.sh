@@ -74,10 +74,6 @@ echo "════════════════════════�
 echo ""
 
 # Run scenario
-python src/scenarios/v2v_lidar_scenario.py \
+python src/scenarios/v2v_complete_demo.py \
     --carla-host 192.168.1.110 \
-    --carla-port 2000 \
-    --web-host 0.0.0.0 \
-    --web-port 8000 \
-    --vehicles 3 \
-    --duration 300
+    --duration 120

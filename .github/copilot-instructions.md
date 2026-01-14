@@ -127,5 +127,11 @@ for observer in observers:
 
 - V2V Protocol: [src/v2v/messages.py](src/v2v/messages.py) (BSMCore, BSMPartII, threat assessment)
 - Network Manager: [src/v2v/network_enhanced.py](src/v2v/network_enhanced.py) (2 Hz enforcement, neighbor discovery)
+- LiDAR Server: [src/visualization/lidar/server.py](src/visualization/lidar/server.py) (FastAPI WebSocket streaming)
 - Complete Example: [src/scenarios/v2v_complete_demo.py](src/scenarios/v2v_complete_demo.py) (demonstrates all patterns)
 - User Guides: [V2V_GUIDE.md](V2V_GUIDE.md), [V2V_IMPLEMENTATION.md](V2V_IMPLEMENTATION.md), [README.md](README.md)
+
+## Legacy Files (kept for backwards compatibility)
+
+- [src/v2v/communicator.py](src/v2v/communicator.py) - Legacy `V2VNetwork` class (use `V2VNetworkEnhanced` instead)
+- [src/v2v/protocol.py](src/v2v/protocol.py) - Legacy `V2VState` dataclass (used by communicator.py)
