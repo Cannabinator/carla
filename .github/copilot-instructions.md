@@ -1,376 +1,131 @@
-# GitHub Copilot Instructions for CARLA V2V Research Platform
+# CARLA V2V Research Platform - AI Agent Instructions
 
-Production-ready V2V (Vehicle-to-Vehicle) communication framework for CARLA Simulator 0.9.16. **Remote architecture**: CARLA server on Windows (192.168.1.103:2000), Python client on Ubuntu 24.04.
+Production-ready V2V (Vehicle-to-Vehicle) communication and real-time LiDAR visualization for CARLA Simulator 0.9.16.
 
-⚠️ **ALWAYS** reference CARLA official documentation: https://carla.readthedocs.io/en/0.9.16/ for API usage patterns.
+## Architecture Overview
 
-**Scientific Requirements**: All scenarios must be deterministic and reproducible. Always update `requirements.txt` when adding dependencies.
+**Design Patterns in Use:**
+- **Context Manager**: `CARLASession` ([src/utils/session.py](src/utils/session.py)) - guarantees cleanup of CARLA actors/settings even on exceptions
+- **Builder**: `ScenarioBuilder` ([src/utils/builder.py](src/utils/builder.py)) - fluent API for spawning vehicles and sensors
+- **Observer**: Multiple observers ([src/utils/observers.py](src/utils/observers.py)) - ConsoleObserver, CSVDataLogger, CompactLogObserver for different output formats
+- **Lazy Evaluation**: `LazyVehicleStats` ([src/utils/lazy.py](src/utils/lazy.py)) - 10-20% CPU savings by computing only when accessed
 
-## Quick Reference
+**Core Components:**
+- **V2V Network** ([src/v2v/](src/v2v/)): SAE J2735 BSM (Basic Safety Message) protocol implementation with 2 Hz update rate, neighbor discovery, and threat assessment
+- **LiDAR Visualization** ([src/visualization/lidar/](src/visualization/lidar/)): FastAPI WebSocket server streaming semantic LiDAR to Three.js web viewer
+- **Binary Protocol** ([src/utils/binary_protocol.py](src/utils/binary_protocol.py)): 73% bandwidth reduction vs JSON for point cloud streaming
+- **Octree Downsampling** ([src/utils/octree.py](src/utils/octree.py)): 50-70% point reduction while preserving structure
 
-**Essential Commands:**
+## Critical Developer Workflows
+
+### Running Scenarios
 ```bash
-# Activate environment
+# V2V + LiDAR visualization (complete demo)
+./run_v2v_lidar.sh
+
+# Or manually:
 source venv/bin/activate
-
-# Run complete demo (recommended starting point)
-python src/scenarios/v2v_complete_demo.py --host 192.168.1.103
-
-# Start web server only (then control via browser)
-python start_server.py  # http://localhost:8000
-
-# Run tests
-python tests/v2v/test_network.py -v
-python tests/test_frontend_visual.py --run
+python src/scenarios/v2v_complete_demo.py --carla-host 192.168.1.110 --duration 120
+# Web viewer: http://localhost:8000
 ```
 
-**Key Files to Read First:**
-- [src/scenarios/v2v_complete_demo.py](src/scenarios/v2v_complete_demo.py) - Complete example using all patterns
-- [src/config.py](src/config.py) - Centralized configuration constants
-- [src/utils/session.py](src/utils/session.py) - Context manager pattern
-- [V2V_GUIDE.md](V2V_GUIDE.md) - V2V protocol documentation
+### Testing Strategy
+```bash
+# Unit tests (no CARLA needed) - run these FIRST
+python -m pytest tests/v2v/ -v
 
-## Critical Fixes & Known Issues
-
-### Thread Isolation for Server-Based Scenarios
-When running scenarios from the web server (FastAPI), imports fail due to thread isolation. **Solution**:
-```python
-# In server.py - MUST add project root to sys.path BEFORE any imports
-import sys
-from pathlib import Path
-project_root = Path(__file__).parent.parent.parent
-if str(project_root) not in sys.path:
-    sys.path.insert(0, str(project_root))
+# Integration tests (require CARLA server at 192.168.1.110:2000)
+python -m pytest tests/test_v2v_lidar.py -v
+python tests/test_frontend_visual.py --run  # Frontend tests with 20 automated checks
 ```
-Pass `server_module` reference to scenarios to avoid re-importing in threads.
 
-### Three.js Geometry Update Bug
-Point clouds won't render until camera moves unless you force geometry updates:
-```javascript
-// After creating new geometry in updatePointCloud()
-geometry.computeBoundingSphere();  // Essential for proper culling
-pointCloud.geometry = geometry;
-pointCloud.geometry.attributes.position.needsUpdate = true;
-pointCloud.geometry.attributes.color.needsUpdate = true;
-```
-Without these flags, Three.js won't re-upload buffers to GPU.
-
-## Project Overview
-
-Highly optimized research platform featuring:
-- **V2V Communication**: SAE J2735 BSM protocol with 2 Hz updates, 150m range
-- **Real-time LiDAR Visualization**: Web-based 3D viewer with semantic coloring, three camera modes (Orbit/Follow/Free-Fly)
-- **Performance Optimizations**: 73% bandwidth reduction (binary WebSocket), 50-70% point reduction (octree), lazy evaluation
-- **Professional Architecture**: Observer pattern, builder pattern, context managers, dataclasses, type hints (90% coverage)
-- **Web Control Panel**: Unified interface for running simulations from browser (http://localhost:8000)
-
-**Data Flow**: CARLA Server (Windows) → Python Client (Ubuntu) → WebSocket → Browser (Three.js)
-
-## Architecture Patterns
-
-### 1. Context Manager Pattern (Guaranteed Cleanup)
-**ALWAYS** use `CARLASession` for robust resource management:
+### CARLA Connection Pattern
+**ALWAYS use** `CARLASession` context manager to prevent actor leaks:
 ```python
 from src.utils import CARLASession
 from src.config import DEFAULT_SIM_CONFIG
 
-with CARLASession('192.168.1.103', 2000, DEFAULT_SIM_CONFIG) as session:
-    ego = session.world.spawn_actor(bp, spawn_point)
-    session.actors.append(ego)  # Tracks for auto-cleanup
-    # ... scenario code ...
-# Automatic cleanup: restores settings, destroys actors, handles exceptions
+with CARLASession('192.168.1.110', 2000, DEFAULT_SIM_CONFIG) as session:
+    # session.world, session.actors, session.bp_lib available
+    ego = session.world.spawn_actor(blueprint, spawn_point)
+    session.actors.append(ego)  # Automatically destroyed on exit
 ```
 
-### 2. Builder Pattern (Scenario Configuration)
-Use `ScenarioBuilder` for fluent, type-safe configuration:
+## Project-Specific Conventions
+
+### Configuration Management
+**Use centralized config dataclasses** - NO magic numbers in code:
 ```python
-from src.utils import ScenarioBuilder, get_performance_config
-
-config = (ScenarioBuilder()
-    .with_carla_server('192.168.1.103', 2000)
-    .with_duration(60)
-    .with_vehicles(20)
-    .with_v2v(range_m=150.0)
-    .with_lidar(quality='high', port=8000)
-    .build())
-
-# Or use factory methods for common configurations
-config = get_performance_config()  # High-performance preset
+from src.config import DEFAULT_SIM_CONFIG, DEFAULT_V2V_CONFIG
+# Access: DEFAULT_SIM_CONFIG.fixed_delta_seconds, DEFAULT_V2V_CONFIG.max_range
 ```
 
-### 3. Observer Pattern (Visualization & Logging)
-**Separation of concerns**: Keep scenario logic separate from visualization. Observers use lazy evaluation internally for efficiency.
+### Type Safety
+- 90% type coverage enforced (see [pyrightconfig.json](pyrightconfig.json))
+- All V2V messages use `@dataclass` with explicit types ([src/v2v/messages.py](src/v2v/messages.py))
+- Pyright issues mostly suppressed for CARLA API compatibility
+
+### Synchronous Mode Requirements
+CARLA runs at **fixed 20 FPS** (`fixed_delta_seconds=0.05`):
+- V2V updates enforced at **2 Hz** via internal throttling in `V2VNetworkEnhanced.update()`
+- LiDAR streaming at **10 Hz** (configurable in server)
+- **NEVER** use `time.sleep()` in simulation loop - use `world.tick()` and frame counting
+
+### Observer Pattern Usage
+Register multiple observers for different outputs:
 ```python
-from src.utils import ConsoleObserver, CARLADebugObserver, CSVDataLogger, CompactLogObserver
+from src.utils import ConsoleObserver, CSVDataLogger, CompactLogObserver
 
 observers = [
-    ConsoleObserver(interval_seconds=2.0, fps=20),  # Console stats
-    CARLADebugObserver(session.world, v2v, interval_frames=5),  # 3D visualization
-    CSVDataLogger(output_path='data/scenario.csv'),  # Data export
-    CompactLogObserver(logger)  # Structured logging
+    ConsoleObserver(),  # Rich terminal output
+    CSVDataLogger(log_dir / f"scenario_data_{timestamp}.csv"),  # Data collection
+    CompactLogObserver()  # One-line status updates
 ]
-
-# In simulation loop
 for observer in observers:
-    observer.on_frame(frame, state, v2v_data)
-
-# After completion
-for observer in observers:
-    observer.on_complete(total_frames, elapsed_time)
+    observer.on_frame_update(frame_data)
 ```
 
-### 4. Lazy Evaluation (Performance)
-Use lazy properties to avoid expensive computations until needed:
-```python
-from src.utils import LazyVehicleStats, LazyProperty
+## Integration Points
 
-# Automatic lazy computation
-stats = LazyVehicleStats(snapshot)
-if condition:
-    speed = stats.speed_kmh  # Only computed if accessed
-```
+### V2V Communication Flow
+1. Register vehicles: `v2v_network.register(vehicle.id, vehicle)`
+2. Simulation loop: `world.tick()` → `v2v_network.update()` (auto-throttles to 2 Hz)
+3. Access data: `v2v_network.get_neighbors(ego_id)` returns list of `V2VEnhancedMessage` with BSM data
 
-### 5. Configuration Management
-Use centralized dataclasses from `src/config.py`:
-```python
-from src.config import (
-    DEFAULT_SIM_CONFIG,      # SimulationConfig
-    DEFAULT_VIZ_CONFIG,      # VisualizationConfig  
-    DEFAULT_V2V_CONFIG,      # V2VConfig
-    DEFAULT_VEHICLE_CONFIG   # VehicleSpawnConfig
-)
+### LiDAR WebSocket Streaming
+**Continuous streaming pattern** (see [src/visualization/lidar/server.py](src/visualization/lidar/server.py)):
+- Streaming task starts at server startup and runs continuously
+- Task dynamically checks global `_collector` reference each iteration
+- Automatically waits for both collector AND WebSocket connections
+- No need to restart task when collector changes - just set `_collector`
+- Collector registered via `set_collector(collector)` - streaming begins automatically
 
-# Customize as needed
-config = DEFAULT_SIM_CONFIG
-config.random_seed = 123
-```
-
-## CARLA Critical Patterns
-
-### Synchronous Mode (MANDATORY for Reproducibility)
-```python
-# ALWAYS use synchronous mode for reproducibility
-settings = world.get_settings()
-settings.synchronous_mode = True
-settings.fixed_delta_seconds = 0.05  # Fixed 20 FPS
-world.apply_settings(settings)
-
-random.seed(seed)
-np.random.seed(seed)
-
-# CRITICAL: Must tick world in sync mode
-while running:
-    world.tick()  # Advances simulation by fixed_delta_seconds
-```
-
-### Cleanup Pattern (MANDATORY)
-```python
-try:
-    # scenario code
-finally:
-    if world:
-        settings = world.get_settings()
-        settings.synchronous_mode = False
-        settings.fixed_delta_seconds = None
-        world.apply_settings(settings)
-    
-    if client and actors:
-        client.apply_batch([carla.command.DestroyActor(x) for x in actors])
-```
-
-## V2V Communication System
-
-### Three V2V Implementations
-The codebase provides three V2V systems for different use cases:
-
-1. **V2VNetwork** (`src/v2v/communicator.py`) - Lightweight neighbor discovery
-   - Simple distance-based neighbor detection
-   - Efficient state sharing with V2VState dataclass
-   - Best for: Basic V2V scenarios
-
-2. **V2VNetworkEnhanced** (`src/v2v/network_enhanced.py`) - Industry-standard BSM protocol
-   - SAE J2735 Basic Safety Message (BSM) implementation
-   - 2 Hz update rate (configurable)
-   - Threat assessment with Time-To-Collision
-   - Cooperative perception sharing
-   - Best for: Research requiring standard V2V protocols
-
-3. **V2VAPI** (`src/v2v/api.py`) - REST/WebSocket interface
-   - FastAPI-based HTTP endpoints
-   - Real-time WebSocket streaming
-   - External system integration
-   - Best for: Web dashboards, external monitoring
-
-### Basic V2V Pattern (Lightweight)
-```python
-from src.v2v import V2VNetwork
-
-# Initialize with 50m range
-v2v = V2VNetwork(max_range=50.0)
-
-# Register vehicles
-v2v.register(0, ego_vehicle)
-v2v.register(i, traffic_vehicle)
-
-# Update network (every 0.2s in simulation loop)
-v2v.update()  # Updates states + finds neighbors
-
-# Get neighbors
-neighbors = v2v.get_neighbors(0)  # Returns List[V2VState]
-```
-
-## CARLA 0.9.16 API Essentials
-
-### Connection & Setup
-```python
-client = carla.Client(host, port)
-client.set_timeout(30.0)  # Long timeout for remote
-world = client.get_world()
-```
-
-### Traffic Manager (Deterministic)
-```python
-tm = client.get_trafficmanager(8000)
-tm.set_synchronous_mode(True)  # MUST match world
-tm.set_random_device_seed(seed)
-# WARNING: Do NOT use hybrid physics mode - it causes zero velocity readings!
-# tm.set_hybrid_physics_mode(True)  # CAUSES TELEPORTATION, NOT DRIVING
-vehicle.set_autopilot(True, 8000)
-```
-
-### Getting Fresh Velocity Data (CRITICAL!)
-```python
-# WRONG - Returns cached/stale velocity data
-vel = vehicle.get_velocity()  # One tick behind!
-
-# CORRECT - Get snapshot immediately after tick for fresh data
-world.tick()
-snapshot = world.get_snapshot()  # Must be called RIGHT AFTER tick()
-actor_snapshot = snapshot.find(vehicle.id)
-vel = actor_snapshot.get_velocity()  # Fresh data from current tick!
-```
-
-### Spectator Camera (Follow Vehicle)
-```python
-spectator = world.get_spectator()
-transform = vehicle.get_transform()
-spectator.set_transform(carla.Transform(
-    transform.location + carla.Location(x=-10, z=6),
-    carla.Rotation(pitch=-20, yaw=transform.rotation.yaw)
-))
-```
-
-## Developer Workflows
-
-### Run Tests
-```bash
-# Unit tests (no CARLA needed)
-python tests/v2v/test_network.py -v
-
-# Reproducibility test (needs CARLA server)
-python tests/test_reproducibility.py --host 192.168.1.103
-
-# Frontend visual tests (20 automated tests)
-python tests/test_frontend_visual.py --run
-
-# V2V + LiDAR integration tests
-python tests/test_v2v_lidar.py
-```
-
-### Run Scenarios
-```bash
-source venv/bin/activate
-
-# Complete V2V + LiDAR demo (recommended - uses all patterns)
-python src/scenarios/v2v_complete_demo.py --host 192.168.1.103
-
-# Or use the web control panel (start server first)
-python start_server.py
-# Then open: http://localhost:8000 and configure/run from browser
-
-# V2V + LiDAR visualization (shell script - legacy)
-./run_v2v_lidar.sh
-
-# V2V with REST API
-python src/scenarios/v2v_api_scenario.py --host 192.168.1.103 --api-port 8001
-
-# Basic scenario (minimal example)
-python src/scenarios/run_scenario.py --host 192.168.1.103
-```
-
-### Web Interfaces
-```bash
-# Unified Control Panel (Control + LiDAR + V2V tabs)
-python start_server.py
-# OR: python -m src.visualization.lidar.server
-# Open: http://localhost:8000 (main interface)
-# Tab 1: Control Panel - configure and run simulations
-# Tab 2: LiDAR Viewer - 3D point cloud visualization
-# Tab 3: V2V Dashboard - vehicle communication status
-
-# V2V REST API docs (after running v2v_api_scenario.py)
-# Open: http://localhost:8001/docs
-```
-
-## Project Conventions
-
-### Module Structure
-- `src/scenarios/`: Executable scenarios with `if __name__ == "__main__"`
-- `src/utils/`: Reusable utilities (patterns, helpers)
-- `src/v2v/`: V2V framework (three implementations: lightweight, enhanced BSM, REST API)
-- `src/visualization/`: Visualization tools (LiDAR, web server)
-- `src/config.py`: Centralized configuration dataclasses
-- `tests/`: Unit and integration tests
-
-### Naming
-- Scenarios: `*_scenario.py` or `*_demo.py`
-- Classes: PascalCase (e.g., `V2VNetwork`, `V2VState`)
-- Functions: snake_case with docstrings
-- Use dataclasses for data structures (see `src/config.py`)
-- Type hints preferred (90% coverage target)
-
-### Reproducibility Requirements
-1. **Fixed seed**: `random.seed()` and `np.random.seed()` before randomization
-2. **Synchronous mode**: `settings.synchronous_mode = True` with `fixed_delta_seconds`
-3. **Traffic manager seed**: `tm.set_random_device_seed(seed)`
-4. **Fixed spawn points**: Use deterministic spawn point selection
-
-### Dependency Management
-- Always update `requirements.txt` when adding dependencies
-- Core: `carla==0.9.16`, `numpy>=1.24.0`
-- Web: `fastapi>=0.104.0`, `uvicorn[standard]>=0.24.0`, `websockets>=12.0`
-- Optional: `selenium>=4.15.0` (tests), `open3d>=0.18.0` (viz), `opencv-python>=4.8.0`
+### Performance Optimizations
+- **Binary Protocol**: Use `BinaryProtocol.encode()` instead of JSON for 40-50% bandwidth savings
+- **Octree Downsampling**: `OctreeDownsampler(voxel_size=0.5).downsample(points)` reduces point count
+- **Lazy Stats**: Access vehicle stats via `LazyVehicleStats(snapshot).speed_kmh` - computed only once
 
 ## Common Pitfalls
 
-1. **Forgetting `world.tick()`**: In sync mode, nothing happens until you tick
-2. **Wrong TM port**: Traffic manager port (8001) must differ from web server (8000) and match in `get_trafficmanager()` and `set_autopilot()`
-3. **Not checking `if world:`**: Cleanup runs even if connection fails
-4. **Blocking operations**: Keep update loops fast, avoid heavy computation per frame
-5. **Stale velocity data**: Always get snapshot AFTER `world.tick()` for fresh velocity (see "Getting Fresh Velocity Data")
-6. **Hybrid physics mode**: Never enable - causes zero velocity readings and vehicle teleportation
-7. **Thread isolation in FastAPI**: Must add project root to `sys.path` before imports in server modules
+1. **Hybrid Physics Issue**: Set `use_hybrid_physics=False` in config - hybrid mode causes zero velocity bugs
+2. **Traffic Manager Port**: Must differ from web server port (TM=8001, WebServer=8000)
+3. **Path Issues**: Server must add project root to `sys.path` for imports to work in threads:
+   ```python
+   project_root = Path(__file__).parent.parent.parent
+   sys.path.insert(0, str(project_root))
+   ```
+4. **WebSocket Event Loop**: Store event loop reference when server starts to enable cross-thread task scheduling
+5. **LiDAR Cleanup Race Condition**: ALWAYS signal server to stop streaming BEFORE collector.cleanup():
+   ```python
+   server_module.set_collector(None)  # Cancel streaming task
+   time.sleep(0.2)  # Allow task to cancel
+   collector.cleanup()  # Now safe to cleanup
+   ```
+   Prevents "No data" warnings from streaming loop trying to access cleaned-up collector
 
-## Key Files to Reference
+## Key Files for Reference
 
-- **Architecture patterns**: `src/utils/session.py` (context manager), `src/utils/builder.py` (builder), `src/utils/observers.py` (observer)
-- **V2V implementations**: `src/v2v/communicator.py` (basic), `src/v2v/network_enhanced.py` (BSM), `src/v2v/api.py` (REST API)
-- **Performance**: `src/utils/lazy.py` (lazy evaluation), `src/utils/octree.py` (downsampling), `src/utils/binary_protocol.py` (binary WebSocket)
-- **Visualization**: `src/visualization/lidar/api.py` (LiDAR API), `src/visualization/web/viewer.html` (3D viewer)
-- **Example scenarios**: `src/scenarios/v2v_complete_demo.py` (complete example), `src/scenarios/v2v_lidar_scenario.py` (LiDAR)
-- **Configuration**: `src/config.py` (centralized configs)
-- **Tests**: `tests/v2v/test_network.py` (unittest), `tests/test_reproducibility.py` (integration)
-- **Documentation**: `V2V_GUIDE.md` (V2V protocol), `README.md` (overview)
-
-## Scientific Use Cases
-
-This codebase supports:
-- **V2V protocol research**: SAE J2735 BSM and ETSI CAM implementations with 2 Hz updates
-- **Cooperative perception**: Vehicles share state information and sensor data
-- **Reproducible experiments**: Same seed → identical simulation (deterministic Traffic Manager)
-- **Multi-vehicle coordination**: State sharing, neighbor awareness, and threat assessment
-- **Real-time visualization**: Web-based 3D LiDAR viewer with semantic coloring
-
----
-
-**When creating new scenarios**: Start from `src/scenarios/v2v_scenario.py`, follow connect→setup→spawn→run→cleanup pattern, always use synchronous mode, always restore settings in finally block.
+- V2V Protocol: [src/v2v/messages.py](src/v2v/messages.py) (BSMCore, BSMPartII, threat assessment)
+- Network Manager: [src/v2v/network_enhanced.py](src/v2v/network_enhanced.py) (2 Hz enforcement, neighbor discovery)
+- Complete Example: [src/scenarios/v2v_complete_demo.py](src/scenarios/v2v_complete_demo.py) (demonstrates all patterns)
+- User Guides: [V2V_GUIDE.md](V2V_GUIDE.md), [V2V_IMPLEMENTATION.md](V2V_IMPLEMENTATION.md), [README.md](README.md)

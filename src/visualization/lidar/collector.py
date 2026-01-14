@@ -7,6 +7,7 @@ Collects and processes semantic LiDAR data from multiple vehicles.
 import numpy as np
 import carla
 import logging
+import threading
 from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,11 @@ class LiDARDataCollector:
         self.latest_data: Dict[int, Optional[np.ndarray]] = {}
         self.vehicle_transforms: Dict[int, carla.Transform] = {}
         self.actor_ids: Dict[int, int] = {}  # Map vehicle_id -> actor_id
+        
+        # Thread safety
+        self._lock = threading.RLock()
+        self._is_active = True  # Flag to indicate if collector is active
+        self._data_received_count = 0  # Track total data received
         
     def register_vehicle(self, vehicle_id: int, vehicle: carla.Actor):
         """Register a vehicle and attach semantic LiDAR sensor.
@@ -80,6 +86,10 @@ class LiDARDataCollector:
             vehicle_id: Vehicle that generated the data
             data: CARLA SemanticLidarMeasurement
         """
+        # Ignore data if collector is being cleaned up
+        if not self._is_active:
+            return
+            
         try:
             # Convert to numpy array: [x, y, z, cos_angle, object_tag, object_idx]
             points = np.frombuffer(data.raw_data, dtype=np.dtype([
@@ -91,11 +101,21 @@ class LiDARDataCollector:
             if self.downsample_factor > 1:
                 points = points[::self.downsample_factor]
             
-            # Get sensor transform directly from measurement (always available, even if vehicle destroyed)
-            # Data contains sensor transform at measurement time - no need to query vehicle
-            self.vehicle_transforms[vehicle_id] = data.transform
-            
-            self.latest_data[vehicle_id] = points
+            # Thread-safe update
+            with self._lock:
+                # Double-check active flag inside lock
+                if not self._is_active:
+                    return
+                    
+                # Get sensor transform directly from measurement (always available, even if vehicle destroyed)
+                # Data contains sensor transform at measurement time - no need to query vehicle
+                self.vehicle_transforms[vehicle_id] = data.transform
+                self.latest_data[vehicle_id] = points
+                self._data_received_count += 1
+                
+                # Debug logging every 100 frames
+                if self._data_received_count % 100 == 0:
+                    logger.debug(f"LiDAR data received: vehicle {vehicle_id}, total count: {self._data_received_count}, points: {len(points)}")
         except Exception as e:
             logger.error(f"Error processing LiDAR data for vehicle {vehicle_id}: {e}")
         
@@ -165,28 +185,38 @@ class LiDARDataCollector:
         Returns:
             Dictionary with point cloud data or None if no data available
         """
+        # Return None immediately if not active
+        if not self._is_active:
+            return None
+            
         all_points = []
         vehicle_ids = []
         ego_transform = None
         
-        for vehicle_id, points in self.latest_data.items():
-            if points is not None and len(points) > 0:
-                # Transform to world coordinates
-                world_points = self.transform_to_world_coords(vehicle_id, points)
-                all_points.append(world_points)
-                vehicle_ids.extend([vehicle_id] * len(world_points))
+        # Thread-safe data access
+        with self._lock:
+            # Double-check active inside lock
+            if not self._is_active:
+                return None
                 
-                # Get ego vehicle transform (vehicle_id=0)
-                if vehicle_id == 0 and vehicle_id in self.vehicle_transforms:
-                    transform = self.vehicle_transforms[vehicle_id]
-                    ego_transform = {
-                        'x': float(transform.location.x),
-                        'y': float(transform.location.y),
-                        'z': float(transform.location.z),
-                        'yaw': float(transform.rotation.yaw),
-                        'pitch': float(transform.rotation.pitch),
-                        'roll': float(transform.rotation.roll)
-                    }
+            for vehicle_id, points in self.latest_data.items():
+                if points is not None and len(points) > 0:
+                    # Transform to world coordinates
+                    world_points = self.transform_to_world_coords(vehicle_id, points)
+                    all_points.append(world_points)
+                    vehicle_ids.extend([vehicle_id] * len(world_points))
+                    
+                    # Get ego vehicle transform (vehicle_id=0)
+                    if vehicle_id == 0 and vehicle_id in self.vehicle_transforms:
+                        transform = self.vehicle_transforms[vehicle_id]
+                        ego_transform = {
+                            'x': float(transform.location.x),
+                            'y': float(transform.location.y),
+                            'z': float(transform.location.z),
+                            'yaw': float(transform.rotation.yaw),
+                            'pitch': float(transform.rotation.pitch),
+                            'roll': float(transform.rotation.roll)
+                        }
         
         if not all_points:
             return None
@@ -212,9 +242,14 @@ class LiDARDataCollector:
     
     def cleanup(self):
         """Cleanup sensors - MUST be called before destroying vehicles."""
-        logger.info(f"Cleaning up {len(self.lidar_sensors)} LiDAR sensors...")
+        logger.info(f"🔧 Starting LiDAR cleanup: {len(self.lidar_sensors)} sensors, {len(self.vehicles)} vehicles, data_received={self._data_received_count}")
         
-        # First, stop all sensors to prevent callbacks
+        # CRITICAL: Set inactive flag FIRST to stop callbacks from updating data
+        with self._lock:
+            self._is_active = False
+            logger.info("✓ Collector marked as inactive - callbacks will be ignored")
+        
+        # Stop all sensors to prevent new callbacks
         for vehicle_id, sensor in list(self.lidar_sensors.items()):
             try:
                 if sensor is not None:
@@ -236,10 +271,16 @@ class LiDARDataCollector:
             except Exception as e:
                 logger.warning(f"Error destroying sensor {vehicle_id}: {e}")
         
-        self.lidar_sensors.clear()
-        self.latest_data.clear()
-        self.vehicle_transforms.clear()
-        self.vehicles.clear()
-        self.actor_ids.clear()
+        # Clear all data structures
+        with self._lock:
+            self.lidar_sensors.clear()
+            self.latest_data.clear()
+            self.vehicle_transforms.clear()
+            self.vehicles.clear()
+            self.actor_ids.clear()
         
-        logger.info("✓ All LiDAR sensors cleaned up")
+        logger.info(f"✅ All LiDAR sensors cleaned up successfully (processed {self._data_received_count} frames)")
+    
+    def is_active(self) -> bool:
+        """Check if collector is active and accepting data."""
+        return self._is_active
