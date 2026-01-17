@@ -1,0 +1,36 @@
+# CARLA V2V Research Platform - Docker Compose
+#
+# Usage:
+#   docker-compose up -d        # Start in background
+#   docker-compose logs -f      # View logs
+#   docker-compose down         # Stop and remove
+#
+# Access the frontend at: http://localhost:8000
+
+services:
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: carla-v2v-frontend
+    ports:
+      - "8000:8000"
+    volumes:
+      # Persist logs and data outside container
+      - ./logs:/app/logs
+      - ./data:/app/data
+    environment:
+      - CARLA_HOST=192.168.1.101
+      - CARLA_PORT=2000
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+# Optional: Add a network for connecting to CARLA server
+networks:
+  default:
+    name: carla-v2v-network

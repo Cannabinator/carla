@@ -23,11 +23,17 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-# Support both direct execution and module import
+# LiDARDataCollector is optional - only needed when running simulations
+# This allows the frontend to start without CARLA installed (Docker mode)
+LiDARDataCollector = None
 try:
-    from .collector import LiDARDataCollector
+    try:
+        from .collector import LiDARDataCollector
+    except ImportError:
+        from collector import LiDARDataCollector
 except ImportError:
-    from collector import LiDARDataCollector
+    # CARLA not installed - frontend-only mode
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +43,8 @@ _run_simulation_headless = None
 app = FastAPI(title="V2V LiDAR Visualizer")
 
 # Global collector instance (set by scenario)
-_collector: Optional[LiDARDataCollector] = None
+# Type is Any since LiDARDataCollector may not be available without CARLA
+_collector: Optional[Any] = None
 _v2v_network: Optional[object] = None
 _streaming_task: Optional[asyncio.Task] = None
 _event_loop: Optional[asyncio.AbstractEventLoop] = None  # Store event loop reference
@@ -68,7 +75,7 @@ class SimulationConfig(BaseModel):
     console_output: bool = True
 
 
-def set_collector(collector: Optional[LiDARDataCollector]):
+def set_collector(collector: Optional[Any]):
     """Set the global LiDAR collector.
     
     The streaming task runs continuously and will automatically pick up
@@ -480,6 +487,14 @@ async def start_simulation(config: SimulationConfig):
     if _simulation_status["running"]:
         return {"error": "Simulation already running"}
     
+    # Check if CARLA is available
+    try:
+        import carla
+    except ImportError:
+        _simulation_status["status"] = "error"
+        _simulation_status["error"] = "CARLA Python client not installed. Install carla==0.9.16 to run simulations."
+        return {"error": "CARLA not available. This frontend is running in Docker/standalone mode. Install CARLA Python client to run simulations."}
+    
     # Reset stop flag
     _simulation_stop_flag = False
     
@@ -545,6 +560,27 @@ async def stop_simulation():
 async def get_simulation_status():
     """Get current simulation status."""
     return _simulation_status
+
+
+@app.get("/api/system/info")
+async def get_system_info():
+    """Get system information including CARLA availability."""
+    carla_available = False
+    carla_version = None
+    
+    try:
+        import carla
+        carla_available = True
+        carla_version = "0.9.16"  # CARLA doesn't expose version programmatically
+    except ImportError:
+        pass
+    
+    return {
+        "carla_available": carla_available,
+        "carla_version": carla_version,
+        "mode": "full" if carla_available else "frontend-only",
+        "message": "Ready to run simulations" if carla_available else "Frontend-only mode (CARLA not installed). Configure CARLA server IP to connect remotely."
+    }
 
 
 def update_simulation_status(frame: int, elapsed: float, v2v_msgs: int):

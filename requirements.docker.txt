@@ -1,0 +1,20 @@
+# Docker requirements for CARLA V2V Platform
+# Full installation including CARLA Python client
+
+# CARLA Python client - connects to remote CARLA server
+carla==0.9.16
+
+# Web server and real-time communication
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+websockets>=12.0
+pydantic>=2.0.0
+
+# Data processing (needed for LiDAR data handling)
+numpy>=1.24.0
+
+# Note: The following are NOT included (optional/heavy):
+# - open3d (heavy 3D visualization)
+# - opencv-python (image processing)
+# - selenium (testing only)
+# - matplotlib, pandas (analysis tools)

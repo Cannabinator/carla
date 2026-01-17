@@ -202,6 +202,7 @@
             <h1>🚗 V2V Simulation Control Panel</h1>
             <p class="info-text">Configure and control your CARLA V2V simulation from the browser</p>
             <div id="statusBadge" class="status-badge status-idle">IDLE</div>
+            <div id="modeIndicator" class="status-badge" style="margin-left: 10px; background: #9ca3af;">Checking...</div>
         </div>
 
         <div class="card">
@@ -440,6 +441,30 @@
         
         // Initial status check
         pollStatus();
+        
+        // Check system info (CARLA availability)
+        async function checkSystemInfo() {
+            try {
+                const response = await fetch('/api/system/info');
+                const info = await response.json();
+                
+                const modeIndicator = document.getElementById('modeIndicator');
+                if (modeIndicator) {
+                    if (info.carla_available) {
+                        modeIndicator.textContent = '🟢 CARLA Ready';
+                        modeIndicator.style.background = '#4ade80';
+                    } else {
+                        modeIndicator.textContent = '🔵 Frontend Only';
+                        modeIndicator.style.background = '#60a5fa';
+                        addLog('ℹ️ Running in frontend-only mode. CARLA client not installed locally.');
+                        addLog('   Configure CARLA server IP above and ensure the simulation runs on a machine with CARLA installed.');
+                    }
+                }
+            } catch (error) {
+                console.error('System info error:', error);
+            }
+        }
+        checkSystemInfo();
     </script>
 </body>
 </html>
