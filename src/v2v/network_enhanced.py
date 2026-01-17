@@ -179,6 +179,7 @@ class V2VNetworkEnhanced:
         
         return create_bsm_from_carla(
             vehicle, vehicle_id, msg_count,
+            snapshot=snapshot,  # Pass snapshot for fresh data
             prev_velocity=prev_speed,
             delta_time=delta_time
         )

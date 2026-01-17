@@ -43,12 +43,23 @@ class MockControl:
         self.gear = 1
 
 
+class MockWheelPhysicsControl:
+    def __init__(self):
+        self.max_steer_angle = 70.0  # Default max steering angle in degrees
+
+
+class MockPhysicsControl:
+    def __init__(self):
+        self.wheels = [MockWheelPhysicsControl() for _ in range(4)]
+
+
 class MockVehicle:
     def __init__(self, vid, x=0, y=0):
         self.id = vid
         self._transform = MockTransform(x, y, 0)
         self._velocity = MockVector(0, 0, 0)
         self._control = MockControl()
+        self._physics_control = MockPhysicsControl()
         self.bounding_box = type('obj', (object,), {
             'extent': MockVector(2.25, 0.9, 0.75)
         })()
@@ -67,6 +78,40 @@ class MockVehicle:
     
     def get_angular_velocity(self):
         return MockVector(0, 0, 0)
+    
+    def get_physics_control(self):
+        return self._physics_control
+
+
+class MockActorSnapshot:
+    """Mock for carla.ActorSnapshot"""
+    def __init__(self, vehicle):
+        self.vehicle = vehicle
+    
+    def get_velocity(self):
+        return self.vehicle.get_velocity()
+    
+    def get_angular_velocity(self):
+        return self.vehicle.get_angular_velocity()
+    
+    def get_acceleration(self):
+        return self.vehicle.get_acceleration()
+    
+    def get_transform(self):
+        return self.vehicle.get_transform()
+
+
+class MockWorldSnapshot:
+    """Mock for carla.WorldSnapshot"""
+    def __init__(self, vehicles):
+        self.vehicles = vehicles
+    
+    def find(self, vehicle_id):
+        """Find actor snapshot by ID"""
+        vehicle = next((v for v in self.vehicles if v.id == vehicle_id), None)
+        if vehicle:
+            return MockActorSnapshot(vehicle)
+        return None
 
 
 class MockWorld:
@@ -74,8 +119,7 @@ class MockWorld:
         self.vehicles = []
     
     def get_snapshot(self):
-        snapshot = type('obj', (object,), {'find': lambda vid: next((v for v in self.vehicles if v.id == vid), None)})()
-        return snapshot
+        return MockWorldSnapshot(self.vehicles)
     
     def add_vehicle(self, v):
         self.vehicles.append(v)

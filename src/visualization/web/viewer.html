@@ -642,8 +642,8 @@
         
         function togglePointSize() {
             // Cycle through sizes: 0.5 -> 1.0 -> 2.0 -> 0.5
-            if (pointSize === 0.5) pointSize = 1.0;
-            else if (pointSize === 1.0) pointSize = 2.0;
+            if (pointSize === 0.5) pointSize = 0.5;
+            else if (pointSize === 1.0) pointSize = 1.0;
             else pointSize = 0.5;
             
             pointCloud.material.size = pointSize;
