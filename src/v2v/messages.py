@@ -1,6 +1,22 @@
 """
 V2V Message Standards - BSM (Basic Safety Message) Implementation
-Based on SAE J2735 and ETSI ITS-G5 standards for V2V communication.
+
+This implementation is based on the SAE J2735 and ETSI ITS-G5 published standards
+for Vehicle-to-Vehicle (V2V) communication.
+
+Standards Reference:
+- SAE J2735 - Dedicated Short Range Communications (DSRC) Message Set Dictionary
+  https://www.sae.org/standards/content/j2735_202007/
+- ETSI EN 302 637-2 - Intelligent Transport Systems (ITS); Vehicular Communications;
+  Cooperative Awareness Messages (CAM)
+
+Note: SAE J2735 and ETSI ITS-G5 are published industry standards. This is an
+original implementation based on the public specification, not derived from
+any copyrighted source code.
+
+CARLA Integration:
+- Vehicle data extraction uses CARLA Simulator Python API
+  CARLA Simulator (MIT License) - https://carla.org/
 """
 
 from dataclasses import dataclass, field
@@ -210,14 +226,19 @@ def calculate_threat_level(ego_bsm: BSMCore, other_bsm: BSMCore) -> tuple:
 
 
 def create_bsm_from_carla(vehicle, vehicle_id: int, msg_count: int, 
-                          prev_velocity=None, delta_time=0.05) -> BSMCore:
+                          snapshot=None, prev_velocity=None, delta_time=0.05) -> BSMCore:
     """
     Create BSM message from CARLA vehicle actor.
+    
+    CRITICAL: Uses snapshot data for scientifically accurate measurements.
+    vehicle.get_velocity() returns CACHED data from previous tick, which is 
+    incorrect for synchronous simulation. Always use snapshot.find().get_velocity().
     
     Args:
         vehicle: CARLA vehicle actor
         vehicle_id: Unique vehicle identifier
         msg_count: Message counter
+        snapshot: WorldSnapshot for fresh data (REQUIRED for accuracy)
         prev_velocity: Previous velocity for accel calculation
         delta_time: Time since last update
     
@@ -225,7 +246,16 @@ def create_bsm_from_carla(vehicle, vehicle_id: int, msg_count: int,
         BSMCore instance
     """
     transform = vehicle.get_transform()
-    velocity = vehicle.get_velocity()
+    
+    # Get FRESH velocity from snapshot (not cached from previous tick)
+    if snapshot:
+        actor_snapshot = snapshot.find(vehicle.id)
+        velocity = actor_snapshot.get_velocity()
+        angular_velocity = actor_snapshot.get_angular_velocity()
+    else:
+        # Fallback to cached data (SCIENTIFICALLY INACCURATE)
+        velocity = vehicle.get_velocity()
+        angular_velocity = vehicle.get_angular_velocity()
     
     # Calculate speed
     speed_ms = math.sqrt(velocity.x**2 + velocity.y**2 + velocity.z**2)
@@ -238,6 +268,30 @@ def create_bsm_from_carla(vehicle, vehicle_id: int, msg_count: int,
     
     # Get vehicle control
     control = vehicle.get_control()
+    
+    # Calculate vehicle-specific steering angle
+    try:
+        physics_control = vehicle.get_physics_control()
+        max_steer_angle = physics_control.wheels[0].max_steer_angle
+        steering_angle = control.steer * max_steer_angle
+    except Exception:
+        # Fallback to generic approximation if physics control unavailable
+        steering_angle = control.steer * 70.0
+    
+    # Calculate lateral acceleration (simplified centripetal acceleration)
+    if abs(control.steer) > 0.01 and speed_ms > 0.1:
+        # Use wheelbase from vehicle dimensions
+        wheelbase = vehicle.bounding_box.extent.x * 2 * 0.6  # Approximate 60% of length
+        try:
+            turn_radius = wheelbase / abs(math.tan(math.radians(steering_angle)))
+            lateral_accel = (speed_ms ** 2) / turn_radius * math.copysign(1, control.steer)
+        except (ZeroDivisionError, ValueError):
+            lateral_accel = 0.0
+    else:
+        lateral_accel = 0.0
+    
+    # Get yaw rate from angular velocity (convert rad/s to deg/s)
+    yaw_rate = math.degrees(angular_velocity.z)
     
     # Determine brake status
     if control.brake > 0.5:
@@ -272,11 +326,11 @@ def create_bsm_from_carla(vehicle, vehicle_id: int, msg_count: int,
         position_accuracy=0.5,  # Assuming high accuracy in simulation
         speed=speed_ms,
         heading=transform.rotation.yaw % 360,
-        steering_angle=control.steer * 70,  # Approximate max steering angle
+        steering_angle=steering_angle,
         longitudinal_accel=long_accel,
-        lateral_accel=0.0,  # Would need more complex calculation
-        vertical_accel=0.0,
-        yaw_rate=0.0,  # Would need angular velocity
+        lateral_accel=lateral_accel,
+        vertical_accel=0.0,  # Road vehicles typically don't need vertical accel
+        yaw_rate=yaw_rate,
         vehicle_length=vehicle_length,
         vehicle_width=vehicle_width,
         vehicle_height=vehicle_height,

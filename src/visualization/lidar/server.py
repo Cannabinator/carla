@@ -58,6 +58,8 @@ _simulation_stop_flag = False
 
 class SimulationConfig(BaseModel):
     """Simulation configuration model."""
+    carla_host: str = "192.168.1.101"
+    carla_port: int = 2000
     duration: int = 120
     vehicles: int = 10
     v2v_range: int = 75
@@ -66,25 +68,22 @@ class SimulationConfig(BaseModel):
     console_output: bool = True
 
 
-def set_collector(collector: LiDARDataCollector):
-    """Set the global LiDAR collector and start streaming."""
-    global _collector, _streaming_task, _event_loop
-    _collector = collector
-    logger.info("LiDAR collector registered with server")
+def set_collector(collector: Optional[LiDARDataCollector]):
+    """Set the global LiDAR collector.
     
-    # If there are already WebSocket connections waiting, start streaming now!
-    if len(manager.active_connections) > 0 and (_streaming_task is None or _streaming_task.done()):
-        if _event_loop is not None:
-            # Schedule the task in the main event loop from worker thread
-            future = asyncio.run_coroutine_threadsafe(
-                stream_lidar_data(_collector, update_rate=0.1),
-                _event_loop
-            )
-            logger.info(f"LiDAR streaming task scheduled for {len(manager.active_connections)} waiting clients")
-        else:
-            logger.warning("Event loop not available - streaming will start on next WebSocket connection")
-    else:
-        logger.info("LiDAR streaming will start automatically when clients connect")
+    The streaming task runs continuously and will automatically pick up
+    the new collector reference.
+    """
+    global _collector
+    
+    if collector is None:
+        logger.info("🛑 Collector set to None - streaming will pause")
+        _collector = None
+        return
+    
+    _collector = collector
+    logger.info(f"✅ LiDAR collector registered: {len(collector.vehicles)} vehicles, active={collector.is_active()}")
+    logger.info(f"   WebSocket connections waiting: {len(manager.active_connections)}")
 
 
 def set_v2v_network(v2v_network):
@@ -122,13 +121,22 @@ class ConnectionManager:
             try:
                 await connection.send_text(message)
             except Exception as e:
-                logger.error(f"Error sending to client: {e}")
+                logger.debug(f"Error sending to client (will disconnect): {e}")
                 disconnected.append(connection)
         
         # Remove disconnected clients
         for conn in disconnected:
-            if conn in self.active_connections:
-                self.active_connections.remove(conn)
+            self.disconnect(conn)
+    
+    async def send_status(self, status: str, message: str = ""):
+        """Send status message to all clients."""
+        status_msg = json.dumps({
+            "type": "status",
+            "status": status,
+            "message": message,
+            "collector_ready": _collector is not None and _collector.is_active() if _collector else False
+        })
+        await self.broadcast(status_msg)
 
 
 manager = ConnectionManager()
@@ -257,88 +265,89 @@ async def startup_event():
     _event_loop = asyncio.get_running_loop()
     logger.info(f"Event loop stored: {id(_event_loop)}")
     
-    if _collector is not None:
-        _streaming_task = asyncio.create_task(stream_lidar_data(_collector, update_rate=0.1))
-        logger.info("Streaming task started in FastAPI event loop")
-    else:
-        logger.warning("No collector set - call set_collector() before starting server")
-
-
-@app.get("/")
-async def get_viewer():
-    """Serve the LiDAR viewer HTML page."""
-    html_path = Path(__file__).parent.parent / "web" / "viewer.html"
-    if html_path.exists():
-        return HTMLResponse(content=html_path.read_text())
-    else:
-        return HTMLResponse(content="""
-        <html>
-            <head><title>V2V LiDAR Viewer</title></head>
-            <body>
-                <h1>V2V LiDAR Viewer</h1>
-                <p>HTML viewer not found at {}</p>
-                <p>Please ensure viewer.html exists in src/visualization/web/</p>
-            </body>
-        </html>
-        """.format(html_path))
+    # Always start the streaming task - it will wait for collector and connections
+    _streaming_task = asyncio.create_task(stream_lidar_data(update_rate=0.1))
+    logger.info("Streaming task started in FastAPI event loop (will wait for collector)")
 
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for streaming LiDAR data."""
-    global _streaming_task
-    
     await manager.connect(websocket)
-    
-    # Start streaming task if collector is now available and task isn't running
-    if _collector is not None and (_streaming_task is None or _streaming_task.done()):
-        _streaming_task = asyncio.create_task(stream_lidar_data(_collector, update_rate=0.1))
-        logger.info("LiDAR streaming task started on WebSocket connection")
+    logger.info(f"🔌 WebSocket connected - collector={'available' if _collector else 'None'}, active connections: {len(manager.active_connections)}")
     
     try:
         while True:
             # Keep connection alive and receive pings
-            await websocket.receive_text()
+            data = await websocket.receive_text()
+            # Echo back for ping/pong
+            if data == "ping":
+                await websocket.send_text("pong")
     except WebSocketDisconnect:
         manager.disconnect(websocket)
+        logger.info(f"🔌 WebSocket disconnected - remaining connections: {len(manager.active_connections)}")
     except Exception as e:
         logger.error(f"WebSocket error: {e}")
         manager.disconnect(websocket)
-        logger.error(f"WebSocket error: {e}")
-        manager.disconnect(websocket)
 
 
-async def stream_lidar_data(collector: Optional[LiDARDataCollector] = None, update_rate: float = 0.1):
+async def stream_lidar_data(update_rate: float = 0.1):
     """Background task to stream LiDAR data to clients.
     
+    This task runs continuously and uses the global _collector.
+    It waits for both a collector and WebSocket connections before streaming.
+    Sends status updates to clients when not streaming data.
+    
     Args:
-        collector: LiDARDataCollector instance (uses global if None)
         update_rate: Update interval in seconds (10 Hz default)
     """
-    if collector is None:
-        collector = _collector
-    
-    if collector is None:
-        logger.error("No collector available for streaming")
-        return
-    
-    logger.info(f"🟢 Streaming loop started - collector has {len(collector.vehicles)} vehicles registered")
+    logger.info(f"🟢 Streaming loop started - waiting for collector and connections")
     frame_count = 0
+    no_data_count = 0
+    success_count = 0
+    last_status_sent = 0
+    
     while True:
         try:
-            if len(manager.active_connections) > 0:
-                frame_count += 1
-                data = collector.get_combined_pointcloud()
-                if data and data.get('num_points', 0) > 0:
-                    if frame_count % 50 == 0:  # Log every 50 frames to reduce spam
-                        logger.info(f"📡 Broadcasting {data['num_points']} points to {len(manager.active_connections)} clients")
-                    await manager.broadcast(json.dumps(data))
-                else:
-                    if frame_count % 10 == 0:  # Log every 10 failed attempts
-                        logger.warning(f"❌ No data (frame {frame_count}): collector.vehicles={list(collector.vehicles.keys())}, collector.latest_data={list(collector.latest_data.keys())}")
+            frame_count += 1
+            current_collector = _collector  # Get current global reference
+            
+            # Check for active connections first
+            if len(manager.active_connections) == 0:
+                await asyncio.sleep(update_rate)
+                continue
+            
+            # Send status to clients when collector not ready (every 2 seconds)
+            if current_collector is None or not current_collector.is_active():
+                if frame_count - last_status_sent > 20:  # Every 2 seconds at 10Hz
+                    await manager.send_status("waiting", "Waiting for simulation to start...")
+                    last_status_sent = frame_count
+                await asyncio.sleep(update_rate)
+                continue
+            
+            # We have collector and connections - stream data
+            data = current_collector.get_combined_pointcloud()
+            if data and data.get('num_points', 0) > 0:
+                # Add type field so client knows this is point data
+                data['type'] = 'pointcloud'
+                success_count += 1
+                if success_count == 1:
+                    logger.info(f"📡 First data streamed! {data['num_points']} points to {len(manager.active_connections)} clients")
+                    await manager.send_status("streaming", "LiDAR data streaming...")
+                elif success_count % 100 == 0:  # Log every 100 successful frames
+                    logger.info(f"📡 Streaming: {success_count} frames sent, {data['num_points']} points, {len(manager.active_connections)} clients")
+                await manager.broadcast(json.dumps(data))
+                no_data_count = 0  # Reset on success
+            else:
+                no_data_count += 1
+                if no_data_count == 1:
+                    vehicles = list(current_collector.vehicles.keys()) if hasattr(current_collector, 'vehicles') else 'N/A'
+                    logger.warning(f"⚠️  No data: vehicles={vehicles}, active={current_collector.is_active()}")
+                    await manager.send_status("waiting_data", "Collector ready, waiting for LiDAR data...")
+                    
             await asyncio.sleep(update_rate)
         except asyncio.CancelledError:
-            logger.info("Streaming task cancelled")
+            logger.info(f"Streaming task cancelled - streamed {success_count} frames total")
             break
         except Exception as e:
             logger.error(f"Error streaming data: {e}", exc_info=True)
@@ -493,6 +502,8 @@ async def start_simulation(config: SimulationConfig):
             import sys
             server_module = sys.modules[__name__]
             run_simulation_headless(
+                carla_host=config.carla_host,
+                carla_port=config.carla_port,
                 duration=config.duration,
                 vehicles=config.vehicles,
                 v2v_range=config.v2v_range,

@@ -16,7 +16,7 @@ from src.v2v import V2VNetworkEnhanced, create_v2v_api, BSMCore, VehicleType, Br
 from src.v2v.api import V2VAPI
 
 # Import mock classes from test_v2v_basic
-from test_v2v_basic import MockVehicle, MockWorld
+from .test_v2v_basic import MockVehicle, MockWorld, MockActorSnapshot, MockWorldSnapshot
 
 
 class TestV2VAPI(unittest.TestCase):

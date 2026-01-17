@@ -456,6 +456,22 @@ def run_complete_v2v_demo(config: ScenarioConfig, status_callback=None, server_m
     finally:
         # Stop LiDAR collector but don't stop the server (it's shared)
         if lidar_api:
+            # Signal server to stop streaming BEFORE cleanup
+            if server_module is not None:
+                logger.info("Signaling server to stop streaming...")
+                server_module.set_collector(None)  # Cancel streaming task
+            else:
+                try:
+                    from src.visualization.lidar import server as lidar_server
+                    logger.info("Signaling server to stop streaming...")
+                    lidar_server.set_collector(None)  # Cancel streaming task
+                except ImportError:
+                    pass
+            
+            # Small delay to allow streaming task to cancel
+            time.sleep(0.2)
+            
+            # Now cleanup collector
             lidar_api.collector.cleanup()
             print("✓ LiDAR streaming stopped")
         
@@ -571,6 +587,8 @@ if __name__ == '__main__':
 
 
 def run_simulation_headless(
+    carla_host: str = "192.168.1.101",
+    carla_port: int = 2000,
     duration: int = 120,
     vehicles: int = 10,
     v2v_range: float = 75.0,
@@ -595,7 +613,7 @@ def run_simulation_headless(
     """
     # Build configuration
     config: ScenarioConfig = (ScenarioBuilder()
-        .with_carla_server('192.168.1.101', 2000)
+        .with_carla_server(carla_host, carla_port)
         .with_duration(duration)
         .with_vehicles(vehicles)
         .with_seed(42)

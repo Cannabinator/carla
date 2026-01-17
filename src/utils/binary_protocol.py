@@ -1,6 +1,13 @@
 """
 Binary WebSocket protocol for efficient LiDAR data transfer.
 Phase 3: Performance Optimization - Reduce bandwidth by 40%.
+
+This is an original implementation using Python's standard library struct module
+for binary serialization and zlib for compression. No third-party code was used.
+
+Dependencies:
+- NumPy (BSD-3-Clause) - https://numpy.org/
+- Python standard library: struct, zlib
 """
 
 import struct

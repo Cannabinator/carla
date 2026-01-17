@@ -1,4 +1,16 @@
 <!DOCTYPE html>
+<!--
+    V2V LiDAR Visualizer
+    
+    Third-Party Libraries:
+    - Three.js (MIT License) - https://threejs.org/
+      Copyright (c) 2010-2024 Three.js Authors
+      License: https://github.com/mrdoob/three.js/blob/dev/LICENSE
+    
+    CARLA Resources:
+    - Semantic segmentation color scheme based on CARLA documentation
+      CARLA Simulator (MIT License) - https://carla.org/
+-->
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -389,15 +401,30 @@
             ws.onopen = () => {
                 console.log('WebSocket connected');
                 document.getElementById('status-indicator').className = 'status-indicator status-connected';
-                document.getElementById('loading').style.display = 'none';
+                // Show "waiting" status instead of hiding - we're connected but may not have data
+                const loadingEl = document.getElementById('loading');
+                loadingEl.textContent = 'Connected - Waiting for simulation...';
+                loadingEl.style.color = '#4CAF50';
             };
             
             ws.onmessage = (event) => {
                 try {
                     const data = JSON.parse(event.data);
-                    updatePointCloud(data);
-                    updateStats(data);
-                    lastDataTime = Date.now();
+                    
+                    // Handle status messages from server
+                    if (data.type === 'status') {
+                        handleStatusMessage(data);
+                        return;
+                    }
+                    
+                    // Handle point cloud data
+                    if (data.type === 'pointcloud' || data.points) {
+                        // Hide loading message once we get real data
+                        document.getElementById('loading').style.display = 'none';
+                        updatePointCloud(data);
+                        updateStats(data);
+                        lastDataTime = Date.now();
+                    }
                 } catch (e) {
                     console.error('Error parsing WebSocket message:', e);
                 }
@@ -413,10 +440,34 @@
                 document.getElementById('status-indicator').className = 'status-indicator status-disconnected';
                 document.getElementById('loading').style.display = 'block';
                 document.getElementById('loading').textContent = 'Reconnecting...';
+                document.getElementById('loading').style.color = '#f44336';
                 
                 // Attempt to reconnect after 2 seconds
                 setTimeout(connectWebSocket, 2000);
             };
+        }
+        
+        function handleStatusMessage(data) {
+            const loadingEl = document.getElementById('loading');
+            loadingEl.style.display = 'block';
+            
+            switch (data.status) {
+                case 'waiting':
+                    loadingEl.textContent = data.message || 'Waiting for simulation...';
+                    loadingEl.style.color = '#FFA500';  // Orange for waiting
+                    break;
+                case 'waiting_data':
+                    loadingEl.textContent = data.message || 'Collector ready, waiting for data...';
+                    loadingEl.style.color = '#90EE90';  // Light green - almost there
+                    break;
+                case 'streaming':
+                    loadingEl.style.display = 'none';  // Hide when streaming
+                    break;
+                default:
+                    loadingEl.textContent = data.message || 'Status: ' + data.status;
+                    loadingEl.style.color = '#4CAF50';
+            }
+            console.log('Server status:', data.status, data.message);
         }
         
         function updatePointCloud(data) {
@@ -534,14 +585,29 @@
         }
         
         function setupKeyboardControls(moveState) {
-            orbitControls.target.set(0, 0, 0);
-            orbitControls.update();
+            // Keyboard controls for free-fly mode
+            document.addEventListener('keydown', (event) => {
+                switch(event.code) {
+                    case 'KeyW': moveState.forward = true; break;
+                    case 'KeyS': moveState.backward = true; break;
+                    case 'KeyA': moveState.left = true; break;
+                    case 'KeyD': moveState.right = true; break;
+                    case 'Space': moveState.up = true; event.preventDefault(); break;
+                    case 'ShiftLeft': moveState.down = true; break;
+                    case 'Escape': exitFreeFly(); break;
+                }
+            });
             
-            // Exit any special modes
-            followMode = false;
-            freeFlyMode = false;
-            orbitControls.enabled = true;
-            updateControlButtons();
+            document.addEventListener('keyup', (event) => {
+                switch(event.code) {
+                    case 'KeyW': moveState.forward = false; break;
+                    case 'KeyS': moveState.backward = false; break;
+                    case 'KeyA': moveState.left = false; break;
+                    case 'KeyD': moveState.right = false; break;
+                    case 'Space': moveState.up = false; break;
+                    case 'ShiftLeft': moveState.down = false; break;
+                }
+            });
         }
         
         function toggleFollowMode() {
@@ -587,23 +653,13 @@
         }
         
         function togglePointSize() {
-            // Cycle through sizes: 0.2 -> 0.5 -> 1.0 -> 0.2
-            if (pointSize < 0.3) pointSize = 0.5;
-            else if (pointSize < 0.7) pointSize = 1.0;
-            else pointSize = 0.2;
+            // Cycle through sizes: 0.5 -> 1.0 -> 2.0 -> 0.5
+            if (pointSize === 0.5) pointSize = 0.5;
+            else if (pointSize === 1.0) pointSize = 1.0;
+            else pointSize = 0.5;
             
             pointCloud.material.size = pointSize;
-            document.getElementById('size-btn').textContent = `Point Size: ${pointSize.toFixed(1)}`
-            document.addEventListener('keyup', (event) => {
-                switch(event.code) {
-                    case 'KeyW': moveState.forward = false; break;
-                    case 'KeyS': moveState.backward = false; break;
-                    case 'KeyA': moveState.left = false; break;
-                    case 'KeyD': moveState.right = false; break;
-                    case 'Space': moveState.up = false; break;
-                    case 'ShiftLeft': moveState.down = false; break;
-                }
-            });
+            document.getElementById('size-btn').textContent = `Point Size: ${pointSize.toFixed(1)}`;
         }
         
         function setupPointerLock(controls, moveState) {
@@ -656,20 +712,10 @@
         
         function resetCamera() {
             camera.position.set(-25, 0, 20);
-            controls.target.set(0, 0, 0);
-            controls.update();
-        }
-        
-        function toggleFollowMode() {
-            followMode = !followMode;
-            const btn = document.getElementById('follow-btn');
-            btn.textContent = followMode ? 'Disable Follow' : 'Enable Follow';
-            btn.style.backgroundColor = followMode ? '#f44336' : '#4CAF50';
-        }
-        
-        function togglePointSize() {
-            pointSize = pointSize === 0.1 ? 0.3 : 0.1;
-            pointCloud.material.size = pointSize;
+            if (orbitControls) {
+                orbitControls.target.set(0, 0, 0);
+                orbitControls.update();
+            }
         }
         
         function toggleGrid() {

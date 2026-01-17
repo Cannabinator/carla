@@ -11,7 +11,7 @@ from pathlib import Path
 import csv
 
 from .session import VehicleState
-from ..v2v import V2VNetwork, V2VNetworkEnhanced
+from ..v2v import V2VNetworkEnhanced
 from ..config import DEFAULT_VIZ_CONFIG
 
 
@@ -53,14 +53,6 @@ class ConsoleObserver(ScenarioObserver):
         total_vehicles = v2v_data.get('total_vehicles', 0)
         lidar_points = v2v_data.get('lidar_points', 0)
         
-        print(f"\n{'='*85}")
-        print(f"🚗 LEADING VEHICLE - Frame {state.frame:4d} | Speed: {state.speed_kmh:.1f} km/h")
-        print(f"{'='*85}")
-        print(f"📍 Position:      X={state.position[0]:9.2f}m  Y={state.position[1]:9.2f}m  Z={state.position[2]:8.2f}m")
-        print(f"🏃 Velocity:      Vx={state.velocity[0]:8.3f}  Vy={state.velocity[1]:8.3f}  Vz={state.velocity[2]:8.3f} m/s")
-        print(f"⚡ Speed:         {state.speed_kmh:7.2f} km/h ({state.speed_ms:6.3f} m/s)")
-        print(f"🧭 Orientation:   Yaw={state.orientation[0]:7.2f}°  Pitch={state.orientation[1]:6.2f}°  Roll={state.orientation[2]:6.2f}°")
-        
         if state.control:
             print(f"🎮 Control:       Throttle={state.control.throttle:.3f}  Brake={state.control.brake:.3f}  Steer={state.control.steer:.3f}")
         
@@ -99,12 +91,12 @@ class ConsoleObserver(ScenarioObserver):
 class CARLADebugObserver(ScenarioObserver):
     """Draw debug visualizations in CARLA world."""
     
-    def __init__(self, world: carla.World, v2v_network: V2VNetwork, 
+    def __init__(self, world: carla.World, v2v_network: V2VNetworkEnhanced, 
                  ego_id: int = 0, update_interval_frames: int = 5):
         """
         Args:
             world: CARLA world instance
-            v2v_network: V2V network to visualize
+            v2v_network: V2VNetworkEnhanced instance to visualize
             ego_id: Ego vehicle ID in V2V network
             update_interval_frames: How often to redraw (avoid overhead)
         """
@@ -125,21 +117,11 @@ class CARLADebugObserver(ScenarioObserver):
         """Draw V2V range and connections."""
         import numpy as np
         
-        # Get ego BSM - supports both old V2VNetwork and new V2VNetworkEnhanced
-        if hasattr(self.v2v, 'get_bsm'):
-            # Enhanced V2V network
-            ego_bsm = self.v2v.get_bsm(self.ego_id)
-            if not ego_bsm:
-                return
-            ego_loc = carla.Location(ego_bsm.latitude, ego_bsm.longitude, ego_bsm.elevation)
-        elif hasattr(self.v2v, 'get_state'):
-            # Old V2V network
-            ego_state = self.v2v.get_state(self.ego_id)
-            if not ego_state:
-                return
-            ego_loc = carla.Location(*ego_state.location)
-        else:
+        # Get ego BSM from V2VNetworkEnhanced
+        ego_bsm = self.v2v.get_bsm(self.ego_id)
+        if not ego_bsm:
             return
+        ego_loc = carla.Location(ego_bsm.latitude, ego_bsm.longitude, ego_bsm.elevation)
         
         debug = self.world.debug
         frame_duration = 0.25  # Slightly longer than update interval
@@ -167,15 +149,8 @@ class CARLADebugObserver(ScenarioObserver):
         # Draw connection lines
         neighbors = self.v2v.get_neighbors(self.ego_id)
         for neighbor in neighbors:
-            # Support both BSMCore (enhanced) and V2VState (old) formats
-            if hasattr(neighbor, 'latitude'):
-                # BSMCore from enhanced network
-                neighbor_loc = carla.Location(neighbor.latitude, neighbor.longitude, neighbor.elevation)
-            elif hasattr(neighbor, 'location'):
-                # V2VState from old network
-                neighbor_loc = carla.Location(*neighbor.location)
-            else:
-                continue
+            # BSMCore from V2VNetworkEnhanced
+            neighbor_loc = carla.Location(neighbor.latitude, neighbor.longitude, neighbor.elevation)
                 
             debug.draw_line(
                 ego_loc + carla.Location(z=self.config.connection_line_z_offset),
