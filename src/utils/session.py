@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 """
 CARLA session management with context managers for guaranteed cleanup.
+
+This module provides the CARLASession context manager for safe resource
+management of CARLA simulator connections and actors.
+
+CARLA Integration:
+- Uses CARLA Simulator Python API (carla==0.9.16)
+  CARLA Simulator (MIT License) - https://carla.org/
 """
 
 import carla

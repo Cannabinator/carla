@@ -587,6 +587,8 @@ if __name__ == '__main__':
 
 
 def run_simulation_headless(
+    carla_host: str = "192.168.1.101",
+    carla_port: int = 2000,
     duration: int = 120,
     vehicles: int = 10,
     v2v_range: float = 75.0,
@@ -611,7 +613,7 @@ def run_simulation_headless(
     """
     # Build configuration
     config: ScenarioConfig = (ScenarioBuilder()
-        .with_carla_server('192.168.1.101', 2000)
+        .with_carla_server(carla_host, carla_port)
         .with_duration(duration)
         .with_vehicles(vehicles)
         .with_seed(42)

@@ -53,14 +53,6 @@ class ConsoleObserver(ScenarioObserver):
         total_vehicles = v2v_data.get('total_vehicles', 0)
         lidar_points = v2v_data.get('lidar_points', 0)
         
-        print(f"\n{'='*85}")
-        print(f"🚗 LEADING VEHICLE - Frame {state.frame:4d} | Speed: {state.speed_kmh:.1f} km/h")
-        print(f"{'='*85}")
-        print(f"📍 Position:      X={state.position[0]:9.2f}m  Y={state.position[1]:9.2f}m  Z={state.position[2]:8.2f}m")
-        print(f"🏃 Velocity:      Vx={state.velocity[0]:8.3f}  Vy={state.velocity[1]:8.3f}  Vz={state.velocity[2]:8.3f} m/s")
-        print(f"⚡ Speed:         {state.speed_kmh:7.2f} km/h ({state.speed_ms:6.3f} m/s)")
-        print(f"🧭 Orientation:   Yaw={state.orientation[0]:7.2f}°  Pitch={state.orientation[1]:6.2f}°  Roll={state.orientation[2]:6.2f}°")
-        
         if state.control:
             print(f"🎮 Control:       Throttle={state.control.throttle:.3f}  Brake={state.control.brake:.3f}  Steer={state.control.steer:.3f}")
         

@@ -1,6 +1,12 @@
 """
 Octree-based point cloud downsampling.
 Phase 3: Performance Optimization - Reduce points by 50-70% while preserving structure.
+
+This is an original implementation using standard voxel-based spatial indexing techniques.
+No third-party code was used. Similar approaches exist in Open3D and PCL libraries.
+
+Dependencies:
+- NumPy (BSD-3-Clause) - https://numpy.org/
 """
 
 import numpy as np

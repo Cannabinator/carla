@@ -1,6 +1,22 @@
 """
 V2V Message Standards - BSM (Basic Safety Message) Implementation
-Based on SAE J2735 and ETSI ITS-G5 standards for V2V communication.
+
+This implementation is based on the SAE J2735 and ETSI ITS-G5 published standards
+for Vehicle-to-Vehicle (V2V) communication.
+
+Standards Reference:
+- SAE J2735 - Dedicated Short Range Communications (DSRC) Message Set Dictionary
+  https://www.sae.org/standards/content/j2735_202007/
+- ETSI EN 302 637-2 - Intelligent Transport Systems (ITS); Vehicular Communications;
+  Cooperative Awareness Messages (CAM)
+
+Note: SAE J2735 and ETSI ITS-G5 are published industry standards. This is an
+original implementation based on the public specification, not derived from
+any copyrighted source code.
+
+CARLA Integration:
+- Vehicle data extraction uses CARLA Simulator Python API
+  CARLA Simulator (MIT License) - https://carla.org/
 """
 
 from dataclasses import dataclass, field

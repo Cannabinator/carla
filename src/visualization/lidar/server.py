@@ -58,6 +58,8 @@ _simulation_stop_flag = False
 
 class SimulationConfig(BaseModel):
     """Simulation configuration model."""
+    carla_host: str = "192.168.1.101"
+    carla_port: int = 2000
     duration: int = 120
     vehicles: int = 10
     v2v_range: int = 75
@@ -500,6 +502,8 @@ async def start_simulation(config: SimulationConfig):
             import sys
             server_module = sys.modules[__name__]
             run_simulation_headless(
+                carla_host=config.carla_host,
+                carla_port=config.carla_port,
                 duration=config.duration,
                 vehicles=config.vehicles,
                 v2v_range=config.v2v_range,

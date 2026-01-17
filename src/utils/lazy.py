@@ -1,6 +1,18 @@
 """
 Lazy evaluation for expensive computations.
 Phase 3: Performance Optimization - Only compute when needed.
+
+This module implements standard Python design patterns:
+- LazyProperty: Standard descriptor pattern for deferred computation
+- memoize: Standard caching decorator pattern
+- LazyVehicleStats: Custom lazy wrapper for CARLA actor snapshots
+
+These are common Python patterns documented in official Python documentation.
+No third-party code was used.
+
+CARLA Integration:
+- LazyVehicleStats uses CARLA Simulator Python API
+  CARLA Simulator (MIT License) - https://carla.org/
 """
 
 from typing import Any, Callable, Optional, TYPE_CHECKING
