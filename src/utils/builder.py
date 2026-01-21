@@ -55,6 +55,13 @@ class ScenarioConfig:
     csv_logging: bool = False
     csv_output_path: Optional[str] = None
     compact_logging: bool = True
+    v2v_message_logging: bool = False
+    v2v_log_output_path: Optional[str] = None
+    
+    # Spectator Camera
+    spectator_follow: bool = False
+    spectator_height: float = 50.0
+    spectator_pitch: float = -90.0
     
     # Display
     warmup_frames: int = 100
@@ -172,6 +179,31 @@ class ScenarioBuilder:
     def with_compact_logging(self, enabled: bool = True):
         """Enable compact logger output."""
         self._config.compact_logging = enabled
+        return self
+    
+    def with_v2v_message_logging(self, enabled: bool = True, output_path: Optional[str] = None):
+        """
+        Enable detailed V2V message logging.
+        
+        Creates a separate CSV file tracking all V2V BSM messages exchanged
+        between vehicles, including sender/receiver info, distances, and threat levels.
+        """
+        self._config.v2v_message_logging = enabled
+        self._config.v2v_log_output_path = output_path
+        return self
+    
+    def with_spectator_follow(self, enabled: bool = True, height: float = 50.0, pitch: float = -90.0):
+        """
+        Enable bird's-eye view spectator camera following the ego vehicle.
+        
+        Args:
+            enabled: Whether to enable spectator following
+            height: Camera height above vehicle (meters)
+            pitch: Camera pitch angle (degrees, -90 = straight down, -45 = 45° angle)
+        """
+        self._config.spectator_follow = enabled
+        self._config.spectator_height = height
+        self._config.spectator_pitch = pitch
         return self
     
     # Build

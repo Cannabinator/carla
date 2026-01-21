@@ -19,7 +19,9 @@ from .observers import (
     ConsoleObserver,
     CARLADebugObserver,
     CSVDataLogger,
-    CompactLogObserver
+    CompactLogObserver,
+    SpectatorFollowObserver,
+    V2VMessageLogger
 )
 from .builder import (
     ScenarioConfig,
@@ -60,6 +62,8 @@ __all__ = [
     'CARLADebugObserver',
     'CSVDataLogger',
     'CompactLogObserver',
+    'SpectatorFollowObserver',
+    'V2VMessageLogger',
     'ScenarioConfig',
     'ScenarioBuilder',
     'quick_scenario',

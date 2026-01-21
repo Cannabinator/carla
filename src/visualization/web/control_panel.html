@@ -268,6 +268,39 @@
         </div>
 
         <div class="card">
+            <h2>📡 V2V & Camera Settings</h2>
+            
+            <div class="form-group checkbox-group">
+                <input type="checkbox" id="v2vLogging">
+                <label for="v2vLogging">Enable V2V Message Logging (detailed BSM exchange CSV)</label>
+            </div>
+            
+            <div class="form-group checkbox-group">
+                <input type="checkbox" id="spectatorFollow" checked>
+                <label for="spectatorFollow">Bird's-Eye View Camera (follows ego vehicle)</label>
+            </div>
+            
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="spectatorHeight">Camera Height (meters)</label>
+                    <input type="number" id="spectatorHeight" value="50" min="10" max="200">
+                    <p class="info-text">Height above ego vehicle</p>
+                </div>
+                
+                <div class="form-group">
+                    <label for="spectatorPitch">Camera Pitch (degrees)</label>
+                    <select id="spectatorPitch">
+                        <option value="-90" selected>Straight Down (-90°)</option>
+                        <option value="-75">Angled View (-75°)</option>
+                        <option value="-60">Chase View (-60°)</option>
+                        <option value="-45">Isometric (-45°)</option>
+                    </select>
+                    <p class="info-text">-90° = top-down view</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
             <h2>🎮 Simulation Control</h2>
             <button class="btn btn-primary" id="startBtn" onclick="startSimulation()">
                 ▶️ Start Simulation
@@ -338,11 +371,21 @@
                 v2v_range: parseInt(document.getElementById('v2vRange').value),
                 lidar_quality: document.getElementById('lidarQuality').value,
                 csv_logging: document.getElementById('csvLogging').checked,
-                console_output: document.getElementById('consoleOutput').checked
+                console_output: document.getElementById('consoleOutput').checked,
+                v2v_message_logging: document.getElementById('v2vLogging').checked,
+                spectator_follow: document.getElementById('spectatorFollow').checked,
+                spectator_height: parseFloat(document.getElementById('spectatorHeight').value),
+                spectator_pitch: parseFloat(document.getElementById('spectatorPitch').value)
             };
             
             addLog('Starting simulation with config: ' + JSON.stringify(config, null, 2));
             addLog('Connecting to CARLA at ' + config.carla_host + ':' + config.carla_port);
+            if (config.v2v_message_logging) {
+                addLog('📡 V2V message logging ENABLED - will log all BSM exchanges');
+            }
+            if (config.spectator_follow) {
+                addLog(`🎥 Bird\'s-eye camera ENABLED - height: ${config.spectator_height}m, pitch: ${config.spectator_pitch}°`);
+            }
             updateStatus('statusBadge', 'STARTING...', 'idle');
             
             document.getElementById('startBtn').disabled = true;

@@ -7,11 +7,12 @@ Production-ready V2V (Vehicle-to-Vehicle) communication and real-time LiDAR visu
 **Design Patterns in Use:**
 - **Context Manager**: `CARLASession` ([src/utils/session.py](src/utils/session.py)) - guarantees cleanup of CARLA actors/settings even on exceptions
 - **Builder**: `ScenarioBuilder` ([src/utils/builder.py](src/utils/builder.py)) - fluent API for spawning vehicles and sensors
-- **Observer**: Multiple observers ([src/utils/observers.py](src/utils/observers.py)) - ConsoleObserver, CSVDataLogger, CompactLogObserver for different output formats
+- **Observer**: Multiple observers ([src/utils/observers.py](src/utils/observers.py)) - ConsoleObserver, CSVDataLogger, SpectatorFollowObserver, V2VMessageLogger for different output formats
 - **Lazy Evaluation**: `LazyVehicleStats` ([src/utils/lazy.py](src/utils/lazy.py)) - 10-20% CPU savings by computing only when accessed
 
 **Core Components:**
 - **V2V Network** ([src/v2v/](src/v2v/)): SAE J2735 BSM (Basic Safety Message) protocol implementation with 2 Hz update rate, neighbor discovery, and threat assessment
+- **V2V REST API** ([src/v2v/api.py](src/v2v/api.py)): FastAPI endpoints for programmatic access to BSM data, neighbors, and network stats
 - **LiDAR Visualization** ([src/visualization/lidar/](src/visualization/lidar/)): FastAPI WebSocket server streaming semantic LiDAR to Three.js web viewer
 - **Binary Protocol** ([src/utils/binary_protocol.py](src/utils/binary_protocol.py)): 73% bandwidth reduction vs JSON for point cloud streaming
 - **Octree Downsampling** ([src/utils/octree.py](src/utils/octree.py)): 50-70% point reduction while preserving structure
@@ -29,6 +30,15 @@ python src/scenarios/v2v_complete_demo.py --carla-host 192.168.1.110 --duration 
 # Web viewer: http://localhost:8000
 ```
 
+### Docker Deployment (recommended)
+```bash
+docker-compose build    # Build container
+docker-compose up -d    # Start - frontend at http://localhost:8000
+docker-compose logs -f  # View logs
+docker-compose down     # Stop and remove
+```
+Note: Docker mode runs frontend-only (no CARLA client). CARLA server must run separately on Windows/Linux host.
+
 ### Testing Strategy
 ```bash
 # Unit tests (no CARLA needed) - run these FIRST
@@ -38,6 +48,12 @@ python -m pytest tests/v2v/ -v
 python -m pytest tests/test_v2v_lidar.py -v
 python tests/test_frontend_visual.py --run  # Frontend tests with 20 automated checks
 ```
+
+### Data Output Locations
+- **CSV logs**: `logs/scenario_data_YYYYMMDD_HHMMSS.csv` - per-frame vehicle state and V2V data
+- **V2V message logs**: `logs/v2v_messages_YYYYMMDD_HHMMSS.csv` - detailed V2V BSM exchanges between vehicles
+- **V2V data**: `data/v2v/` - serialized V2V message archives
+- **Log files**: `logs/*.log` - scenario execution logs
 
 ### CARLA Connection Pattern
 **ALWAYS use** `CARLASession` context manager to prevent actor leaks:
@@ -122,16 +138,17 @@ for observer in observers:
    collector.cleanup()  # Now safe to cleanup
    ```
    Prevents "No data" warnings from streaming loop trying to access cleaned-up collector
+6. **Spawn Point Selection**: Skip first 10 spawn points in Town10HD (they're parking lots):
+   ```python
+   road_spawn_points = session.spawn_points[10:]  # Use index 10+ for roads
+   ```
 
 ## Key Files for Reference
 
 - V2V Protocol: [src/v2v/messages.py](src/v2v/messages.py) (BSMCore, BSMPartII, threat assessment)
 - Network Manager: [src/v2v/network_enhanced.py](src/v2v/network_enhanced.py) (2 Hz enforcement, neighbor discovery)
+- V2V REST API: [src/v2v/api.py](src/v2v/api.py) (FastAPI endpoints for V2V data access)
 - LiDAR Server: [src/visualization/lidar/server.py](src/visualization/lidar/server.py) (FastAPI WebSocket streaming)
 - Complete Example: [src/scenarios/v2v_complete_demo.py](src/scenarios/v2v_complete_demo.py) (demonstrates all patterns)
+- Configuration: [src/config.py](src/config.py) (all dataclass configs: SimulationConfig, V2VConfig, etc.)
 - User Guides: [V2V_GUIDE.md](V2V_GUIDE.md), [V2V_IMPLEMENTATION.md](V2V_IMPLEMENTATION.md), [README.md](README.md)
-
-## Legacy Files (kept for backwards compatibility)
-
-- [src/v2v/communicator.py](src/v2v/communicator.py) - Legacy `V2VNetwork` class (use `V2VNetworkEnhanced` instead)
-- [src/v2v/protocol.py](src/v2v/protocol.py) - Legacy `V2VState` dataclass (used by communicator.py)

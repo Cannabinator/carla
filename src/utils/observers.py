@@ -278,3 +278,236 @@ class CompactLogObserver(ScenarioObserver):
     def on_complete(self, total_frames: int, elapsed_time: float):
         """Log completion."""
         self.logger.info(f"Scenario completed: {total_frames} frames in {elapsed_time:.1f}s")
+
+
+class SpectatorFollowObserver(ScenarioObserver):
+    """
+    Bird's-eye view spectator camera following the ego vehicle.
+    
+    Provides a smooth overhead view in the CARLA server GUI that follows
+    the leading vehicle throughout the simulation.
+    
+    Uses exponential smoothing to eliminate camera shake caused by
+    physics simulation jitter and frequent yaw changes.
+    
+    Based on CARLA's spectator API pattern from PythonAPI examples.
+    """
+    
+    def __init__(self, world: carla.World, vehicle: carla.Actor,
+                 height: float = 50.0, pitch: float = -90.0,
+                 update_interval_frames: int = 1,
+                 smoothing_factor: float = 0.1):
+        """
+        Initialize spectator follower.
+        
+        Args:
+            world: CARLA world instance
+            vehicle: Vehicle to follow (ego vehicle)
+            height: Camera height above vehicle (meters)
+            pitch: Camera pitch angle (degrees, -90 = straight down)
+            update_interval_frames: How often to update camera position
+            smoothing_factor: Exponential smoothing factor (0-1, lower = smoother)
+        """
+        self.world = world
+        self.vehicle = vehicle
+        self.height = height
+        self.pitch = pitch
+        self.update_interval = update_interval_frames
+        self.spectator = world.get_spectator()
+        self.smoothing = smoothing_factor
+        
+        # Previous position for smoothing (initialized on first frame)
+        self._prev_x: Optional[float] = None
+        self._prev_y: Optional[float] = None
+        self._prev_yaw: Optional[float] = None
+    
+    def _smooth_value(self, current: float, previous: Optional[float]) -> float:
+        """Apply exponential smoothing to a value."""
+        if previous is None:
+            return current
+        return previous + self.smoothing * (current - previous)
+    
+    def _smooth_angle(self, current: float, previous: Optional[float]) -> float:
+        """Apply exponential smoothing to an angle, handling wraparound."""
+        if previous is None:
+            return current
+        
+        # Handle angle wraparound (-180 to 180)
+        diff = current - previous
+        if diff > 180:
+            diff -= 360
+        elif diff < -180:
+            diff += 360
+        
+        return previous + self.smoothing * diff
+    
+    def on_frame(self, frame: int, state: VehicleState, v2v_data: Dict[str, Any]):
+        """Update spectator camera to follow vehicle from above with smoothing."""
+        if frame % self.update_interval != 0:
+            return
+        
+        # Get vehicle transform
+        vehicle_transform = self.vehicle.get_transform()
+        vehicle_location = vehicle_transform.location
+        vehicle_rotation = vehicle_transform.rotation
+        
+        # Apply exponential smoothing for stable camera
+        smooth_x = self._smooth_value(vehicle_location.x, self._prev_x)
+        smooth_y = self._smooth_value(vehicle_location.y, self._prev_y)
+        smooth_yaw = self._smooth_angle(vehicle_rotation.yaw, self._prev_yaw)
+        
+        # Store for next frame
+        self._prev_x = smooth_x
+        self._prev_y = smooth_y
+        self._prev_yaw = smooth_yaw
+        
+        # Create bird's-eye view transform with smoothed position
+        spectator_location = carla.Location(
+            x=smooth_x,
+            y=smooth_y,
+            z=vehicle_location.z + self.height  # Height doesn't need smoothing
+        )
+        
+        # For top-down view (-90° pitch), use smoothed yaw
+        # For angled views, inherit smoothed vehicle yaw for orientation
+        spectator_rotation = carla.Rotation(
+            pitch=self.pitch,
+            yaw=smooth_yaw,
+            roll=0
+        )
+        
+        spectator_transform = carla.Transform(spectator_location, spectator_rotation)
+        self.spectator.set_transform(spectator_transform)
+    
+    def on_complete(self, total_frames: int, elapsed_time: float):
+        """No cleanup needed for spectator."""
+        pass
+
+
+class V2VMessageLogger(ScenarioObserver):
+    """
+    Detailed V2V message logger for research analysis.
+    
+    Logs all V2V BSM messages exchanged between vehicles, including:
+    - Sender and receiver vehicle IDs
+    - BSM core data (position, speed, heading, acceleration)
+    - Transmission metadata (distance, signal timing)
+    - Threat assessments between vehicle pairs
+    
+    Creates a dedicated CSV file for V2V message analysis.
+    """
+    
+    def __init__(self, v2v_network, output_path: Optional[Path] = None,
+                 log_interval_frames: int = 10):
+        """
+        Initialize V2V message logger.
+        
+        Args:
+            v2v_network: V2VNetworkEnhanced instance to log from
+            output_path: CSV file path. If None, auto-generated in logs/
+            log_interval_frames: How often to log V2V messages (default every 10 frames = 2Hz at 20 FPS)
+        """
+        from ..v2v import V2VNetworkEnhanced
+        
+        self.v2v: V2VNetworkEnhanced = v2v_network
+        self.log_interval = log_interval_frames
+        
+        if output_path is None:
+            log_dir = Path(__file__).parent.parent.parent / 'logs'
+            log_dir.mkdir(exist_ok=True)
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            output_path = log_dir / f'v2v_messages_{timestamp}.csv'
+        
+        self.output_path = output_path
+        self.csv_file = None
+        self.writer = None
+        self.total_messages = 0
+        self._file_opened = False
+    
+    def _open_csv(self):
+        """Open CSV file and write header."""
+        self.csv_file = open(self.output_path, 'w', newline='')
+        fieldnames = [
+            # Timing
+            'frame', 'sim_timestamp', 'wall_timestamp',
+            # Sender info
+            'sender_id', 'sender_x', 'sender_y', 'sender_z',
+            'sender_speed_ms', 'sender_heading', 'sender_accel',
+            'sender_brake_status', 'sender_msg_count',
+            # Receiver info (neighbor who receives this BSM)
+            'receiver_id',
+            # Transmission info
+            'distance_m', 'relative_speed_ms',
+            # Threat assessment
+            'threat_level', 'time_to_collision',
+            # Network stats
+            'total_neighbors', 'cooperative_shares'
+        ]
+        self.writer = csv.DictWriter(self.csv_file, fieldnames=fieldnames)
+        self.writer.writeheader()
+        self._file_opened = True
+    
+    def on_frame(self, frame: int, state: VehicleState, v2v_data: Dict[str, Any]):
+        """Log V2V message exchanges at specified interval."""
+        if frame % self.log_interval != 0:
+            return
+        
+        # Lazy file opening
+        if not self._file_opened:
+            self._open_csv()
+        
+        sim_timestamp = state.frame * 0.05  # 20 FPS = 0.05s per frame
+        wall_timestamp = datetime.now().isoformat()
+        
+        # Get all BSM messages
+        all_bsm = self.v2v.get_all_bsm()
+        network_stats = self.v2v.get_network_stats()
+        
+        # Log each vehicle's BSM broadcast to its neighbors
+        for sender_id, sender_bsm in all_bsm.items():
+            neighbors = self.v2v.get_neighbors(sender_id)
+            threats = self.v2v.get_threats(sender_id)
+            
+            # Log a row for each neighbor that receives this BSM
+            for neighbor_bsm in neighbors:
+                receiver_id = neighbor_bsm.vehicle_id
+                
+                # Calculate relative info
+                distance = self.v2v.get_distance(sender_id, receiver_id) or 0
+                relative_speed = sender_bsm.speed - neighbor_bsm.speed
+                
+                # Find threat info for this pair
+                threat_info = next(
+                    (t for t in threats if t.get('other_vehicle_id') == receiver_id),
+                    {'level': 0, 'ttc': 999}
+                )
+                
+                # Write row
+                self.writer.writerow({  # type: ignore
+                    'frame': frame,
+                    'sim_timestamp': f"{sim_timestamp:.2f}",
+                    'wall_timestamp': wall_timestamp,
+                    'sender_id': sender_id,
+                    'sender_x': f"{sender_bsm.latitude:.2f}",
+                    'sender_y': f"{sender_bsm.longitude:.2f}",
+                    'sender_z': f"{sender_bsm.elevation:.2f}",
+                    'sender_speed_ms': f"{sender_bsm.speed:.2f}",
+                    'sender_heading': f"{sender_bsm.heading:.1f}",
+                    'sender_accel': f"{sender_bsm.longitudinal_accel:.2f}",
+                    'sender_brake_status': sender_bsm.brake_status.name,
+                    'sender_msg_count': sender_bsm.msg_count,
+                    'receiver_id': receiver_id,
+                    'distance_m': f"{distance:.2f}",
+                    'relative_speed_ms': f"{relative_speed:.2f}",
+                    'threat_level': threat_info.get('level', 0),
+                    'time_to_collision': f"{threat_info.get('ttc', 999):.2f}",
+                    'total_neighbors': len(neighbors),
+                    'cooperative_shares': network_stats.get('cooperative_shares', 0)
+                })
+                self.total_messages += 1
+    
+    def on_complete(self, total_frames: int, elapsed_time: float):
+        """Close CSV file and print summary."""
+        if self.csv_file:
+            self.csv_file.close()
+            print(f"📡 Logged {self.total_messages} V2V messages to {self.output_path}")

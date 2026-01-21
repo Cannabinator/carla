@@ -73,6 +73,11 @@ class SimulationConfig(BaseModel):
     lidar_quality: str = "high"
     csv_logging: bool = True
     console_output: bool = True
+    # New options
+    v2v_message_logging: bool = False
+    spectator_follow: bool = True
+    spectator_height: float = 50.0
+    spectator_pitch: float = -90.0
 
 
 def set_collector(collector: Optional[Any]):
@@ -525,6 +530,10 @@ async def start_simulation(config: SimulationConfig):
                 lidar_quality=config.lidar_quality,
                 csv_logging=config.csv_logging,
                 console_output=config.console_output,
+                v2v_message_logging=config.v2v_message_logging,
+                spectator_follow=config.spectator_follow,
+                spectator_height=config.spectator_height,
+                spectator_pitch=config.spectator_pitch,
                 status_callback=update_simulation_status,
                 server_module=server_module
             )

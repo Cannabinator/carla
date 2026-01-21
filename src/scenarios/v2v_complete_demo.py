@@ -35,6 +35,7 @@ from src.utils import (
     CARLASession, VehicleState, ActorManager,
     ScenarioBuilder, ScenarioConfig,
     ConsoleObserver, CARLADebugObserver, CSVDataLogger, CompactLogObserver,
+    SpectatorFollowObserver, V2VMessageLogger,
     LiDARQuality, VehicleColor, SemanticTag,
     LazyVehicleStats, Timer, calculate_distance_3d
 )
@@ -293,6 +294,29 @@ def run_complete_v2v_demo(config: ScenarioConfig, status_callback=None, server_m
                 observers.append(CompactLogObserver(logger))
                 print(f"   ✓ Compact log observer")
             
+            # Bird's-eye view spectator camera following ego vehicle
+            if config.spectator_follow:
+                observers.append(SpectatorFollowObserver(
+                    world=session.world,
+                    vehicle=ego,
+                    height=config.spectator_height,
+                    pitch=config.spectator_pitch,
+                    update_interval_frames=1
+                ))
+                print(f"   ✓ Spectator follow camera (height={config.spectator_height}m, pitch={config.spectator_pitch}°)")
+            
+            # Detailed V2V message logging for research analysis
+            if config.v2v_message_logging and v2v:
+                v2v_log_path: Optional[Path] = Path(config.v2v_log_output_path) if config.v2v_log_output_path else None
+                if v2v_log_path is None:
+                    v2v_log_path = log_dir / f"v2v_messages_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+                observers.append(V2VMessageLogger(
+                    v2v_network=v2v,
+                    output_path=v2v_log_path,
+                    log_interval_frames=config.v2v_update_interval_frames
+                ))
+                print(f"   ✓ V2V message logger: {v2v_log_path}")
+            
             print(f"   Total: {len(observers)} observers registered\n")
             
             # ========================================================================
@@ -548,6 +572,22 @@ Examples:
     parser.add_argument('--csv-output', 
                        help='CSV output file path (default: auto-generated in logs/)')
     
+    # Spectator Camera
+    parser.add_argument('--spectator-follow', action='store_true', default=True,
+                       help='Enable bird\'s-eye view spectator following (default: enabled)')
+    parser.add_argument('--no-spectator-follow', action='store_false', dest='spectator_follow',
+                       help='Disable spectator following')
+    parser.add_argument('--spectator-height', type=float, default=50.0,
+                       help='Spectator camera height above vehicle (default: 50m)')
+    parser.add_argument('--spectator-pitch', type=float, default=-90.0,
+                       help='Spectator camera pitch angle (default: -90 = straight down)')
+    
+    # V2V Message Logging
+    parser.add_argument('--v2v-logging', action='store_true',
+                       help='Enable detailed V2V message logging for analysis')
+    parser.add_argument('--v2v-log-output',
+                       help='V2V message log file path (default: auto-generated in logs/)')
+    
     args = parser.parse_args()
     
     # ============================================================================
@@ -578,6 +618,18 @@ Examples:
         if args.csv_output:
             config.csv_output_path = args.csv_output
     
+    # Apply spectator follow settings
+    if args.spectator_follow:
+        config.spectator_follow = True
+        config.spectator_height = args.spectator_height
+        config.spectator_pitch = args.spectator_pitch
+    
+    # Apply V2V message logging settings
+    if args.v2v_logging:
+        config.v2v_message_logging = True
+        if args.v2v_log_output:
+            config.v2v_log_output_path = args.v2v_log_output
+    
     # Run the complete demonstration
     run_complete_v2v_demo(config)
 
@@ -595,6 +647,10 @@ def run_simulation_headless(
     lidar_quality: str = "high",
     csv_logging: bool = True,
     console_output: bool = True,
+    spectator_follow: bool = True,
+    spectator_height: float = 50.0,
+    spectator_pitch: float = -90.0,
+    v2v_message_logging: bool = False,
     status_callback = None,
     server_module = None
 ):
@@ -602,12 +658,18 @@ def run_simulation_headless(
     Run simulation in headless mode (callable from API).
     
     Args:
+        carla_host: CARLA server IP address
+        carla_port: CARLA server port
         duration: Simulation duration in seconds
         vehicles: Number of vehicles
         v2v_range: V2V communication range in meters
         lidar_quality: LiDAR quality ('high', 'medium', 'fast')
         csv_logging: Enable CSV logging
         console_output: Enable console output
+        spectator_follow: Enable bird's-eye view camera following
+        spectator_height: Height of spectator camera above vehicle
+        spectator_pitch: Pitch angle of spectator camera (degrees, -90 = straight down)
+        v2v_message_logging: Enable detailed V2V message logging
         status_callback: Function to call with status updates (frame, elapsed, v2v_msgs)
         server_module: Server module reference to avoid thread isolation issues
     """
@@ -620,6 +682,8 @@ def run_simulation_headless(
         .with_v2v(enabled=True, range_m=v2v_range)
         .with_console_output(enabled=console_output)
         .with_carla_debug(enabled=False)
+        .with_spectator_follow(enabled=spectator_follow, height=spectator_height, pitch=spectator_pitch)
+        .with_v2v_message_logging(enabled=v2v_message_logging)
         .build()
     )
     

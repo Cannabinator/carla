@@ -1,3 +1,4 @@
+### Copilot is not allowed to edit or change the content  of this file !
 ### goals of this program
     - repeatable scenario with vehicle2vehicle communication
     - controll all from a frontend
@@ -6,7 +7,6 @@
 
 - ist richtung, beschleunigung ect als sensordatensatz aktuell aktiviert ? 
 - ist autopilot aktiviert ? 
-- 
 
 ## how to implement better v2v communication and sensor data handling that fit my needs 
     - 2 Hertz tick rate
@@ -42,3 +42,8 @@ in der klasse `messages.py` sind verschiedene V2V Message Standards und funktion
     - implement synchronous mode between swrver and vlient
     - set tick rate to 2 hertz
     - synchronous mode + fixed time step
+
+
+### further implementations Stand 18.1.2026
+    - Bird perspective following on the leading vehicle on the GUI of the carla server.
+    - Better CSV logging for analysing. I want to track the v2v messages send between cars. 

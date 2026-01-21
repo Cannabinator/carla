@@ -1,13 +1,3 @@
-# CARLA V2V Research Platform - Full Container
-# 
-# This container runs the complete V2V platform including:
-# - Web-based control panel and visualization server
-# - CARLA Python client for simulation control
-# - Connects to an external CARLA simulator server over the network
-#
-# Build:   docker build -t carla-v2v .  OR  docker compose build
-# Run:     docker run -p 8000:8000 carla-v2v
-# Access:  http://localhost:8000
 
 FROM python:3.10-slim
 
@@ -26,7 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpng-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first for better caching
+
 COPY requirements.docker.txt requirements.txt
 
 # Install Python dependencies
