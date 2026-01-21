@@ -21,6 +21,7 @@ import threading
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 # LiDARDataCollector is optional - only needed when running simulations
@@ -41,6 +42,12 @@ logger = logging.getLogger(__name__)
 _run_simulation_headless = None
 
 app = FastAPI(title="V2V LiDAR Visualizer")
+
+# Mount static files for assets (logos, images, etc.)
+web_dir = Path(__file__).parent.parent / 'web'
+assets_dir = web_dir / 'assets'
+if assets_dir.exists():
+    app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
 
 # Global collector instance (set by scenario)
 # Type is Any since LiDARDataCollector may not be available without CARLA
