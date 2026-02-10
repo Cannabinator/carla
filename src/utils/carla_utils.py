@@ -7,6 +7,7 @@ import carla
 import numpy as np
 import math
 import logging
+import random
 from typing import Optional, Tuple, Dict, List
 
 logger = logging.getLogger(__name__)
@@ -280,7 +281,6 @@ class StuckVehicleTracker:
             
             # Strategy 2: If spawn points available, teleport to new location
             if spawn_points and world and len(spawn_points) > 0:
-                import random
                 new_spawn = random.choice(spawn_points)
                 vehicle.set_transform(new_spawn)
                 logger.info(f"Recovered stuck vehicle {actor_id} - teleported to new location")

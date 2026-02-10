@@ -8,7 +8,6 @@ import unittest
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
-import math
 
 # Mock carla module before imports
 sys.modules['carla'] = MagicMock()

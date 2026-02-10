@@ -6,7 +6,6 @@ This script shows how the stuck vehicle detection system works
 without requiring a CARLA server connection.
 """
 
-import time
 import math
 from typing import Dict, List, Optional
 
