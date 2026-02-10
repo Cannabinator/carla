@@ -30,6 +30,12 @@ class SimulationConfig:
     safety_distance: float = 2.5  # meters
     ego_speed_difference: float = 20.0  # % slower for ego vehicle
     
+    # Stuck vehicle detection and recovery
+    stuck_detection_enabled: bool = True  # Enable stuck vehicle detection
+    stuck_velocity_threshold: float = 0.5  # m/s - below this is considered stuck
+    stuck_frames_threshold: int = 100  # frames - stuck for this many frames triggers recovery (5s at 20 FPS)
+    stuck_check_interval_frames: int = 20  # Check every 20 frames (1s at 20 FPS)
+    
     # Warmup
     warmup_frames: int = 50
     

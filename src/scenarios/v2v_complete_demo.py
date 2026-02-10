@@ -37,7 +37,7 @@ from src.utils import (
     ConsoleObserver, CARLADebugObserver, CSVDataLogger, CompactLogObserver,
     SpectatorFollowObserver, V2VMessageLogger,
     LiDARQuality, VehicleColor, SemanticTag,
-    LazyVehicleStats, Timer, calculate_distance_3d
+    LazyVehicleStats, Timer, calculate_distance_3d, StuckVehicleTracker
 )
 from src.config import DEFAULT_SIM_CONFIG, DEFAULT_V2V_CONFIG
 import uvicorn
@@ -283,6 +283,19 @@ def run_complete_v2v_demo(config: ScenarioConfig, status_callback=None, server_m
             print(f"   ✓ Total vehicles in simulation: {len(traffic) + 1}\n")
             
             # ========================================================================
+            # STEP 5.5: Initialize Stuck Vehicle Tracker
+            # ========================================================================
+            stuck_tracker: Optional[StuckVehicleTracker] = None
+            if config.stuck_detection_enabled:
+                print(f"🔍 Initializing Stuck Vehicle Detection...")
+                stuck_tracker = StuckVehicleTracker(
+                    velocity_threshold=config.stuck_velocity_threshold,
+                    frames_threshold=config.stuck_frames_threshold
+                )
+                print(f"   ✓ Stuck detection enabled: velocity < {config.stuck_velocity_threshold} m/s for {config.stuck_frames_threshold} frames")
+                print(f"   ✓ Check interval: every {config.stuck_check_interval_frames} frames\n")
+            
+            # ========================================================================
             # STEP 6: Setup Observers (Observer Pattern)
             # ========================================================================
             print(f"👁️  Setting up observers...")
@@ -401,6 +414,14 @@ def run_complete_v2v_demo(config: ScenarioConfig, status_callback=None, server_m
                         'lidar_points': lidar_api.get_point_count() if lidar_api else 0
                     }
                     
+                    # Check for stuck vehicles and attempt recovery
+                    if stuck_tracker and frame % config.stuck_check_interval_frames == 0:
+                        for vehicle in traffic:
+                            if stuck_tracker.check_and_update(vehicle, snapshot):
+                                # Vehicle is stuck, attempt recovery
+                                logger.warning(f"Vehicle {vehicle.id} detected as stuck at frame {frame}")
+                                stuck_tracker.recover_vehicle(vehicle, road_spawn_points, session.world)
+                    
                     # Notify all observers (they use lazy evaluation internally)
                     for observer in observers:
                         observer.on_frame(frame, state, v2v_data)
@@ -494,6 +515,16 @@ def run_complete_v2v_demo(config: ScenarioConfig, status_callback=None, server_m
                 print(f"\n🎯 LiDAR:")
                 print(f"   Total points streamed: {lidar_api.get_point_count() * frame:,}")
                 print(f"   Web server port:       {config.lidar_web_port}")
+            
+            # Stuck vehicle statistics
+            if stuck_tracker:
+                stats = stuck_tracker.get_stats()
+                print(f"\n🚗 Stuck Vehicle Detection:")
+                print(f"   Total recovered:       {stats['total_recovered']}")
+                print(f"   Currently tracked:     {stats['currently_tracked']}")
+                print(f"   Currently stuck:       {stats['currently_stuck']}")
+                print(f"   Velocity threshold:    {stats['velocity_threshold']} m/s")
+                print(f"   Frames threshold:      {stats['frames_threshold']} frames ({stats['frames_threshold']/config.fps:.1f}s)")
             
             # Notify observers of completion
             for observer in observers:

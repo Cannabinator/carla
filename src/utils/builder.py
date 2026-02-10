@@ -45,6 +45,12 @@ class ScenarioConfig:
     ego_speed_difference: float = 0.0
     safety_distance: float = 3.0
     
+    # Stuck Vehicle Detection
+    stuck_detection_enabled: bool = True
+    stuck_velocity_threshold: float = 0.5  # m/s
+    stuck_frames_threshold: int = 100  # frames (5s at 20 FPS)
+    stuck_check_interval_frames: int = 20  # check every 1s
+    
     # Visualization
     console_output: bool = True
     console_interval_seconds: float = 2.0
@@ -165,6 +171,33 @@ class ScenarioBuilder:
     def with_safety_distance(self, distance: float):
         """Set vehicle safety distance."""
         self._config.safety_distance = distance
+        return self
+    
+    def with_stuck_detection(
+        self, 
+        enabled: bool = True, 
+        velocity_threshold: float = 0.5,
+        frames_threshold: int = 100,
+        check_interval_frames: int = 20
+    ):
+        """
+        Configure stuck vehicle detection.
+        
+        Args:
+            enabled: Enable/disable stuck detection
+            velocity_threshold: Speed (m/s) below which vehicle is considered stuck
+            frames_threshold: Frames below threshold before triggering recovery
+            check_interval_frames: How often to check (for performance)
+        """
+        self._config.stuck_detection_enabled = enabled
+        self._config.stuck_velocity_threshold = velocity_threshold
+        self._config.stuck_frames_threshold = frames_threshold
+        self._config.stuck_check_interval_frames = check_interval_frames
+        return self
+    
+    def without_stuck_detection(self):
+        """Disable stuck vehicle detection."""
+        self._config.stuck_detection_enabled = False
         return self
     
     # Visualization

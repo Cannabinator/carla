@@ -1,5 +1,15 @@
 # CARLA V2V Research Platform
 
+Production-ready V2V (Vehicle-to-Vehicle) communication and real-time LiDAR visualization for CARLA Simulator 0.9.16.
+
+## Features
+
+- **V2V Communication**: SAE J2735 BSM protocol implementation with 2 Hz update rate
+- **LiDAR Visualization**: Real-time 3D point cloud streaming to web browser
+- **Stuck Vehicle Detection**: Automatic detection and recovery of immobile traffic vehicles (NEW)
+- **Traffic Manager Integration**: Deterministic traffic simulation with configurable behavior
+- **Multiple Output Formats**: Console, CSV, V2V message logs, CARLA debug visualization
+
 ### Setting up the workspace
 I recommend to use the Dockerfile to set everything up
 1. Download a pre compiled version of Carla 0.9.16 either for windows or for a Ubuntu workstation. [https://github.com/carla-simulator/carla/releases]  
@@ -21,3 +31,10 @@ You are able now to access the frontend Dashboard unter [[localhost:8000](http:/
 
 `docker-compose logs -f`     # View logs
 `docker-compose down`        # Stop and remove
+
+## Documentation
+
+- [Stuck Vehicle Detection Guide](STUCK_VEHICLE_DETECTION.md) - Configure automatic recovery of immobile traffic vehicles
+- [V2V Implementation](V2V_IMPLEMENTATION.md) - Detailed V2V protocol documentation
+- [V2V User Guide](V2V_GUIDE.md) - How to use V2V features
+- [Docker Setup](DOCKER.md) - Docker deployment guide

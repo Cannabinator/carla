@@ -6,7 +6,11 @@ Reduces code duplication and improves reusability.
 import carla
 import numpy as np
 import math
-from typing import Optional, Tuple
+import logging
+import random
+from typing import Optional, Tuple, Dict, List
+
+logger = logging.getLogger(__name__)
 
 
 def calculate_speed(velocity: carla.Vector3D) -> Tuple[float, float]:
@@ -168,3 +172,150 @@ def destroy_actors(client: carla.Client, actors: list):
     """
     if client and actors:
         client.apply_batch([carla.command.DestroyActor(x) for x in actors])
+
+
+class StuckVehicleTracker:
+    """
+    Tracks and manages stuck vehicles in the simulation.
+    
+    A vehicle is considered "stuck" if it maintains a velocity below the threshold
+    for a specified number of consecutive frames, indicating it may have crashed
+    or gotten wedged in geometry.
+    
+    Features:
+    - Velocity-based stuck detection
+    - Configurable thresholds (velocity, frame count)
+    - Per-vehicle tracking with frame counters
+    - Recovery via physics reset
+    
+    Example:
+        >>> tracker = StuckVehicleTracker(velocity_threshold=0.5, frames_threshold=100)
+        >>> if tracker.check_and_update(vehicle, snapshot):
+        ...     tracker.recover_vehicle(vehicle, spawn_points)
+    """
+    
+    def __init__(
+        self,
+        velocity_threshold: float = 0.5,  # m/s
+        frames_threshold: int = 100  # frames
+    ):
+        """
+        Initialize stuck vehicle tracker.
+        
+        Args:
+            velocity_threshold: Speed below which vehicle is considered stuck (m/s)
+            frames_threshold: Consecutive frames below threshold to trigger stuck state
+        """
+        self.velocity_threshold = velocity_threshold
+        self.frames_threshold = frames_threshold
+        self.stuck_counters: Dict[int, int] = {}  # actor_id -> stuck_frame_count
+        self.recovered_vehicles: List[int] = []  # List of recovered vehicle IDs
+        
+    def check_and_update(
+        self,
+        vehicle: carla.Actor,
+        snapshot: carla.WorldSnapshot
+    ) -> bool:
+        """
+        Check if vehicle is stuck and update tracking state.
+        
+        Args:
+            vehicle: Vehicle actor to check
+            snapshot: Current world snapshot
+            
+        Returns:
+            True if vehicle is stuck and needs recovery, False otherwise
+        """
+        actor_id = vehicle.id
+        
+        # Get fresh velocity from snapshot
+        velocity = get_fresh_velocity(snapshot, actor_id)
+        if velocity is None:
+            return False
+        
+        # Calculate speed
+        speed = math.sqrt(velocity.x**2 + velocity.y**2 + velocity.z**2)
+        
+        # Check if below threshold
+        if speed < self.velocity_threshold:
+            # Increment stuck counter
+            self.stuck_counters[actor_id] = self.stuck_counters.get(actor_id, 0) + 1
+            
+            # Check if reached threshold
+            if self.stuck_counters[actor_id] >= self.frames_threshold:
+                return True
+        else:
+            # Vehicle is moving, reset counter
+            if actor_id in self.stuck_counters:
+                self.stuck_counters[actor_id] = 0
+        
+        return False
+    
+    def recover_vehicle(
+        self,
+        vehicle: carla.Actor,
+        spawn_points: Optional[List[carla.Transform]] = None,
+        world: Optional[carla.World] = None
+    ) -> bool:
+        """
+        Recover a stuck vehicle by resetting its physics state.
+        
+        Strategy:
+        1. First try: Reset physics (angular/linear velocity)
+        2. If spawn_points provided: Teleport to new location
+        
+        Args:
+            vehicle: Stuck vehicle to recover
+            spawn_points: Optional list of available spawn points
+            world: Optional world instance for teleport
+            
+        Returns:
+            True if recovery attempted, False otherwise
+        """
+        actor_id = vehicle.id
+        
+        try:
+            # Strategy 1: Reset physics state (least disruptive)
+            vehicle.set_target_velocity(carla.Vector3D(0, 0, 0))
+            vehicle.set_target_angular_velocity(carla.Vector3D(0, 0, 0))
+            
+            # Strategy 2: If spawn points available, teleport to new location
+            if spawn_points and world and len(spawn_points) > 0:
+                new_spawn = random.choice(spawn_points)
+                vehicle.set_transform(new_spawn)
+                logger.info(f"Recovered stuck vehicle {actor_id} - teleported to new location")
+            else:
+                logger.info(f"Recovered stuck vehicle {actor_id} - physics reset")
+            
+            # Reset counter
+            self.stuck_counters[actor_id] = 0
+            self.recovered_vehicles.append(actor_id)
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to recover vehicle {actor_id}: {e}")
+            return False
+    
+    def get_stats(self) -> Dict[str, int]:
+        """
+        Get statistics about stuck vehicle tracking.
+        
+        Returns:
+            Dictionary with tracking statistics
+        """
+        currently_stuck = sum(1 for count in self.stuck_counters.values() 
+                            if count > self.frames_threshold // 2)
+        
+        return {
+            'total_recovered': len(self.recovered_vehicles),
+            'currently_tracked': len(self.stuck_counters),
+            'currently_stuck': currently_stuck,
+            'velocity_threshold': self.velocity_threshold,
+            'frames_threshold': self.frames_threshold
+        }
+    
+    def reset(self):
+        """Reset all tracking state."""
+        self.stuck_counters.clear()
+        self.recovered_vehicles.clear()
