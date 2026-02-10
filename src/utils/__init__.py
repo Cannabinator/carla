@@ -10,7 +10,8 @@ from .carla_utils import (
     setup_traffic_manager,
     get_fresh_velocity,
     spawn_vehicle,
-    destroy_actors
+    destroy_actors,
+    StuckVehicleTracker
 )
 from .session import CARLASession, VehicleState
 from .actor_manager import ActorManager
@@ -54,6 +55,7 @@ __all__ = [
     'get_fresh_velocity',
     'spawn_vehicle',
     'destroy_actors',
+    'StuckVehicleTracker',
     'CARLASession',
     'VehicleState',
     'ActorManager',
