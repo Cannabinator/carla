@@ -21,8 +21,3 @@ You are able now to access the frontend Dashboard unter [[localhost:8000](http:/
 
 `docker-compose logs -f`     # View logs
 `docker-compose down`        # Stop and remove
-
-DONT CHANGE THIS FILE !
-
-### Components
-1. **BSM Protocol**

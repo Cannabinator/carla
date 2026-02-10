@@ -47,3 +47,10 @@ in der klasse `messages.py` sind verschiedene V2V Message Standards und funktion
 ### further implementations Stand 18.1.2026
     - Bird perspective following on the leading vehicle on the GUI of the carla server.
     - Better CSV logging for analysing. I want to track the v2v messages send between cars. 
+
+
+## further implementations 10.2.2026
+    - Bird perspective following is not working as i want it to. the camera is flickering above the vehicle.
+    - The dlr logo should only be displayed in the control panel not in the lidar or v2v dashboard.
+    - i want to know if there is a way to track the v2v data in a plot. I want to render the main vehicle moving over the map  
+    in a non static but refreshing plot, if there is a vehicle that the leading vehicle is talking to i want it to be displayed as a point on the plot aswell.

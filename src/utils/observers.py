@@ -287,8 +287,9 @@ class SpectatorFollowObserver(ScenarioObserver):
     Provides a smooth overhead view in the CARLA server GUI that follows
     the leading vehicle throughout the simulation.
     
-    Uses exponential smoothing to eliminate camera shake caused by
-    physics simulation jitter and frequent yaw changes.
+    Uses a critically-damped spring model for smooth, flicker-free camera
+    movement. For pure top-down view (-90° pitch), yaw is locked to
+    eliminate rotational flickering.
     
     Based on CARLA's spectator API pattern from PythonAPI examples.
     """
@@ -307,6 +308,7 @@ class SpectatorFollowObserver(ScenarioObserver):
             pitch: Camera pitch angle (degrees, -90 = straight down)
             update_interval_frames: How often to update camera position
             smoothing_factor: Exponential smoothing factor (0-1, lower = smoother)
+                             Recommended: 0.08-0.15 for smooth bird's-eye
         """
         self.world = world
         self.vehicle = vehicle
@@ -316,33 +318,71 @@ class SpectatorFollowObserver(ScenarioObserver):
         self.spectator = world.get_spectator()
         self.smoothing = smoothing_factor
         
-        # Previous position for smoothing (initialized on first frame)
-        self._prev_x: Optional[float] = None
-        self._prev_y: Optional[float] = None
-        self._prev_yaw: Optional[float] = None
-    
-    def _smooth_value(self, current: float, previous: Optional[float]) -> float:
-        """Apply exponential smoothing to a value."""
-        if previous is None:
-            return current
-        return previous + self.smoothing * (current - previous)
-    
-    def _smooth_angle(self, current: float, previous: Optional[float]) -> float:
-        """Apply exponential smoothing to an angle, handling wraparound."""
-        if previous is None:
-            return current
+        # Is this a pure top-down view? If so, lock yaw to prevent rotation flicker
+        self._is_topdown = (pitch <= -85.0)
         
-        # Handle angle wraparound (-180 to 180)
-        diff = current - previous
+        # Camera state (initialized on first frame)
+        self._cam_x: Optional[float] = None
+        self._cam_y: Optional[float] = None
+        self._cam_z: Optional[float] = None
+        self._cam_yaw: Optional[float] = None
+        
+        # Velocity tracking for critically-damped spring
+        self._vel_x: float = 0.0
+        self._vel_y: float = 0.0
+        self._vel_z: float = 0.0
+        self._vel_yaw: float = 0.0
+        
+        # Fixed timestep from CARLA config (default 0.05s = 20 FPS)
+        self._dt: float = 0.05
+        
+        # Spring damping parameters - tuned for smooth, responsive following
+        # omega = natural frequency, controls how fast camera catches up
+        self._omega: float = 4.0  # ~4 Hz natural frequency → smooth follow
+    
+    def _spring_smooth(self, target: float, current: float, velocity: float) -> tuple:
+        """
+        Critically-damped spring smoothing for flicker-free motion.
+        
+        Returns (new_position, new_velocity).
+        
+        A critically-damped spring reaches the target as fast as possible
+        without overshooting or oscillating, eliminating all flickering.
+        """
+        omega = self._omega
+        dt = self._dt
+        
+        # Critically damped: damping ratio = 1.0, so zeta*omega = omega
+        exp_term = 2.718281828 ** (-omega * dt)
+        
+        diff = current - target
+        new_pos = target + (diff + (velocity + omega * diff) * dt) * exp_term
+        new_vel = (velocity - omega * omega * diff * dt) * exp_term
+        
+        return new_pos, new_vel
+    
+    def _spring_smooth_angle(self, target: float, current: float, velocity: float) -> tuple:
+        """Critically-damped spring smoothing for angles with wraparound."""
+        # Normalize target relative to current to handle -180/180 wraparound
+        diff = target - current
         if diff > 180:
             diff -= 360
         elif diff < -180:
             diff += 360
         
-        return previous + self.smoothing * diff
+        adjusted_target = current + diff
+        new_pos, new_vel = self._spring_smooth(adjusted_target, current, velocity)
+        
+        # Normalize result to -180..180
+        while new_pos > 180:
+            new_pos -= 360
+        while new_pos < -180:
+            new_pos += 360
+        
+        return new_pos, new_vel
     
     def on_frame(self, frame: int, state: VehicleState, v2v_data: Dict[str, Any]):
-        """Update spectator camera to follow vehicle from above with smoothing."""
+        """Update spectator camera to follow vehicle from above with smooth spring dynamics."""
         if frame % self.update_interval != 0:
             return
         
@@ -351,32 +391,40 @@ class SpectatorFollowObserver(ScenarioObserver):
         vehicle_location = vehicle_transform.location
         vehicle_rotation = vehicle_transform.rotation
         
-        # Apply exponential smoothing for stable camera
-        smooth_x = self._smooth_value(vehicle_location.x, self._prev_x)
-        smooth_y = self._smooth_value(vehicle_location.y, self._prev_y)
-        smooth_yaw = self._smooth_angle(vehicle_rotation.yaw, self._prev_yaw)
+        target_x = vehicle_location.x
+        target_y = vehicle_location.y
+        target_z = vehicle_location.z + self.height
         
-        # Store for next frame
-        self._prev_x = smooth_x
-        self._prev_y = smooth_y
-        self._prev_yaw = smooth_yaw
+        # Initialize camera on first frame (snap to position, no smoothing)
+        if self._cam_x is None:
+            self._cam_x = target_x
+            self._cam_y = target_y
+            self._cam_z = target_z
+            self._cam_yaw = 180.0 if self._is_topdown else vehicle_rotation.yaw
+            self._vel_x = 0.0
+            self._vel_y = 0.0
+            self._vel_z = 0.0
+            self._vel_yaw = 0.0
+        else:
+            # Apply critically-damped spring to X, Y, Z
+            self._cam_x, self._vel_x = self._spring_smooth(
+                target_x, self._cam_x, self._vel_x)
+            self._cam_y, self._vel_y = self._spring_smooth(
+                target_y, self._cam_y, self._vel_y)
+            self._cam_z, self._vel_z = self._spring_smooth(
+                target_z, self._cam_z, self._vel_z)
+            
+            # For pure top-down (-90°), lock yaw at 0 to prevent rotation flicker
+            # For angled views, smoothly follow vehicle yaw
+            if not self._is_topdown:
+                self._cam_yaw, self._vel_yaw = self._spring_smooth_angle(
+                    vehicle_rotation.yaw, self._cam_yaw, self._vel_yaw)
         
-        # Create bird's-eye view transform with smoothed position
-        spectator_location = carla.Location(
-            x=smooth_x,
-            y=smooth_y,
-            z=vehicle_location.z + self.height  # Height doesn't need smoothing
+        # Build spectator transform
+        spectator_transform = carla.Transform(
+            carla.Location(x=self._cam_x, y=self._cam_y, z=self._cam_z),
+            carla.Rotation(pitch=self.pitch, yaw=self._cam_yaw, roll=0)
         )
-        
-        # For top-down view (-90° pitch), use smoothed yaw
-        # For angled views, inherit smoothed vehicle yaw for orientation
-        spectator_rotation = carla.Rotation(
-            pitch=self.pitch,
-            yaw=smooth_yaw,
-            roll=0
-        )
-        
-        spectator_transform = carla.Transform(spectator_location, spectator_rotation)
         self.spectator.set_transform(spectator_transform)
     
     def on_complete(self, total_frames: int, elapsed_time: float):

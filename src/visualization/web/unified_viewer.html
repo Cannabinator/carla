@@ -85,8 +85,8 @@
         }
         
         .logo-container {
-            position: fixed;
-            top: 120px;
+            position: absolute;
+            top: 60px;
             right: 120px;
             z-index: 9999;
             background: white;
@@ -111,10 +111,16 @@
         <button class="tab-button" onclick="switchTab('v2v')">
             V2V Dashboard
         </button>
+        <button class="tab-button" onclick="switchTab('map')">
+            V2V Live Map
+        </button>
     </div>
     
     <div id="control-tab" class="tab-content active">
         <iframe id="controlFrame" src="/control"></iframe>
+        <div class="logo-container">
+            <img src="/assets/dlr-logo-black.jpeg" alt="DLR Logo" title="Deutsches Zentrum für Luft- und Raumfahrt">
+        </div>
     </div>
     
     <div id="lidar-tab" class="tab-content">
@@ -124,9 +130,9 @@
     <div id="v2v-tab" class="tab-content">
         <iframe id="v2vFrame" src="/v2v"></iframe>
     </div>
-    
-    <div class="logo-container">
-        <img src="/assets/dlr-logo-black.jpeg" alt="DLR Logo" title="Deutsches Zentrum für Luft- und Raumfahrt">
+
+    <div id="map-tab" class="tab-content">
+        <iframe id="mapFrame" src="/map" style="width:100%;height:100%;border:none;"></iframe>
     </div>
     
     <script>
@@ -149,6 +155,7 @@
             if (e.key === '1') switchTab('control');
             if (e.key === '2') switchTab('lidar');
             if (e.key === '3') switchTab('v2v');
+            if (e.key === '4') switchTab('map');
         });
     </script>
 </body>

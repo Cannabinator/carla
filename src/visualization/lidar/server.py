@@ -189,6 +189,15 @@ async def control_panel():
     return HTMLResponse(content="<h1>Control panel not found</h1>", status_code=404)
 
 
+@app.get("/map")
+async def v2v_map():
+    """Serve V2V live map."""
+    map_path = Path(__file__).parent.parent / 'web' / 'v2v_map.html'
+    if map_path.exists():
+        return HTMLResponse(content=map_path.read_text())
+    return HTMLResponse(content="<h1>V2V Map not found</h1>", status_code=404)
+
+
 @app.get("/v2v")
 async def v2v_dashboard():
     """Serve V2V dashboard."""
