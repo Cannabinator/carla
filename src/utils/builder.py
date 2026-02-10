@@ -66,6 +66,17 @@ class ScenarioConfig:
     # Display
     warmup_frames: int = 100
     stats_display_interval_seconds: float = 2.0
+    
+    # MQTT Transport (optional)
+    mqtt_enabled: bool = False
+    mqtt_broker_host: str = 'localhost'
+    mqtt_broker_port: int = 1883
+    mqtt_client_id: str = 'v2v_network'
+    mqtt_qos: int = 1
+    mqtt_tls_enabled: bool = False
+    mqtt_tls_ca_certs: Optional[str] = None
+    mqtt_tls_certfile: Optional[str] = None
+    mqtt_tls_keyfile: Optional[str] = None
 
 
 class ScenarioBuilder:
@@ -190,6 +201,44 @@ class ScenarioBuilder:
         """
         self._config.v2v_message_logging = enabled
         self._config.v2v_log_output_path = output_path
+        return self
+    
+    def with_mqtt(self, broker_host: str = 'localhost', broker_port: int = 1883,
+                  qos: int = 1, tls_enabled: bool = False,
+                  tls_ca_certs: Optional[str] = None,
+                  tls_certfile: Optional[str] = None,
+                  tls_keyfile: Optional[str] = None):
+        """
+        Enable MQTT transport for V2V communication.
+        
+        When enabled, BSM messages are published/received via an MQTT broker
+        instead of being passed through in-process Python dicts. This enables:
+        - Real network serialization overhead measurement
+        - TLS/SSL encryption at the transport level
+        - Payload-level encryption research hooks
+        
+        Args:
+            broker_host: MQTT broker hostname/IP
+            broker_port: MQTT broker port (1883=plain, 8883=TLS)
+            qos: MQTT QoS level (0, 1, or 2)
+            tls_enabled: Enable TLS/SSL transport encryption
+            tls_ca_certs: Path to CA certificate file
+            tls_certfile: Path to client certificate file
+            tls_keyfile: Path to client private key file
+        """
+        self._config.mqtt_enabled = True
+        self._config.mqtt_broker_host = broker_host
+        self._config.mqtt_broker_port = broker_port
+        self._config.mqtt_qos = qos
+        self._config.mqtt_tls_enabled = tls_enabled
+        self._config.mqtt_tls_ca_certs = tls_ca_certs
+        self._config.mqtt_tls_certfile = tls_certfile
+        self._config.mqtt_tls_keyfile = tls_keyfile
+        return self
+    
+    def without_mqtt(self):
+        """Disable MQTT transport (use in-process mode)."""
+        self._config.mqtt_enabled = False
         return self
     
     def with_spectator_follow(self, enabled: bool = True, height: float = 50.0, pitch: float = -90.0):

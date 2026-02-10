@@ -7,10 +7,12 @@ from .messages import (
 )
 from .network_enhanced import V2VNetworkEnhanced
 from .api import V2VAPI, create_v2v_api
+from .mqtt_transport import MQTTTransport, BSMSerializer
 
 __all__ = [
     'BSMCore', 'BSMPartII', 'CooperativeAwarenessMessage', 'V2VEnhancedMessage',
     'VehicleType', 'BrakingStatus',
     'create_bsm_from_carla', 'calculate_threat_level',
-    'V2VNetworkEnhanced', 'V2VAPI', 'create_v2v_api'
+    'V2VNetworkEnhanced', 'V2VAPI', 'create_v2v_api',
+    'MQTTTransport', 'BSMSerializer'
 ]

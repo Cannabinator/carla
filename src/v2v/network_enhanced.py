@@ -1,6 +1,7 @@
 """
 Enhanced V2V Network Manager
 Implements BSM-based V2V communication with 2 Hz tick rate and cooperative perception.
+Supports optional MQTT transport for real network message passing.
 """
 
 import carla
@@ -31,13 +32,15 @@ class V2VNetworkEnhanced:
     - Cooperative perception
     - Threat assessment
     - Message prioritization
+    - Optional MQTT transport for real network communication
     """
     
     def __init__(self, 
                  max_range: float = V2V_RANGE_MEDIUM,
                  update_rate_hz: float = 2.0,
                  enable_cooperative_perception: bool = True,
-                 world=None):
+                 world=None,
+                 mqtt_config=None):
         """
         Initialize enhanced V2V network.
         
@@ -46,6 +49,9 @@ class V2VNetworkEnhanced:
             update_rate_hz: V2V update frequency (default 2 Hz)
             enable_cooperative_perception: Enable sensor data sharing
             world: CARLA World instance (optional, auto-detected from vehicles)
+            mqtt_config: Optional MQTTConfig dataclass. When provided and
+                        mqtt_config.enabled is True, BSM messages are published
+                        and received via MQTT broker instead of in-process dicts.
         """
         self.max_range = max_range
         self.update_rate_hz = update_rate_hz
@@ -84,7 +90,40 @@ class V2VNetworkEnhanced:
             'cooperative_shares': 0
         }
         
-        logger.info(f"V2V Network initialized: {update_rate_hz} Hz, range {max_range}m")
+        # MQTT transport (optional)
+        self._mqtt_transport = None
+        self._mqtt_config = mqtt_config
+        if mqtt_config and mqtt_config.enabled:
+            self._init_mqtt(mqtt_config)
+        
+        logger.info(f"V2V Network initialized: {update_rate_hz} Hz, range {max_range}m"
+                    f"{' [MQTT enabled]' if self._mqtt_transport else ''}")
+    
+    def _init_mqtt(self, mqtt_config):
+        """Initialize MQTT transport from config."""
+        try:
+            from .mqtt_transport import MQTTTransport
+            
+            self._mqtt_transport = MQTTTransport(
+                broker_host=mqtt_config.broker_host,
+                broker_port=mqtt_config.broker_port,
+                client_id=mqtt_config.client_id,
+                qos=mqtt_config.qos,
+                keepalive=mqtt_config.keepalive,
+                tls_enabled=mqtt_config.tls_enabled,
+                tls_ca_certs=mqtt_config.tls_ca_certs,
+                tls_certfile=mqtt_config.tls_certfile,
+                tls_keyfile=mqtt_config.tls_keyfile
+            )
+            if not self._mqtt_transport.connect():
+                logger.warning("MQTT connection failed, falling back to in-process mode")
+                self._mqtt_transport = None
+        except ImportError:
+            logger.warning("paho-mqtt not installed, falling back to in-process mode")
+            self._mqtt_transport = None
+        except Exception as e:
+            logger.warning(f"MQTT initialization failed: {e}, falling back to in-process mode")
+            self._mqtt_transport = None
     
     def register(self, vehicle_id: int, vehicle: carla.Actor):
         """
@@ -151,11 +190,19 @@ class V2VNetworkEnhanced:
             bsm = self._create_bsm(vehicle, vehicle_id, snapshot, delta_time)
             self.bsm_messages[vehicle_id] = bsm
             
+            # Publish via MQTT if transport is active
+            if self._mqtt_transport:
+                self._mqtt_transport.publish_bsm(vehicle_id, bsm)
+            
             # Update message counter
             self.msg_counters[vehicle_id] = (self.msg_counters[vehicle_id] + 1) % 128
             
             # Update speed history
             self.prev_speeds[vehicle_id] = bsm.speed
+        
+        # Merge BSMs received via MQTT from remote vehicles
+        if self._mqtt_transport:
+            self._merge_mqtt_received()
         
         # Discover neighbors and calculate distances
         self._discover_neighbors()
@@ -355,3 +402,61 @@ class V2VNetworkEnhanced:
                 f"Neighbors:{len(neighbors):2d} | "
                 f"Threats:{len(high_threats):2d} | "
                 f"Msgs:{self.msg_counters.get(ego_id, 0):3d}")
+    
+    # --- MQTT support methods ---
+    
+    def _merge_mqtt_received(self):
+        """
+        Merge BSM messages received via MQTT into local state.
+        
+        Only merges messages from vehicles NOT registered locally
+        (remote vehicles on other CARLA instances or external sources).
+        For locally registered vehicles, the locally created BSM is
+        authoritative to avoid overwriting with stale MQTT data.
+        """
+        if not self._mqtt_transport:
+            return
+        
+        received = self._mqtt_transport.get_received_bsm()
+        for vehicle_id, bsm in received.items():
+            if vehicle_id not in self.vehicles:
+                # Remote vehicle — use MQTT message as source of truth
+                self.bsm_messages[vehicle_id] = bsm
+                self.stats['total_messages_received'] += 1
+    
+    @property
+    def mqtt_transport(self):
+        """
+        Access the MQTT transport layer for advanced configuration.
+        
+        Returns:
+            MQTTTransport instance or None if MQTT is disabled
+        """
+        return self._mqtt_transport
+    
+    @property
+    def mqtt_enabled(self) -> bool:
+        """Check if MQTT transport is active."""
+        return self._mqtt_transport is not None and self._mqtt_transport.is_connected
+    
+    def get_mqtt_stats(self) -> Optional[dict]:
+        """
+        Get MQTT transport statistics for research analysis.
+        
+        Returns:
+            Dict with publish/receive counts, byte counts, latencies,
+            or None if MQTT is not enabled.
+        """
+        if self._mqtt_transport:
+            return self._mqtt_transport.get_stats()
+        return None
+    
+    def shutdown(self):
+        """
+        Clean shutdown of V2V network including MQTT transport.
+        Call this before destroying the network to ensure clean disconnect.
+        """
+        if self._mqtt_transport:
+            self._mqtt_transport.disconnect()
+            self._mqtt_transport = None
+            logger.info("MQTT transport shut down")

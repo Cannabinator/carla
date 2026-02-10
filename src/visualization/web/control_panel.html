@@ -268,6 +268,52 @@
         </div>
 
         <div class="card">
+            <h2>📡 MQTT Transport</h2>
+            
+            <div class="form-group checkbox-group">
+                <input type="checkbox" id="mqttEnabled" onchange="toggleMqttSettings()">
+                <label for="mqttEnabled">Enable MQTT for V2V Communication</label>
+            </div>
+            <p class="info-text" style="margin-bottom: 15px;">Route BSM messages through an MQTT broker for distributed V2V networking</p>
+            
+            <div id="mqttSettings" style="display: none;">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="mqttBrokerHost">MQTT Broker Host</label>
+                    <input type="text" id="mqttBrokerHost" value="mosquitto" placeholder="e.g., mosquitto or broker IP">
+                        <p class="info-text">MQTT broker hostname or IP address</p>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="mqttBrokerPort">MQTT Broker Port</label>
+                        <input type="number" id="mqttBrokerPort" value="1883" min="1" max="65535">
+                        <p class="info-text">Default: 1883 (plain), 8883 (TLS)</p>
+                    </div>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="mqttQos">QoS Level</label>
+                        <select id="mqttQos">
+                            <option value="0">0 - At most once (fire & forget)</option>
+                            <option value="1" selected>1 - At least once (acknowledged)</option>
+                            <option value="2">2 - Exactly once (guaranteed)</option>
+                        </select>
+                        <p class="info-text">Quality of Service for message delivery</p>
+                    </div>
+                    
+                    <div class="form-group">
+                        <div class="checkbox-group" style="margin-top: 28px;">
+                            <input type="checkbox" id="mqttTls">
+                            <label for="mqttTls">Enable TLS Encryption</label>
+                        </div>
+                        <p class="info-text">Secure broker connection with TLS/SSL</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
             <h2>🎮 Simulation Control</h2>
             <button class="btn btn-primary" id="startBtn" onclick="startSimulation()">
                 ▶️ Start Simulation
@@ -299,6 +345,10 @@
                     <div class="stat-value" id="statV2V">0</div>
                     <div class="stat-label">V2V Msgs</div>
                 </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="statMqtt" style="font-size: 1em;">OFF</div>
+                    <div class="stat-label">MQTT</div>
+                </div>
             </div>
         </div>
 
@@ -329,6 +379,11 @@
             addLog('Logs cleared');
         }
         
+        function toggleMqttSettings() {
+            const enabled = document.getElementById('mqttEnabled').checked;
+            document.getElementById('mqttSettings').style.display = enabled ? 'block' : 'none';
+        }
+        
         async function startSimulation() {
             const config = {
                 carla_host: document.getElementById('carlaHost').value,
@@ -338,11 +393,19 @@
                 v2v_range: parseInt(document.getElementById('v2vRange').value),
                 lidar_quality: document.getElementById('lidarQuality').value,
                 csv_logging: document.getElementById('csvLogging').checked,
-                console_output: document.getElementById('consoleOutput').checked
+                console_output: document.getElementById('consoleOutput').checked,
+                mqtt_enabled: document.getElementById('mqttEnabled').checked,
+                mqtt_broker_host: document.getElementById('mqttBrokerHost').value,
+                mqtt_broker_port: parseInt(document.getElementById('mqttBrokerPort').value),
+                mqtt_qos: parseInt(document.getElementById('mqttQos').value),
+                mqtt_tls_enabled: document.getElementById('mqttTls').checked
             };
             
             addLog('Starting simulation with config: ' + JSON.stringify(config, null, 2));
             addLog('Connecting to CARLA at ' + config.carla_host + ':' + config.carla_port);
+            if (config.mqtt_enabled) {
+                addLog('📡 MQTT enabled → broker: ' + config.mqtt_broker_host + ':' + config.mqtt_broker_port + ' (QoS ' + config.mqtt_qos + ')');
+            }
             updateStatus('statusBadge', 'STARTING...', 'idle');
             
             document.getElementById('startBtn').disabled = true;
@@ -413,6 +476,16 @@
                     document.getElementById('statElapsed').textContent = (status.elapsed || 0) + 's';
                     document.getElementById('statVehicles').textContent = status.vehicles || 0;
                     document.getElementById('statV2V').textContent = status.v2v_messages || 0;
+                    
+                    // Update MQTT status
+                    const mqttEl = document.getElementById('statMqtt');
+                    if (status.mqtt_enabled) {
+                        mqttEl.textContent = status.mqtt_connected ? '🟢 ON' : '🔴 ERR';
+                        mqttEl.style.color = status.mqtt_connected ? '#4ade80' : '#ef4444';
+                    } else {
+                        mqttEl.textContent = 'OFF';
+                        mqttEl.style.color = '#667eea';
+                    }
                 } else if (status.status === 'completed') {
                     updateStatus('statusBadge', 'COMPLETED', 'idle');
                     addLog('✓ Simulation completed');

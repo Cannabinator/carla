@@ -23,6 +23,8 @@ services:
       - CARLA_HOST=192.168.1.101
       - CARLA_PORT=2000
     restart: unless-stopped
+    depends_on:
+      - mosquitto
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/')"]
       interval: 30s
@@ -30,7 +32,15 @@ services:
       retries: 3
       start_period: 10s
 
-# Optional: Add a network for connecting to CARLA server
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: carla-mqtt-broker
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf
+    restart: unless-stopped
+
 networks:
   default:
     name: carla-v2v-network

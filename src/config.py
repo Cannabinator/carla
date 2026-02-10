@@ -73,8 +73,26 @@ class VehicleConfig:
     min_wheels: int = 4  # Filter for 4-wheeled vehicles only
 
 
+@dataclass
+class MQTTConfig:
+    """MQTT transport configuration for V2V communication."""
+    enabled: bool = False  # Disabled by default — uses in-process mode
+    broker_host: str = 'localhost'
+    broker_port: int = 1883  # 1883=plain, 8883=TLS
+    client_id: str = 'v2v_network'
+    qos: int = 1  # 0=at most once, 1=at least once, 2=exactly once
+    keepalive: int = 60  # seconds
+    
+    # TLS/SSL settings (for encryption research)
+    tls_enabled: bool = False
+    tls_ca_certs: Optional[str] = None
+    tls_certfile: Optional[str] = None
+    tls_keyfile: Optional[str] = None
+
+
 # Default configurations
 DEFAULT_SIM_CONFIG = SimulationConfig()
 DEFAULT_VIZ_CONFIG = VisualizationConfig()
 DEFAULT_V2V_CONFIG = V2VConfig()
 DEFAULT_VEHICLE_CONFIG = VehicleConfig()
+DEFAULT_MQTT_CONFIG = MQTTConfig()

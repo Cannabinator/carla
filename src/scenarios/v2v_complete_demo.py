@@ -107,13 +107,33 @@ def run_complete_v2v_demo(config: ScenarioConfig, status_callback=None, server_m
             v2v: Optional[V2VNetworkEnhanced] = None
             if config.v2v_enabled:
                 print(f"📡 Initializing V2V Network...")
+                
+                # Build MQTT config if enabled in scenario config
+                mqtt_cfg = None
+                if getattr(config, 'mqtt_enabled', False):
+                    from src.config import MQTTConfig
+                    mqtt_cfg = MQTTConfig(
+                        enabled=True,
+                        broker_host=config.mqtt_broker_host,
+                        broker_port=config.mqtt_broker_port,
+                        client_id=config.mqtt_client_id,
+                        qos=config.mqtt_qos,
+                        tls_enabled=config.mqtt_tls_enabled,
+                        tls_ca_certs=config.mqtt_tls_ca_certs,
+                        tls_certfile=config.mqtt_tls_certfile,
+                        tls_keyfile=config.mqtt_tls_keyfile
+                    )
+                
                 v2v = V2VNetworkEnhanced(
                     max_range=config.v2v_range,
                     update_rate_hz=2.0,  # SAE J2735 standard
                     enable_cooperative_perception=True,
-                    world=session.world
+                    world=session.world,
+                    mqtt_config=mqtt_cfg
                 )
-                print(f"   ✓ V2V initialized: {config.v2v_range}m range, 2 Hz update rate")
+                
+                mqtt_status = " [MQTT]" if v2v.mqtt_enabled else ""
+                print(f"   ✓ V2V initialized: {config.v2v_range}m range, 2 Hz update rate{mqtt_status}")
                 
                 # Note: V2V REST API available at separate scenario (v2v_api_scenario.py)
                 # to avoid threading conflicts with LiDAR API server
@@ -436,6 +456,19 @@ def run_complete_v2v_demo(config: ScenarioConfig, status_callback=None, server_m
                 print(f"   Max neighbors:       {stats['max_neighbors']}")
                 print(f"   Cooperative shares:  {stats['cooperative_shares']}")
                 
+                # MQTT transport statistics
+                mqtt_stats = v2v.get_mqtt_stats()
+                if mqtt_stats:
+                    print(f"\n   MQTT Transport:")
+                    print(f"     Messages published: {mqtt_stats['messages_published']}")
+                    print(f"     Messages received:  {mqtt_stats['messages_received']}")
+                    print(f"     Bytes published:    {mqtt_stats['bytes_published']:,}")
+                    print(f"     Bytes received:     {mqtt_stats['bytes_received']:,}")
+                    print(f"     Avg publish latency: {mqtt_stats['avg_publish_latency_ms']:.2f}ms")
+                    print(f"     Avg receive latency: {mqtt_stats['avg_receive_latency_ms']:.2f}ms")
+                    print(f"     Publish errors:     {mqtt_stats['publish_errors']}")
+                    print(f"     Deserialize errors: {mqtt_stats['deserialize_errors']}")
+                
                 # Show final ego BSM
                 ego_bsm = v2v.get_bsm(0)
                 if ego_bsm:
@@ -498,6 +531,10 @@ def run_complete_v2v_demo(config: ScenarioConfig, status_callback=None, server_m
             # Now cleanup collector
             lidar_api.collector.cleanup()
             print("✓ LiDAR streaming stopped")
+        
+        # Shutdown V2V MQTT transport if active
+        if v2v:
+            v2v.shutdown()
         
         # Context manager handles CARLA cleanup automatically
         print(f"\n📝 Log file saved: {log_file}")
@@ -651,6 +688,11 @@ def run_simulation_headless(
     spectator_height: float = 50.0,
     spectator_pitch: float = -90.0,
     v2v_message_logging: bool = False,
+    mqtt_enabled: bool = False,
+    mqtt_broker_host: str = "localhost",
+    mqtt_broker_port: int = 1883,
+    mqtt_qos: int = 1,
+    mqtt_tls_enabled: bool = False,
     status_callback = None,
     server_module = None
 ):
@@ -670,11 +712,16 @@ def run_simulation_headless(
         spectator_height: Height of spectator camera above vehicle
         spectator_pitch: Pitch angle of spectator camera (degrees, -90 = straight down)
         v2v_message_logging: Enable detailed V2V message logging
+        mqtt_enabled: Enable MQTT transport for V2V communication
+        mqtt_broker_host: MQTT broker hostname/IP
+        mqtt_broker_port: MQTT broker port
+        mqtt_qos: MQTT QoS level (0, 1, or 2)
+        mqtt_tls_enabled: Enable TLS for MQTT connection
         status_callback: Function to call with status updates (frame, elapsed, v2v_msgs)
         server_module: Server module reference to avoid thread isolation issues
     """
     # Build configuration
-    config: ScenarioConfig = (ScenarioBuilder()
+    builder = (ScenarioBuilder()
         .with_carla_server(carla_host, carla_port)
         .with_duration(duration)
         .with_vehicles(vehicles)
@@ -684,8 +731,17 @@ def run_simulation_headless(
         .with_carla_debug(enabled=False)
         .with_spectator_follow(enabled=spectator_follow, height=spectator_height, pitch=spectator_pitch)
         .with_v2v_message_logging(enabled=v2v_message_logging)
-        .build()
     )
+    
+    if mqtt_enabled:
+        builder = builder.with_mqtt(
+            broker_host=mqtt_broker_host,
+            broker_port=mqtt_broker_port,
+            qos=mqtt_qos,
+            tls_enabled=mqtt_tls_enabled
+        )
+    
+    config: ScenarioConfig = builder.build()
     
     # Apply LiDAR settings
     config.lidar_enabled = True

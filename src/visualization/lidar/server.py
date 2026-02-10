@@ -85,6 +85,12 @@ class SimulationConfig(BaseModel):
     spectator_follow: bool = True
     spectator_height: float = 50.0
     spectator_pitch: float = -90.0
+    # MQTT options
+    mqtt_enabled: bool = False
+    mqtt_broker_host: str = "mosquitto"
+    mqtt_broker_port: int = 1883
+    mqtt_qos: int = 1
+    mqtt_tls_enabled: bool = False
 
 
 def set_collector(collector: Optional[Any]):
@@ -527,7 +533,9 @@ async def start_simulation(config: SimulationConfig):
         "elapsed": 0,
         "vehicles": config.vehicles,
         "v2v_messages": 0,
-        "error": None
+        "error": None,
+        "mqtt_enabled": config.mqtt_enabled,
+        "mqtt_connected": False
     }
     
     # Run simulation in background thread
@@ -550,6 +558,11 @@ async def start_simulation(config: SimulationConfig):
                 spectator_follow=config.spectator_follow,
                 spectator_height=config.spectator_height,
                 spectator_pitch=config.spectator_pitch,
+                mqtt_enabled=config.mqtt_enabled,
+                mqtt_broker_host=config.mqtt_broker_host,
+                mqtt_broker_port=config.mqtt_broker_port,
+                mqtt_qos=config.mqtt_qos,
+                mqtt_tls_enabled=config.mqtt_tls_enabled,
                 status_callback=update_simulation_status,
                 server_module=server_module
             )
@@ -615,6 +628,14 @@ def update_simulation_status(frame: int, elapsed: float, v2v_msgs: int):
     _simulation_status["elapsed"] = int(elapsed)
     _simulation_status["v2v_messages"] = v2v_msgs
     _simulation_status["status"] = "running"
+    
+    # Update MQTT connection status from V2V network
+    if _v2v_network is not None and hasattr(_v2v_network, 'mqtt_enabled'):
+        _simulation_status["mqtt_enabled"] = _v2v_network.mqtt_enabled
+        if _v2v_network.mqtt_enabled and _v2v_network.mqtt_transport:
+            _simulation_status["mqtt_connected"] = _v2v_network.mqtt_transport.is_connected
+        else:
+            _simulation_status["mqtt_connected"] = False
 
 
 def should_stop_simulation() -> bool:
