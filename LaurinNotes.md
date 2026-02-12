@@ -54,3 +54,6 @@ in der klasse `messages.py` sind verschiedene V2V Message Standards und funktion
     - The dlr logo should only be displayed in the control panel not in the lidar or v2v dashboard.
     - i want to know if there is a way to track the v2v data in a plot. I want to render the main vehicle moving over the map  
     in a non static but refreshing plot, if there is a vehicle that the leading vehicle is talking to i want it to be displayed as a point on the plot aswell.
+
+## Next Level implementation
+I want the Whole programm to change from a monolithic use case to a server/client structure. Instead of starting a scenario running on a dedicated carla server 

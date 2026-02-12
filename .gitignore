@@ -16,9 +16,6 @@ build/
 data/
 FrameWorksV2v/
 *.npy
-*.png
-*.jpg
-*.jpeg
 *.ply
 *.pcd
 
