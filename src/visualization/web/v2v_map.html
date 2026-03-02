@@ -13,6 +13,17 @@
             color: #e0e0e0;
             overflow: hidden;
         }
+        
+        /* DLR Logo */
+        .dlr-logo {
+            position: fixed;
+            top: 16px;
+            right: 16px;
+            height: 30px;
+            width: auto;
+            z-index: 1000;
+            opacity: 0.9;
+        }
 
         .map-container {
             position: relative;
@@ -139,6 +150,7 @@
     </style>
 </head>
 <body>
+    <img src="/assets/DLR_KI_Logo_inverted_transparent_v2.png" alt="DLR" class="dlr-logo" title="Deutsches Zentrum für Luft- und Raumfahrt">
     <div class="map-container">
         <canvas id="mapCanvas"></canvas>
 
