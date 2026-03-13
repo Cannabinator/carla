@@ -204,7 +204,7 @@
     <img src="../visualization/web/assets/DLR_KI_Logo_inverted_transparent_v2.png" alt="DLR" class="dlr-logo" title="Deutsches Zentrum für Luft- und Raumfahrt">
     <div class="container">
         <header>
-            <h1>🚗 V2V Network Dashboard</h1>
+            <h1>V2V Network Dashboard</h1>
             <p style="margin: 10px 0;">Real-time Vehicle-to-Vehicle Communication Monitor</p>
             <span class="status disconnected" id="status">Connecting...</span>
             <span class="update-time" id="lastUpdate">Last update: Never</span>
@@ -213,7 +213,7 @@
         <div class="grid">
             <!-- Network Statistics -->
             <div class="card">
-                <h2>📊 Network Statistics</h2>
+                <h2>Network Statistics</h2>
                 <div class="stat">
                     <span class="stat-label">Total Vehicles</span>
                     <span class="stat-value" id="totalVehicles">-</span>
@@ -242,7 +242,7 @@
             
             <!-- Ego Vehicle Info -->
             <div class="card">
-                <h2>👑 Ego Vehicle (ID: 0)</h2>
+                <h2>Ego Vehicle (ID: 0)</h2>
                 <div class="stat">
                     <span class="stat-label">Speed</span>
                     <span class="stat-value" id="egoSpeed">-</span>
@@ -267,7 +267,7 @@
             
             <!-- Threat Assessment -->
             <div class="card">
-                <h2>⚠️ Threat Assessment</h2>
+                <h2>Threat Assessment</h2>
                 <div id="threatList" class="vehicle-list">
                     <p style="color: #9ca3af; text-align: center;">No threats detected</p>
                 </div>
@@ -276,7 +276,7 @@
         
         <!-- Nearby Vehicles -->
         <div class="card" style="margin-bottom: 20px;">
-            <h2>📡 Nearby Vehicles</h2>
+            <h2>Nearby Vehicles</h2>
             <div id="neighborList" class="vehicle-list">
                 <p style="color: #9ca3af; text-align: center;">No nearby vehicles</p>
             </div>
@@ -284,7 +284,7 @@
         
         <!-- Network Visualization -->
         <div class="card">
-            <h2>🗺️ Network Map</h2>
+            <h2>Network Map</h2>
             <div class="network-map">
                 <canvas id="mapCanvas" class="map-canvas"></canvas>
             </div>
@@ -403,7 +403,7 @@
                     const level = t.threat_level >= 3 ? 'high' : t.threat_level >= 2 ? 'medium' : 'low';
                     return `
                         <div class="vehicle-item threat-${level}">
-                            <div class="vehicle-id">⚠️ Vehicle ${t.other_vehicle_id} - Level ${t.threat_level}</div>
+                            <div class="vehicle-id">Vehicle ${t.other_vehicle_id} - Level ${t.threat_level}</div>
                             <div class="vehicle-details">
                                 TTC: ${t.time_to_collision.toFixed(1)} s | 
                                 Distance: ${t.distance.toFixed(1)} m
