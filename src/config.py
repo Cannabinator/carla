@@ -34,7 +34,7 @@ class SimulationConfig:
     warmup_frames: int = 50
     
     # Update intervals
-    v2v_update_interval_frames: int = 4  # Update every 4 frames (0.2s at 20 FPS)
+    v2v_update_interval_frames: int = 10  # Update every 10 frames (0.5s at 20 FPS = 2 Hz)
     debug_log_interval_frames: int = 10  # Log debug every 10 frames (0.5s)
     stats_display_interval_seconds: float = 2.0  # Display stats every 2 seconds
 
@@ -61,7 +61,7 @@ class VisualizationConfig:
 class V2VConfig:
     """V2V network configuration."""
     max_range: float = 50.0  # meters
-    update_interval: float = 0.1  # seconds
+    update_interval: float = 0.5  # seconds (2 Hz)
     ego_vehicle_id: int = 0
 
 

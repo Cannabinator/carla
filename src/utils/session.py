@@ -120,6 +120,7 @@ class VehicleState:
     Makes code more readable and type-safe compared to raw tuples.
     """
     frame: int
+    sim_time: float  # Simulation time in seconds
     position: tuple[float, float, float]  # (x, y, z) in meters
     velocity: tuple[float, float, float]  # (vx, vy, vz) in m/s
     orientation: tuple[float, float, float]  # (yaw, pitch, roll) in degrees
@@ -133,7 +134,9 @@ class VehicleState:
         cls, 
         frame: int, 
         actor_snapshot, 
-        control: Optional[carla.VehicleControl] = None
+        control: Optional[carla.VehicleControl] = None,
+        sim_time: Optional[float] = None,
+        fixed_delta_seconds: float = 0.05
     ) -> 'VehicleState':
         """
         Create VehicleState from CARLA actor snapshot.
@@ -142,6 +145,8 @@ class VehicleState:
             frame: Current simulation frame
             actor_snapshot: CARLA ActorSnapshot from world.get_snapshot()
             control: Optional vehicle control state
+            sim_time: Simulation timestamp in seconds (if omitted, derived from frame)
+            fixed_delta_seconds: Step size used when deriving sim_time
             
         Returns:
             VehicleState instance
@@ -155,9 +160,13 @@ class VehicleState:
         # Calculate speed magnitude
         speed_ms = np.sqrt(velocity.x**2 + velocity.y**2 + velocity.z**2)
         speed_kmh = speed_ms * 3.6
+
+        if sim_time is None:
+            sim_time = frame * fixed_delta_seconds
         
         return cls(
             frame=frame,
+            sim_time=sim_time,
             position=(transform.location.x, transform.location.y, transform.location.z),
             velocity=(velocity.x, velocity.y, velocity.z),
             orientation=(transform.rotation.yaw, transform.rotation.pitch, transform.rotation.roll),

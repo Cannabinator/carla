@@ -29,7 +29,7 @@ class ScenarioConfig:
     # V2V
     v2v_enabled: bool = True
     v2v_range: float = 50.0
-    v2v_update_interval_frames: int = 4
+    v2v_update_interval_frames: int = 10
     
     # LiDAR
     lidar_enabled: bool = False
@@ -124,7 +124,7 @@ class ScenarioBuilder:
         return self
     
     # V2V
-    def with_v2v(self, enabled: bool = True, range_m: float = 50.0, update_interval_frames: int = 4):
+    def with_v2v(self, enabled: bool = True, range_m: float = 50.0, update_interval_frames: int = 10):
         """Configure V2V communication."""
         self._config.v2v_enabled = enabled
         self._config.v2v_range = range_m

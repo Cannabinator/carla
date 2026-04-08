@@ -10,8 +10,9 @@ import sys
 import json
 import time
 from unittest.mock import Mock, MagicMock, patch, PropertyMock
+from pathlib import Path
 
-sys.path.insert(0, '/home/workstation/carla')
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.v2v.messages import BSMCore, VehicleType, BrakingStatus
 from src.v2v.mqtt_transport import BSMSerializer, MQTTTransport
@@ -85,6 +86,12 @@ class TestBSMSerializer(unittest.TestCase):
         self.assertEqual(restored.vehicle_type, original.vehicle_type)
         self.assertEqual(restored.steering_angle, original.steering_angle)
         self.assertEqual(restored.longitudinal_accel, original.longitudinal_accel)
+        self.assertEqual(restored.lateral_accel, original.lateral_accel)
+        self.assertEqual(restored.vertical_accel, original.vertical_accel)
+        self.assertEqual(restored.yaw_rate, original.yaw_rate)
+        self.assertEqual(restored.throttle_confidence, original.throttle_confidence)
+        self.assertEqual(restored.brake_confidence, original.brake_confidence)
+        self.assertEqual(restored.steering_confidence, original.steering_confidence)
         self.assertEqual(restored.transmission_state, original.transmission_state)
     
     def test_enum_roundtrip(self):
@@ -156,6 +163,7 @@ class TestMQTTTransportUnit(unittest.TestCase):
         # Verify topic matches pattern
         call_args = mock_client.publish.call_args
         self.assertEqual(call_args[0][0], 'v2v/bsm/5')
+        self.assertEqual(call_args[1]['qos'], 1)
         
         # Verify stats updated
         self.assertEqual(transport.stats['messages_published'], 1)
@@ -231,6 +239,25 @@ class TestMQTTTransportUnit(unittest.TestCase):
         transport._on_message(None, None, mock_msg)
         
         self.assertEqual(transport.stats['deserialize_errors'], 1)
+        self.assertEqual(len(transport.get_received_bsm()), 0)
+
+    @patch('src.v2v.mqtt_transport._get_paho')
+    def test_on_message_invalid_topic_is_ignored(self, mock_get_paho):
+        """Malformed topics should not crash and should not store data."""
+        mock_mqtt = MagicMock()
+        mock_client_class = MagicMock()
+        mock_mqtt.Client = mock_client_class
+        mock_mqtt.CallbackAPIVersion.VERSION2 = 2
+        mock_mqtt.MQTTv5 = 5
+        mock_get_paho.return_value = mock_mqtt
+
+        transport = MQTTTransport()
+
+        mock_msg = MagicMock()
+        mock_msg.topic = 'v2v/invalid'
+        mock_msg.payload = b'{}'
+        transport._on_message(None, None, mock_msg)
+
         self.assertEqual(len(transport.get_received_bsm()), 0)
     
     @patch('src.v2v.mqtt_transport._get_paho')
@@ -319,6 +346,41 @@ class TestMQTTTransportUnit(unittest.TestCase):
         # Mutating returned dict should not affect internal state
         stats['messages_published'] = 9999
         self.assertEqual(transport.stats['messages_published'], 0)
+
+    @patch('src.v2v.mqtt_transport._get_paho')
+    def test_on_connect_subscribes_bsm_wildcard(self, mock_get_paho):
+        """Successful connect callback should set flags and subscribe."""
+        mock_mqtt = MagicMock()
+        mock_client_class = MagicMock()
+        mock_mqtt.Client = mock_client_class
+        mock_mqtt.CallbackAPIVersion.VERSION2 = 2
+        mock_mqtt.MQTTv5 = 5
+        mock_mqtt.CONNACK_ACCEPTED = 0
+        mock_get_paho.return_value = mock_mqtt
+
+        transport = MQTTTransport()
+        client = MagicMock()
+
+        transport._on_connect(client, None, None, 0)
+
+        self.assertTrue(transport.is_connected)
+        client.subscribe.assert_called_once_with('v2v/bsm/+', qos=1)
+
+    @patch('src.v2v.mqtt_transport._get_paho')
+    def test_on_disconnect_clears_connected_state(self, mock_get_paho):
+        """Disconnect callback should mark transport as disconnected."""
+        mock_mqtt = MagicMock()
+        mock_client_class = MagicMock()
+        mock_mqtt.Client = mock_client_class
+        mock_mqtt.CallbackAPIVersion.VERSION2 = 2
+        mock_mqtt.MQTTv5 = 5
+        mock_get_paho.return_value = mock_mqtt
+
+        transport = MQTTTransport()
+        transport._connected = True
+
+        transport._on_disconnect(None, None, None, 1)
+        self.assertFalse(transport.is_connected)
 
 
 class TestV2VNetworkWithMQTTDisabled(unittest.TestCase):
@@ -427,6 +489,60 @@ class TestMQTTConfigDataclass(unittest.TestCase):
         self.assertEqual(cfg.broker_port, 8883)
         self.assertTrue(cfg.tls_enabled)
         self.assertEqual(cfg.tls_ca_certs, '/path/to/ca.pem')
+
+
+class TestMQTTReconnectDedupBehavior(unittest.TestCase):
+    """Validate remote message counting across repeated merges and reconnect-like transitions."""
+
+    def test_merge_remote_messages_deduplicates_same_signature(self):
+        from src.v2v.network_enhanced import V2VNetworkEnhanced
+        from tests.v2v.test_v2v_basic import MockWorld
+
+        class StaticTransport:
+            def __init__(self, bsm):
+                self._bsm = bsm
+
+            def get_received_bsm(self):
+                return {777: self._bsm}
+
+        world = MockWorld()
+        v2v = V2VNetworkEnhanced(max_range=100.0, world=world)
+
+        bsm = BSMCore(timestamp=5.0, msg_count=1, vehicle_id=777, latitude=1.0, longitude=1.0, speed=2.0, heading=90.0)
+        v2v._mqtt_transport = StaticTransport(bsm)
+
+        v2v._merge_mqtt_received()
+        v2v._merge_mqtt_received()
+
+        self.assertEqual(v2v.get_network_stats()['total_messages_received'], 1)
+
+    def test_merge_remote_messages_counts_new_signature_after_reconnect(self):
+        from src.v2v.network_enhanced import V2VNetworkEnhanced
+        from tests.v2v.test_v2v_basic import MockWorld
+
+        class SequenceTransport:
+            def __init__(self, bsms):
+                self._bsms = bsms
+                self._index = 0
+
+            def get_received_bsm(self):
+                bsm = self._bsms[min(self._index, len(self._bsms) - 1)]
+                self._index += 1
+                return {888: bsm}
+
+        world = MockWorld()
+        v2v = V2VNetworkEnhanced(max_range=100.0, world=world)
+
+        first = BSMCore(timestamp=10.0, msg_count=10, vehicle_id=888, latitude=3.0, longitude=4.0, speed=1.0, heading=0.0)
+        second = BSMCore(timestamp=10.5, msg_count=11, vehicle_id=888, latitude=3.1, longitude=4.1, speed=1.2, heading=10.0)
+        v2v._mqtt_transport = SequenceTransport([first, second])
+
+        v2v._merge_mqtt_received()
+        # Simulate reconnect/next message wave by replacing transport instance.
+        v2v._mqtt_transport = SequenceTransport([second])
+        v2v._merge_mqtt_received()
+
+        self.assertEqual(v2v.get_network_stats()['total_messages_received'], 2)
 
 
 def run_tests():

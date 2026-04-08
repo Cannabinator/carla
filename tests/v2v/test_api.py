@@ -7,10 +7,11 @@ Tests all endpoints, WebSocket functionality, and data validation.
 import unittest
 import sys
 import asyncio
-from unittest.mock import Mock, MagicMock, patch
+from unittest.mock import Mock, MagicMock, AsyncMock, patch
 from fastapi.testclient import TestClient
+from pathlib import Path
 
-sys.path.insert(0, '/home/workstation/carla')
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.v2v import V2VNetworkEnhanced, create_v2v_api, BSMCore, VehicleType, BrakingStatus
 from src.v2v.api import V2VAPI
@@ -202,6 +203,26 @@ class TestV2VAPI(unittest.TestCase):
         self.assertEqual(data["vehicle_id"], 1)
         self.assertEqual(data["position"]["x"], 100)
         self.assertEqual(data["position"]["y"], 50)
+
+    def test_get_bsm_vehicle_not_found(self):
+        """Unknown vehicle in /bsm/{id} should return 404."""
+        response = self.client.get("/bsm/999")
+        self.assertEqual(response.status_code, 404)
+        self.assertIn("detail", response.json())
+
+    def test_websocket_streams_v2v_payload(self):
+        """WebSocket endpoint should emit structured periodic payloads."""
+        v1 = MockVehicle(1, x=0, y=0)
+        self.world.add_vehicle(v1)
+        self.v2v.register(1, v1)
+        self.v2v.update(force=True)
+
+        with self.client.websocket_connect("/ws/v2v") as websocket:
+            data = websocket.receive_json()
+            self.assertIn("timestamp", data)
+            self.assertIn("vehicles", data)
+            self.assertIn("bsm_messages", data)
+            self.assertIsInstance(data["bsm_messages"], list)
     
     def test_get_network_stats(self):
         """Test getting network statistics"""
@@ -300,6 +321,30 @@ class TestAPIResponseFormat(unittest.TestCase):
             # Check BSM is complete
             self.assertIn("speed", neighbor["bsm"])
             self.assertIn("heading", neighbor["bsm"])
+
+
+class TestV2VAPIWebSocketResilience(unittest.TestCase):
+    """Test resilience when websocket clients disconnect or fail to send."""
+
+    def setUp(self):
+        self.world = MockWorld()
+        self.v2v = V2VNetworkEnhanced(max_range=100.0, update_rate_hz=2.0, world=self.world)
+        self.api = create_v2v_api(self.v2v, port=8001)
+
+    def test_broadcast_update_removes_disconnected_clients(self):
+        """Clients that raise during send should be removed from client list."""
+        healthy_client = Mock()
+        healthy_client.send_json = AsyncMock(return_value=None)
+
+        failing_client = Mock()
+        failing_client.send_json = AsyncMock(side_effect=RuntimeError("socket closed"))
+
+        self.api.websocket_clients = [healthy_client, failing_client]
+
+        asyncio.run(self.api.broadcast_update({"ok": True}))
+
+        self.assertIn(healthy_client, self.api.websocket_clients)
+        self.assertNotIn(failing_client, self.api.websocket_clients)
 
 
 def run_tests():

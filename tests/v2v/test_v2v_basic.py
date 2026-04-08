@@ -7,8 +7,9 @@ Tests core V2V functionality with mock objects.
 import unittest
 import sys
 import time
+from pathlib import Path
 
-sys.path.insert(0, '/home/workstation/carla')
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.v2v import V2VNetworkEnhanced, BSMCore
 
@@ -103,8 +104,9 @@ class MockActorSnapshot:
 
 class MockWorldSnapshot:
     """Mock for carla.WorldSnapshot"""
-    def __init__(self, vehicles):
+    def __init__(self, vehicles, elapsed_seconds=0.0):
         self.vehicles = vehicles
+        self.timestamp = type('obj', (object,), {'elapsed_seconds': elapsed_seconds})()
     
     def find(self, vehicle_id):
         """Find actor snapshot by ID"""
@@ -117,12 +119,16 @@ class MockWorldSnapshot:
 class MockWorld:
     def __init__(self):
         self.vehicles = []
+        self.elapsed_seconds = 0.0
     
     def get_snapshot(self):
-        return MockWorldSnapshot(self.vehicles)
+        return MockWorldSnapshot(self.vehicles, elapsed_seconds=self.elapsed_seconds)
     
     def add_vehicle(self, v):
         self.vehicles.append(v)
+
+    def set_elapsed_seconds(self, elapsed_seconds):
+        self.elapsed_seconds = elapsed_seconds
 
 
 class TestV2VBasics(unittest.TestCase):
@@ -199,7 +205,137 @@ class TestV2VBasics(unittest.TestCase):
         
         self.assertIn('total_messages_sent', stats)
         self.assertIn('average_neighbors', stats)
-        self.assertGreater(stats['total_messages_sent'], 0)
+        self.assertEqual(stats['total_messages_sent'], 1)
+        self.assertEqual(stats['average_neighbors'], 0.0)
+
+    def test_message_counter_wraps_at_128(self):
+        """Message counters should wrap from 127 back to 0."""
+        world = MockWorld()
+        v2v = V2VNetworkEnhanced(max_range=100.0, world=world)
+
+        v1 = MockVehicle(1, 0, 0)
+        world.add_vehicle(v1)
+        v2v.register(1, v1)
+        v2v.msg_counters[1] = 127
+
+        v2v.update(force=True)
+        self.assertEqual(v2v.get_bsm(1).msg_count, 127)
+        self.assertEqual(v2v.msg_counters[1], 0)
+
+    def test_neighbor_range_boundary_is_inclusive(self):
+        """Vehicles exactly at max_range must still be treated as neighbors."""
+        world = MockWorld()
+        v2v = V2VNetworkEnhanced(max_range=50.0, world=world)
+
+        v1 = MockVehicle(1, 0, 0)
+        v2 = MockVehicle(2, 50, 0)  # Exactly at boundary
+        world.add_vehicle(v1)
+        world.add_vehicle(v2)
+        v2v.register(1, v1)
+        v2v.register(2, v2)
+
+        v2v.update(force=True)
+        neighbors = [n.vehicle_id for n in v2v.get_neighbors(1)]
+        self.assertIn(2, neighbors)
+
+    def test_distance_symmetry(self):
+        """Distance lookup should be symmetric for vehicle pairs."""
+        world = MockWorld()
+        v2v = V2VNetworkEnhanced(max_range=200.0, world=world)
+
+        v1 = MockVehicle(1, 10, 20)
+        v2 = MockVehicle(2, 40, 60)
+        world.add_vehicle(v1)
+        world.add_vehicle(v2)
+        v2v.register(1, v1)
+        v2v.register(2, v2)
+
+        v2v.update(force=True)
+        self.assertAlmostEqual(v2v.get_distance(1, 2), v2v.get_distance(2, 1), places=6)
+
+    def test_unregister_removes_from_neighbors_on_next_update(self):
+        """Removed vehicles must not remain discoverable as neighbors."""
+        world = MockWorld()
+        v2v = V2VNetworkEnhanced(max_range=200.0, world=world)
+
+        v1 = MockVehicle(1, 0, 0)
+        v2 = MockVehicle(2, 20, 0)
+        world.add_vehicle(v1)
+        world.add_vehicle(v2)
+        v2v.register(1, v1)
+        v2v.register(2, v2)
+        v2v.update(force=True)
+        self.assertIn(2, [n.vehicle_id for n in v2v.get_neighbors(1)])
+
+        v2v.unregister(2)
+        v2v.update(force=True)
+        self.assertNotIn(2, [n.vehicle_id for n in v2v.get_neighbors(1)])
+
+    def test_bidirectional_sharing_honors_share_distance_threshold(self):
+        """Cooperative sharing should only include neighbors within share distance."""
+        world = MockWorld()
+        v2v = V2VNetworkEnhanced(max_range=100.0, world=world)
+
+        src = MockVehicle(1, 0, 0)
+        near = MockVehicle(2, 49.5, 0)
+        far = MockVehicle(3, 70, 0)
+        for v in [src, near, far]:
+            world.add_vehicle(v)
+            v2v.register(v.id, v)
+
+        v2v.update(force=True)
+        recipients = v2v.enable_bidirectional_sharing(1, {'dummy': True})
+        self.assertIn(2, recipients)
+        self.assertNotIn(3, recipients)
+
+    def test_remote_message_count_does_not_duplicate_same_signature(self):
+        """Receiving same remote BSM repeatedly should increment count once."""
+        world = MockWorld()
+        v2v = V2VNetworkEnhanced(max_range=100.0, world=world)
+
+        remote_bsm = BSMCore(
+            timestamp=10.0,
+            msg_count=5,
+            vehicle_id=999,
+            latitude=10.0,
+            longitude=5.0,
+            speed=3.0,
+            heading=45.0,
+        )
+
+        class MockTransport:
+            def get_received_bsm(self):
+                return {999: remote_bsm}
+
+        v2v._mqtt_transport = MockTransport()
+        v2v._merge_mqtt_received()
+        v2v._merge_mqtt_received()
+
+        self.assertEqual(v2v.get_network_stats()['total_messages_received'], 1)
+
+    def test_scalability_100_vehicles_all_neighbors(self):
+        """With large range, each vehicle should discover all other vehicles in a 100-vehicle run."""
+        world = MockWorld()
+        v2v = V2VNetworkEnhanced(max_range=10000.0, world=world)
+
+        vehicle_count = 100
+        for i in range(vehicle_count):
+            # Spread along x-axis to keep deterministic positions.
+            vehicle = MockVehicle(i, x=i * 2, y=0)
+            world.add_vehicle(vehicle)
+            v2v.register(i, vehicle)
+
+        v2v.update(force=True)
+
+        # Every vehicle should have all others as neighbors when range is huge.
+        for i in range(vehicle_count):
+            neighbors = v2v.get_neighbors(i)
+            self.assertEqual(len(neighbors), vehicle_count - 1)
+
+        stats = v2v.get_network_stats()
+        self.assertEqual(stats['max_neighbors'], vehicle_count - 1)
+        self.assertEqual(stats['average_neighbors'], float(vehicle_count - 1))
+        self.assertEqual(stats['total_messages_sent'], vehicle_count)
     
     def test_one_line_status(self):
         """Test one-line status output"""

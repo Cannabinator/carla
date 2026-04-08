@@ -78,8 +78,12 @@ class V2VNetworkEnhanced:
         
         # Timing
         self.last_update_time = 0.0
+        self.last_update_sim_time: Optional[float] = None
         self.last_tick_time = 0.0
         self.world = world
+
+        # Track remote message signatures to avoid counting duplicates repeatedly
+        self._last_remote_signatures: Dict[int, Tuple[int, float]] = {}
         
         # Statistics
         self.stats = {
@@ -151,6 +155,7 @@ class V2VNetworkEnhanced:
         self.msg_counters.pop(vehicle_id, None)
         self.neighbors.pop(vehicle_id, None)
         self.prev_speeds.pop(vehicle_id, None)
+        self._last_remote_signatures.pop(vehicle_id, None)
         
         logger.debug(f"Vehicle {vehicle_id} unregistered from V2V network")
     
@@ -170,20 +175,36 @@ class V2VNetworkEnhanced:
         Returns:
             True if update was performed
         """
-        # Check update timing (2 Hz)
-        if not force and not self.should_update():
-            return False
-        
-        current_time = time.time()
-        delta_time = current_time - self.last_update_time
-        self.last_update_time = current_time
-        
         if snapshot is None and self.world:
             snapshot = self.world.get_snapshot()
         
         if snapshot is None:
             logger.warning("No snapshot available for V2V update")
             return False
+
+        sim_time = self._extract_snapshot_time(snapshot)
+
+        # Gate by simulation time when available for deterministic 2 Hz behavior.
+        if not force:
+            if sim_time is not None and self.last_update_sim_time is not None:
+                if (sim_time - self.last_update_sim_time) < self.update_interval:
+                    return False
+            elif not self.should_update():
+                return False
+
+        current_time = time.time()
+        if sim_time is not None and self.last_update_sim_time is not None:
+            delta_time = max(sim_time - self.last_update_sim_time, 1e-6)
+        elif self.last_update_time > 0.0:
+            delta_time = max(current_time - self.last_update_time, 1e-6)
+        else:
+            delta_time = self.update_interval
+
+        self.last_update_time = current_time
+        if sim_time is not None:
+            self.last_update_sim_time = sim_time
+
+        successful_sends = 0
         
         # Update BSM messages for all vehicles
         for vehicle_id, vehicle in self.vehicles.items():
@@ -192,7 +213,11 @@ class V2VNetworkEnhanced:
             
             # Publish via MQTT if transport is active
             if self._mqtt_transport:
-                self._mqtt_transport.publish_bsm(vehicle_id, bsm)
+                if self._mqtt_transport.publish_bsm(vehicle_id, bsm):
+                    successful_sends += 1
+            else:
+                # In-process mode: each generated BSM counts as one local send event.
+                successful_sends += 1
             
             # Update message counter
             self.msg_counters[vehicle_id] = (self.msg_counters[vehicle_id] + 1) % 128
@@ -212,6 +237,7 @@ class V2VNetworkEnhanced:
         
         # Update statistics
         self._update_stats()
+        self.stats['total_messages_sent'] += successful_sends
         
         logger.debug(f"V2V update completed: {len(self.vehicles)} vehicles, "
                     f"avg {self.stats['average_neighbors']:.1f} neighbors")
@@ -230,17 +256,28 @@ class V2VNetworkEnhanced:
             prev_velocity=prev_speed,
             delta_time=delta_time
         )
+
+    def _extract_snapshot_time(self, snapshot) -> Optional[float]:
+        """Extract simulation time in seconds from a CARLA WorldSnapshot."""
+        try:
+            if hasattr(snapshot, 'timestamp') and snapshot.timestamp is not None:
+                if hasattr(snapshot.timestamp, 'elapsed_seconds'):
+                    return float(snapshot.timestamp.elapsed_seconds)
+        except Exception:
+            return None
+        return None
     
     def _discover_neighbors(self):
         """Discover neighboring vehicles within communication range"""
         vehicle_ids = list(self.vehicles.keys())
+        self.distances.clear()
         
         # Reset neighbors for all vehicles
         for vid in vehicle_ids:
             self.neighbors[vid] = []
         
         # Check all vehicle pairs
-        for i, vid1 in enumerate(vehicle_ids):
+        for vid1 in vehicle_ids:
             bsm1 = self.bsm_messages.get(vid1)
             if not bsm1:
                 continue
@@ -259,10 +296,9 @@ class V2VNetworkEnhanced:
                 dy = bsm2.longitude - bsm1.longitude
                 distance = math.sqrt(dx**2 + dy**2)
                 
-                # Store distance (only once per pair)
-                if (vid2, vid1) not in self.distances:
-                    self.distances[(vid1, vid2)] = distance
-                    self.distances[(vid2, vid1)] = distance
+                # Always refresh pair distances so logs/APIs reflect current state.
+                self.distances[(vid1, vid2)] = distance
+                self.distances[(vid2, vid1)] = distance
                 
                 # Check if within range and add to neighbors
                 if distance <= self.max_range:
@@ -288,7 +324,7 @@ class V2VNetworkEnhanced:
                     'level': threat_level,
                     'ttc': ttc,
                     'distance': distance,
-                    'timestamp': time.time()
+                    'timestamp': bsm1.timestamp
                 }
     
     def _update_stats(self):
@@ -298,8 +334,6 @@ class V2VNetworkEnhanced:
             self.stats['average_neighbors'] = sum(neighbor_counts) / len(neighbor_counts)
             self.stats['max_neighbors'] = max(neighbor_counts)
         
-        self.stats['total_messages_sent'] += len(self.bsm_messages)
-    
     def get_neighbors(self, vehicle_id: int) -> List[BSMCore]:
         """
         Get BSM messages from neighboring vehicles.
@@ -422,7 +456,10 @@ class V2VNetworkEnhanced:
             if vehicle_id not in self.vehicles:
                 # Remote vehicle — use MQTT message as source of truth
                 self.bsm_messages[vehicle_id] = bsm
-                self.stats['total_messages_received'] += 1
+                signature = (bsm.msg_count, bsm.timestamp)
+                if self._last_remote_signatures.get(vehicle_id) != signature:
+                    self.stats['total_messages_received'] += 1
+                    self._last_remote_signatures[vehicle_id] = signature
     
     @property
     def mqtt_transport(self):

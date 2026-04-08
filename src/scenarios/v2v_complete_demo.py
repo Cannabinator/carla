@@ -389,14 +389,26 @@ def run_complete_v2v_demo(config: ScenarioConfig, status_callback=None, server_m
                     state: VehicleState = VehicleState.from_snapshot(
                         frame=frame,
                         actor_snapshot=ego_snapshot,
-                        control=ego.get_control()
+                        control=ego.get_control(),
+                        sim_time=float(snapshot.timestamp.elapsed_seconds),
+                        fixed_delta_seconds=config.fixed_delta_seconds
                     )
+
+                    neighbors = v2v.get_neighbors(0) if v2v else []
+                    threats = v2v.get_threats(0) if v2v else []
+                    neighbor_distance_map: Dict[int, float] = {}
+                    if v2v:
+                        for neighbor in neighbors:
+                            neighbor_distance_map[neighbor.vehicle_id] = (
+                                v2v.get_distance(0, neighbor.vehicle_id) or 0.0
+                            )
                     
                     # Prepare V2V data for observers
                     v2v_data: Dict[str, Any] = {
-                        'neighbors': v2v.get_neighbors(0) if v2v else [],
-                        'threats': v2v.get_threats(0) if v2v else [],
+                        'neighbors': neighbors,
+                        'threats': threats,
                         'bsm': v2v.get_bsm(0) if v2v else None,
+                        'neighbor_distance_map': neighbor_distance_map,
                         'total_vehicles': actor_mgr.count(),
                         'lidar_points': lidar_api.get_point_count() if lidar_api else 0
                     }
@@ -407,7 +419,7 @@ def run_complete_v2v_demo(config: ScenarioConfig, status_callback=None, server_m
                     
                     # Update status callback if provided (for web API)
                     if status_callback and frame % 10 == 0:
-                        current_elapsed = time.time() - start_time
+                        current_elapsed = state.sim_time
                         v2v_msgs = v2v.get_network_stats()['total_messages_sent'] if v2v else 0
                         status_callback(frame, current_elapsed, v2v_msgs)
                     

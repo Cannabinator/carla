@@ -193,10 +193,13 @@ class CSVDataLogger(ScenarioObserver):
         neighbors = v2v_data.get('neighbors', [])
         threats = v2v_data.get('threats', [])
         bsm = v2v_data.get('bsm', None)
+        neighbor_distance_map = v2v_data.get('neighbor_distance_map', {})
         
         # Prepare neighbor data (IDs and distances)
         neighbor_ids = ','.join([str(n.vehicle_id) for n in neighbors[:5]]) if neighbors else ''
-        neighbor_distances = ','.join([f"{n.distance:.1f}" for n in neighbors[:5] if hasattr(n, 'distance')]) or ''
+        neighbor_distances = ','.join([
+            f"{neighbor_distance_map.get(n.vehicle_id, 0.0):.1f}" for n in neighbors[:5]
+        ]) if neighbors else ''
         
         # Threat data
         threat_count = len([t for t in threats if t.get('level', 0) >= 2]) if threats else 0
@@ -210,6 +213,8 @@ class CSVDataLogger(ScenarioObserver):
         self.writer.writerow({  # type: ignore
             'frame': state.frame,
             'timestamp': datetime.now().isoformat(),
+            'sim_timestamp': f"{state.sim_time:.3f}",
+            'wall_timestamp': datetime.now().isoformat(),
             'pos_x': state.position[0],
             'pos_y': state.position[1],
             'pos_z': state.position[2],
@@ -239,7 +244,7 @@ class CSVDataLogger(ScenarioObserver):
         """Open CSV file and write header."""
         self.csv_file = open(self.output_path, 'w', newline='')
         fieldnames = [
-            'frame', 'timestamp', 
+            'frame', 'timestamp', 'sim_timestamp', 'wall_timestamp',
             'pos_x', 'pos_y', 'pos_z',
             'vel_x', 'vel_y', 'vel_z',
             'speed_kmh', 'speed_ms',
@@ -504,7 +509,7 @@ class V2VMessageLogger(ScenarioObserver):
         if not self._file_opened:
             self._open_csv()
         
-        sim_timestamp = state.frame * 0.05  # 20 FPS = 0.05s per frame
+        sim_timestamp = state.sim_time
         wall_timestamp = datetime.now().isoformat()
         
         # Get all BSM messages

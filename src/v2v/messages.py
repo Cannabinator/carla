@@ -202,16 +202,23 @@ def calculate_threat_level(ego_bsm: BSMCore, other_bsm: BSMCore) -> tuple:
     
     rel_vx = other_vx - ego_vx
     rel_vy = other_vy - ego_vy
-    rel_speed = math.sqrt(rel_vx**2 + rel_vy**2)
+
+    if distance > 1e-6:
+        # Use radial closing speed along line of sight, not relative speed magnitude.
+        ux = dx / distance
+        uy = dy / distance
+        closing_speed = -(rel_vx * ux + rel_vy * uy)
+    else:
+        closing_speed = float('inf')
     
     # Time to collision (TTC)
-    if rel_speed > 0.1:  # Avoid division by zero
-        ttc = distance / rel_speed
+    if closing_speed > 0.1:  # Positive means vehicles are converging
+        ttc = distance / closing_speed
     else:
         ttc = float('inf')
     
     # Determine threat level
-    if distance > 100:
+    if distance > 100 or closing_speed <= 0.1:
         threat = 0  # No threat
     elif ttc > 10:
         threat = 1  # Low threat
@@ -246,12 +253,21 @@ def create_bsm_from_carla(vehicle, vehicle_id: int, msg_count: int,
         BSMCore instance
     """
     transform = vehicle.get_transform()
+    sim_timestamp = time.time()
     
     # Get FRESH velocity from snapshot (not cached from previous tick)
     if snapshot:
         actor_snapshot = snapshot.find(vehicle.id)
-        velocity = actor_snapshot.get_velocity()
-        angular_velocity = actor_snapshot.get_angular_velocity()
+        if actor_snapshot:
+            transform = actor_snapshot.get_transform()
+            velocity = actor_snapshot.get_velocity()
+            angular_velocity = actor_snapshot.get_angular_velocity()
+            if hasattr(snapshot, 'timestamp') and hasattr(snapshot.timestamp, 'elapsed_seconds'):
+                sim_timestamp = float(snapshot.timestamp.elapsed_seconds)
+        else:
+            # Fallback if actor is missing in snapshot (e.g., destroyed this tick).
+            velocity = vehicle.get_velocity()
+            angular_velocity = vehicle.get_angular_velocity()
     else:
         # Fallback to cached data (SCIENTIFICALLY INACCURATE)
         velocity = vehicle.get_velocity()
@@ -261,7 +277,7 @@ def create_bsm_from_carla(vehicle, vehicle_id: int, msg_count: int,
     speed_ms = math.sqrt(velocity.x**2 + velocity.y**2 + velocity.z**2)
     
     # Calculate accelerations
-    if prev_velocity:
+    if prev_velocity is not None:
         long_accel = (speed_ms - prev_velocity) / delta_time if delta_time > 0 else 0.0
     else:
         long_accel = 0.0
@@ -316,7 +332,7 @@ def create_bsm_from_carla(vehicle, vehicle_id: int, msg_count: int,
     vehicle_height = bbox.extent.z * 2
     
     return BSMCore(
-        timestamp=time.time(),
+        timestamp=sim_timestamp,
         msg_count=msg_count % 128,
         vehicle_id=vehicle_id,
         vehicle_type=VehicleType.PASSENGER_CAR,
