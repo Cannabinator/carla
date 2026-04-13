@@ -10,6 +10,7 @@ from typing import List, Optional, Dict
 from pydantic import BaseModel
 import asyncio
 import json
+import math
 from datetime import datetime
 from pathlib import Path
 
@@ -25,14 +26,19 @@ class BSMResponse(BaseModel):
     msg_count: int
     vehicle_type: str
     position: Dict[str, float]  # {x, y, z}
+    position_accuracy: float
     speed: float
     heading: float
     steering_angle: float
     acceleration: Dict[str, float]  # {longitudinal, lateral, vertical}
+    yaw_rate: float
     dimensions: Dict[str, float]  # {length, width, height}
     brake_status: str
     brake_pressure: float
     transmission_state: str
+    throttle_confidence: float
+    brake_confidence: float
+    steering_confidence: float
 
 
 class NeighborInfo(BaseModel):
@@ -61,6 +67,33 @@ class NetworkStats(BaseModel):
     cooperative_shares: int
     update_rate_hz: float
     max_range_m: float
+
+
+class EnhancedMetadata(BaseModel):
+    """Optional enhanced metadata for V2V messages"""
+    transmission_time: Optional[float] = None
+    reception_time: Optional[float] = None
+    link_quality: Optional[float] = None
+    hop_count: Optional[int] = None
+    priority: Optional[int] = None
+
+
+class ThreatOverview(BaseModel):
+    """Threat assessment with safe TTC handling"""
+    other_vehicle_id: int
+    threat_level: int  # 0-4
+    time_to_collision: Optional[float]
+    distance: float
+    timestamp: float
+
+
+class VehicleOverview(BaseModel):
+    """Aggregated per-vehicle overview"""
+    vehicle_id: int
+    bsm: BSMResponse
+    neighbors: List[NeighborInfo]
+    threats: List[ThreatOverview]
+    enhanced: EnhancedMetadata
 
 
 class V2VAPI:
@@ -103,6 +136,7 @@ class V2VAPI:
                 "endpoints": [
                     "/dashboard",
                     "/vehicles",
+                    "/vehicles/overview",
                     "/vehicles/{vehicle_id}",
                     "/vehicles/{vehicle_id}/neighbors",
                     "/vehicles/{vehicle_id}/threats",
@@ -125,6 +159,28 @@ class V2VAPI:
         async def get_vehicles():
             """Get list of all vehicle IDs in network"""
             return list(self.v2v.vehicles.keys())
+
+        @self.app.get("/vehicles/overview", response_model=List[VehicleOverview])
+        async def get_vehicle_overview():
+            """Get aggregated data for all vehicles in the network"""
+            overview = []
+            for vehicle_id in sorted(self.v2v.vehicles.keys()):
+                bsm = self.v2v.get_bsm(vehicle_id)
+                if not bsm:
+                    continue
+
+                neighbors = self._build_neighbors(vehicle_id, bsm)
+                threats = self._build_threats_overview(vehicle_id)
+                enhanced = self._build_enhanced_metadata(vehicle_id)
+
+                overview.append(VehicleOverview(
+                    vehicle_id=vehicle_id,
+                    bsm=self._bsm_to_response(bsm),
+                    neighbors=neighbors,
+                    threats=threats,
+                    enhanced=enhanced
+                ))
+            return overview
         
         @self.app.get("/vehicles/{vehicle_id}", response_model=BSMResponse)
         async def get_vehicle(vehicle_id: int):
@@ -243,6 +299,7 @@ class V2VAPI:
                 "y": bsm.longitude,
                 "z": bsm.elevation
             },
+            position_accuracy=bsm.position_accuracy,
             speed=bsm.speed,
             heading=bsm.heading,
             steering_angle=bsm.steering_angle,
@@ -251,6 +308,7 @@ class V2VAPI:
                 "lateral": bsm.lateral_accel,
                 "vertical": bsm.vertical_accel
             },
+            yaw_rate=bsm.yaw_rate,
             dimensions={
                 "length": bsm.vehicle_length,
                 "width": bsm.vehicle_width,
@@ -258,7 +316,65 @@ class V2VAPI:
             },
             brake_status=BrakingStatus(bsm.brake_status).name,
             brake_pressure=bsm.brake_pressure,
-            transmission_state=bsm.transmission_state
+            transmission_state=bsm.transmission_state,
+            throttle_confidence=bsm.throttle_confidence,
+            brake_confidence=bsm.brake_confidence,
+            steering_confidence=bsm.steering_confidence
+        )
+
+    def _build_neighbors(self, vehicle_id: int, ego_bsm: BSMCore) -> List[NeighborInfo]:
+        """Build NeighborInfo list for a vehicle"""
+        neighbor_bsms = self.v2v.get_neighbors(vehicle_id)
+        neighbors = []
+
+        for neighbor_bsm in neighbor_bsms:
+            distance = self.v2v.get_distance(vehicle_id, neighbor_bsm.vehicle_id)
+            rel_speed = abs(neighbor_bsm.speed - ego_bsm.speed)
+
+            neighbors.append(NeighborInfo(
+                vehicle_id=neighbor_bsm.vehicle_id,
+                distance=distance if distance else 0.0,
+                relative_speed=rel_speed,
+                bsm=self._bsm_to_response(neighbor_bsm)
+            ))
+
+        return neighbors
+
+    def _build_threats_overview(self, vehicle_id: int) -> List[ThreatOverview]:
+        """Build a safe threat list with non-finite TTC handled"""
+        threats = []
+        for threat in self.v2v.get_threats(vehicle_id):
+            ttc = threat.get('ttc')
+            if ttc is None or not math.isfinite(ttc):
+                ttc_value = None
+            else:
+                ttc_value = ttc
+
+            threats.append(ThreatOverview(
+                other_vehicle_id=threat['other_vehicle_id'],
+                threat_level=threat['level'],
+                time_to_collision=ttc_value,
+                distance=threat['distance'],
+                timestamp=threat['timestamp']
+            ))
+
+        return threats
+
+    def _build_enhanced_metadata(self, vehicle_id: int) -> EnhancedMetadata:
+        """Extract enhanced metadata when available"""
+        enhanced_msg = None
+        if hasattr(self.v2v, 'enhanced_messages'):
+            enhanced_msg = self.v2v.enhanced_messages.get(vehicle_id)
+
+        if not enhanced_msg:
+            return EnhancedMetadata()
+
+        return EnhancedMetadata(
+            transmission_time=enhanced_msg.transmission_time,
+            reception_time=enhanced_msg.reception_time,
+            link_quality=enhanced_msg.link_quality,
+            hop_count=enhanced_msg.hop_count,
+            priority=enhanced_msg.priority
         )
     
     def _bsm_to_dict(self, bsm: BSMCore) -> dict:

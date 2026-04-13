@@ -182,7 +182,7 @@ def run_complete_v2v_demo(config: ScenarioConfig, status_callback=None, server_m
             # ========================================================================
             if config.lidar_enabled:
                 print(f"\n📡 Initializing LiDAR for existing server...")
-                from src.visualization.lidar.api import LiDARStreamingAPI
+                from src.lidar.api import LiDARStreamingAPI
                 
                 # Create LiDAR API but DON'T start a new server (main server already running)
                 lidar_api = LiDARStreamingAPI(
@@ -204,7 +204,7 @@ def run_complete_v2v_demo(config: ScenarioConfig, status_callback=None, server_m
                     print(f"   ✓ LiDAR registered with main server on port {config.lidar_web_port} (via module ref)")
                 else:
                     # Direct import (standalone execution)
-                    from src.visualization.lidar import server as lidar_server
+                    from src.lidar import server as lidar_server
                     lidar_server.set_collector(lidar_api.collector)
                     lidar_server.set_v2v_network(v2v)
                     print(f"   ✓ LiDAR registered with main server on port {config.lidar_web_port}")
@@ -531,7 +531,7 @@ def run_complete_v2v_demo(config: ScenarioConfig, status_callback=None, server_m
                 server_module.set_collector(None)  # Cancel streaming task
             else:
                 try:
-                    from src.visualization.lidar import server as lidar_server
+                    from src.lidar import server as lidar_server
                     logger.info("Signaling server to stop streaming...")
                     lidar_server.set_collector(None)  # Cancel streaming task
                 except ImportError:

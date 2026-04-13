@@ -13,8 +13,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Now import after path is set
-import src.visualization.lidar.api as api_module
-from src.visualization.lidar.api import LiDARStreamingAPI, create_ego_lidar_stream
+import src.lidar.api as api_module
+from src.lidar.api import LiDARStreamingAPI, create_ego_lidar_stream
 
 
 class TestLiDARStreamingAPI(unittest.TestCase):
@@ -26,7 +26,7 @@ class TestLiDARStreamingAPI(unittest.TestCase):
         self.mock_vehicle = Mock()
         self.mock_vehicle.id = 42
     
-    @patch('src.visualization.lidar.api.LiDARDataCollector')
+    @patch('src.lidar.api.LiDARDataCollector')
     def test_initialization_default_config(self, mock_collector_class):
         """Test API initialization with default configuration."""
         api = LiDARStreamingAPI(self.mock_world)
@@ -40,7 +40,7 @@ class TestLiDARStreamingAPI(unittest.TestCase):
         self.assertEqual(call_args[1]['channels'], 64)
         self.assertEqual(call_args[1]['points_per_second'], 1000000)
     
-    @patch('src.visualization.lidar.api.LiDARDataCollector')
+    @patch('src.lidar.api.LiDARDataCollector')
     def test_initialization_custom_config(self, mock_collector_class):
         """Test API initialization with custom configuration."""
         api = LiDARStreamingAPI(
@@ -58,7 +58,7 @@ class TestLiDARStreamingAPI(unittest.TestCase):
         # lidar_range is passed as kwarg 'range' to collector
         self.assertEqual(call_args[1]['range'], 50.0)
     
-    @patch('src.visualization.lidar.api.LiDARDataCollector')
+    @patch('src.lidar.api.LiDARDataCollector')
     def test_register_vehicle(self, mock_collector_class):
         """Test vehicle registration."""
         api = LiDARStreamingAPI(self.mock_world)
@@ -68,7 +68,7 @@ class TestLiDARStreamingAPI(unittest.TestCase):
         
         mock_collector.register_vehicle.assert_called_once_with(0, self.mock_vehicle)
     
-    @patch('src.visualization.lidar.api.LiDARDataCollector')
+    @patch('src.lidar.api.LiDARDataCollector')
     def test_register_ego_only(self, mock_collector_class):
         """Test ego-only vehicle registration."""
         api = LiDARStreamingAPI(self.mock_world)
@@ -79,10 +79,10 @@ class TestLiDARStreamingAPI(unittest.TestCase):
         # Should register with vehicle_id=0
         mock_collector.register_vehicle.assert_called_once_with(0, self.mock_vehicle)
     
-    @patch('src.visualization.lidar.api.LiDARDataCollector')
-    @patch('src.visualization.lidar.api.set_collector')
-    @patch('src.visualization.lidar.api.threading.Thread')
-    @patch('src.visualization.lidar.api.time.sleep')
+    @patch('src.lidar.api.LiDARDataCollector')
+    @patch('src.lidar.api.set_collector')
+    @patch('src.lidar.api.threading.Thread')
+    @patch('src.lidar.api.time.sleep')
     def test_start_server_background(self, mock_sleep, mock_thread, mock_set_collector, mock_collector_class):
         """Test starting server in background mode."""
         api = LiDARStreamingAPI(self.mock_world)
@@ -100,7 +100,7 @@ class TestLiDARStreamingAPI(unittest.TestCase):
         # Verify server is marked as running
         self.assertTrue(api.is_running)
     
-    @patch('src.visualization.lidar.api.LiDARDataCollector')
+    @patch('src.lidar.api.LiDARDataCollector')
     def test_stop(self, mock_collector_class):
         """Test stopping the API and cleanup."""
         api = LiDARStreamingAPI(self.mock_world)
@@ -115,7 +115,7 @@ class TestLiDARStreamingAPI(unittest.TestCase):
         # Verify running flag cleared
         self.assertFalse(api.is_running)
     
-    @patch('src.visualization.lidar.api.LiDARDataCollector')
+    @patch('src.lidar.api.LiDARDataCollector')
     def test_get_point_count(self, mock_collector_class):
         """Test getting current point count."""
         api = LiDARStreamingAPI(self.mock_world)
@@ -130,7 +130,7 @@ class TestLiDARStreamingAPI(unittest.TestCase):
         count = api.get_point_count()
         self.assertEqual(count, 50000)
     
-    @patch('src.visualization.lidar.api.LiDARDataCollector')
+    @patch('src.lidar.api.LiDARDataCollector')
     def test_get_point_count_no_data(self, mock_collector_class):
         """Test getting point count when no data available."""
         api = LiDARStreamingAPI(self.mock_world)
@@ -140,7 +140,7 @@ class TestLiDARStreamingAPI(unittest.TestCase):
         count = api.get_point_count()
         self.assertEqual(count, 0)
     
-    @patch('src.visualization.lidar.api.LiDARDataCollector')
+    @patch('src.lidar.api.LiDARDataCollector')
     def test_get_vehicle_count(self, mock_collector_class):
         """Test getting number of registered vehicles."""
         api = LiDARStreamingAPI(self.mock_world)
@@ -160,7 +160,7 @@ class TestCreateEgoLidarStream(unittest.TestCase):
         self.mock_vehicle = Mock()
         self.mock_vehicle.id = 42
     
-    @patch('src.visualization.lidar.api.LiDARStreamingAPI')
+    @patch('src.lidar.api.LiDARStreamingAPI')
     def test_create_high_quality(self, mock_api_class):
         """Test creating high-quality ego stream."""
         mock_api = mock_api_class.return_value
@@ -187,7 +187,7 @@ class TestCreateEgoLidarStream(unittest.TestCase):
         # Verify return value
         self.assertEqual(result, mock_api)
     
-    @patch('src.visualization.lidar.api.LiDARStreamingAPI')
+    @patch('src.lidar.api.LiDARStreamingAPI')
     def test_create_fast_mode(self, mock_api_class):
         """Test creating fast mode ego stream."""
         mock_api = mock_api_class.return_value
@@ -213,7 +213,7 @@ class TestCreateEgoLidarStream(unittest.TestCase):
 class TestAPIConfiguration(unittest.TestCase):
     """Test different configuration scenarios."""
     
-    @patch('src.visualization.lidar.api.LiDARDataCollector')
+    @patch('src.lidar.api.LiDARDataCollector')
     def test_single_vehicle_mode(self, mock_collector_class):
         """Test API configured for single vehicle (most common use case)."""
         world = Mock()
@@ -226,7 +226,7 @@ class TestAPIConfiguration(unittest.TestCase):
         mock_collector = mock_collector_class.return_value
         self.assertEqual(mock_collector.register_vehicle.call_count, 1)
     
-    @patch('src.visualization.lidar.api.LiDARDataCollector')
+    @patch('src.lidar.api.LiDARDataCollector')
     def test_multi_vehicle_mode(self, mock_collector_class):
         """Test API configured for multiple vehicles."""
         world = Mock()
@@ -240,7 +240,7 @@ class TestAPIConfiguration(unittest.TestCase):
         mock_collector = mock_collector_class.return_value
         self.assertEqual(mock_collector.register_vehicle.call_count, 3)
     
-    @patch('src.visualization.lidar.api.LiDARDataCollector')
+    @patch('src.lidar.api.LiDARDataCollector')
     def test_performance_mode_settings(self, mock_collector_class):
         """Test fast performance mode settings."""
         world = Mock()

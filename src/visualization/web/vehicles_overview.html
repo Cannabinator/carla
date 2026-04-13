@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>V2V Vehicles Overview</title>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap">
+    <style>
+        :root {
+            --bg: #050505;
+            --panel: #0c0c0c;
+            --panel-border: #1a1a1a;
+            --text: #e8e8e8;
+            --muted: #9aa0a6;
+            --accent: #2fd4b1;
+            --accent-2: #3ea6ff;
+            --error: #ff5d5d;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: "Space Mono", "Courier New", monospace;
+            color: var(--text);
+            background:
+                radial-gradient(1200px 700px at 15% 10%, #111111 0%, #070707 50%, #020202 100%),
+                repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.03) 0 1px, transparent 1px 60px),
+                repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.02) 0 1px, transparent 1px 60px);
+            min-height: 100vh;
+        }
+
+        .page {
+            padding: 20px 22px 32px;
+        }
+
+        .toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 18px;
+        }
+
+        .title {
+            font-size: 18px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            color: var(--accent);
+        }
+
+        .meta {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            font-size: 12px;
+            color: var(--muted);
+        }
+
+        .status {
+            text-transform: uppercase;
+            font-size: 11px;
+            letter-spacing: 0.6px;
+        }
+
+        .status.ok {
+            color: var(--accent);
+        }
+
+        .status.loading {
+            color: var(--accent-2);
+        }
+
+        .status.error {
+            color: var(--error);
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 14px;
+        }
+
+        .vehicle-card {
+            background: var(--panel);
+            border: 1px solid var(--panel-border);
+            border-radius: 8px;
+            padding: 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4), 0 10px 24px rgba(0, 0, 0, 0.25);
+        }
+
+        .card-header {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 8px;
+        }
+
+        .vehicle-id {
+            font-weight: 700;
+            font-size: 14px;
+            color: var(--text);
+        }
+
+        .vehicle-type {
+            font-size: 11px;
+            color: var(--muted);
+        }
+
+        .kv {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .kv-row {
+            display: grid;
+            grid-template-columns: 140px 1fr;
+            gap: 8px;
+            font-size: 11px;
+            line-height: 1.3;
+        }
+
+        .kv-key {
+            color: var(--muted);
+        }
+
+        .kv-value {
+            color: var(--text);
+            word-break: break-word;
+        }
+
+        .empty {
+            color: var(--muted);
+            font-size: 13px;
+            padding: 24px;
+            border: 1px dashed var(--panel-border);
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .footer {
+            margin-top: 18px;
+            font-size: 11px;
+            color: var(--muted);
+        }
+
+        @media (max-width: 640px) {
+            .kv-row {
+                grid-template-columns: 120px 1fr;
+            }
+
+            .page {
+                padding: 16px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="page">
+        <div class="toolbar">
+            <div class="title">V2V Vehicles Overview</div>
+            <div class="meta">
+                <span class="status loading" id="status">loading</span>
+                <span>vehicles: <span id="count">0</span></span>
+                <span>last update: <span id="lastUpdate">--:--:--</span></span>
+            </div>
+        </div>
+
+        <div class="grid" id="grid">
+            <div class="empty">Waiting for vehicle data...</div>
+        </div>
+
+        <div class="footer">API base: <span id="apiBase"></span></div>
+    </div>
+
+    <script>
+        const grid = document.getElementById("grid");
+        const statusEl = document.getElementById("status");
+        const countEl = document.getElementById("count");
+        const lastUpdateEl = document.getElementById("lastUpdate");
+        const apiBaseEl = document.getElementById("apiBase");
+
+        const refreshMs = 1000;
+
+        function getApiBase() {
+            const params = new URLSearchParams(window.location.search);
+            const override = params.get("api") || window.V2V_API_BASE;
+            if (override) {
+                return override;
+            }
+            return `${window.location.origin}/api/v2v`;
+        }
+
+        function joinUrl(base, path) {
+            const trimmed = base.endsWith("/") ? base.slice(0, -1) : base;
+            return `${trimmed}${path}`;
+        }
+
+        const apiBase = getApiBase();
+        const overviewUrl = joinUrl(apiBase, "/vehicles/overview");
+        apiBaseEl.textContent = apiBase;
+
+        function setStatus(state, text) {
+            statusEl.textContent = text || state;
+            statusEl.className = `status ${state}`;
+        }
+
+        function formatNumber(value, digits) {
+            const num = Number(value);
+            if (!Number.isFinite(num)) {
+                return "n/a";
+            }
+            return num.toFixed(digits);
+        }
+
+        function formatInt(value) {
+            const num = Number(value);
+            if (!Number.isFinite(num)) {
+                return "n/a";
+            }
+            return Math.round(num).toString();
+        }
+
+        function formatVec3(vec) {
+            if (!vec) {
+                return "n/a";
+            }
+            return `${formatNumber(vec.x, 2)}, ${formatNumber(vec.y, 2)}, ${formatNumber(vec.z, 2)}`;
+        }
+
+        function formatAccel(accel) {
+            if (!accel) {
+                return "n/a";
+            }
+            return `${formatNumber(accel.longitudinal, 2)}, ${formatNumber(accel.lateral, 2)}, ${formatNumber(accel.vertical, 2)}`;
+        }
+
+        function formatDims(dim) {
+            if (!dim) {
+                return "n/a";
+            }
+            return `${formatNumber(dim.length, 2)} x ${formatNumber(dim.width, 2)} x ${formatNumber(dim.height, 2)}`;
+        }
+
+        function formatNeighbors(neighbors) {
+            if (!Array.isArray(neighbors) || neighbors.length === 0) {
+                return "none";
+            }
+            return neighbors.map((n) => {
+                return `#${n.vehicle_id} ${formatNumber(n.distance, 1)}m rel ${formatNumber(n.relative_speed, 1)}m/s`;
+            }).join(" | ");
+        }
+
+        function formatThreats(threats) {
+            if (!Array.isArray(threats) || threats.length === 0) {
+                return "none";
+            }
+            return threats.map((t) => {
+                const ttc = t.time_to_collision === null || t.time_to_collision === undefined
+                    ? "n/a"
+                    : `${formatNumber(t.time_to_collision, 2)}s`;
+                return `#${t.other_vehicle_id} L${t.threat_level} ttc ${ttc} d ${formatNumber(t.distance, 1)}m`;
+            }).join(" | ");
+        }
+
+        function addRow(container, key, value) {
+            const row = document.createElement("div");
+            row.className = "kv-row";
+
+            const keyEl = document.createElement("div");
+            keyEl.className = "kv-key";
+            keyEl.textContent = key;
+
+            const valueEl = document.createElement("div");
+            valueEl.className = "kv-value";
+            valueEl.textContent = value;
+
+            row.appendChild(keyEl);
+            row.appendChild(valueEl);
+            container.appendChild(row);
+        }
+
+        function buildCard(vehicle) {
+            const card = document.createElement("div");
+            card.className = "vehicle-card";
+
+            const header = document.createElement("div");
+            header.className = "card-header";
+
+            const idEl = document.createElement("div");
+            idEl.className = "vehicle-id";
+            idEl.textContent = `Vehicle ${vehicle.vehicle_id}`;
+
+            const typeEl = document.createElement("div");
+            typeEl.className = "vehicle-type";
+            typeEl.textContent = vehicle.bsm?.vehicle_type || "unknown";
+
+            header.appendChild(idEl);
+            header.appendChild(typeEl);
+            card.appendChild(header);
+
+            const kv = document.createElement("div");
+            kv.className = "kv";
+
+            const bsm = vehicle.bsm || {};
+            const enhanced = vehicle.enhanced || {};
+
+            addRow(kv, "timestamp", formatNumber(bsm.timestamp, 3));
+            addRow(kv, "msg_count", formatInt(bsm.msg_count));
+            addRow(kv, "position", formatVec3(bsm.position));
+            addRow(kv, "position_accuracy", formatNumber(bsm.position_accuracy, 2));
+            addRow(kv, "speed (m/s)", formatNumber(bsm.speed, 2));
+            addRow(kv, "heading (deg)", formatNumber(bsm.heading, 1));
+            addRow(kv, "steering (deg)", formatNumber(bsm.steering_angle, 1));
+            addRow(kv, "accel (m/s^2)", formatAccel(bsm.acceleration));
+            addRow(kv, "yaw_rate", formatNumber(bsm.yaw_rate, 2));
+            addRow(kv, "dimensions (m)", formatDims(bsm.dimensions));
+            addRow(kv, "brake_status", bsm.brake_status || "n/a");
+            addRow(kv, "brake_pressure", formatNumber(bsm.brake_pressure, 1));
+            addRow(kv, "transmission", bsm.transmission_state || "n/a");
+            addRow(kv, "throttle_conf", formatNumber(bsm.throttle_confidence, 0));
+            addRow(kv, "brake_conf", formatNumber(bsm.brake_confidence, 0));
+            addRow(kv, "steering_conf", formatNumber(bsm.steering_confidence, 0));
+            addRow(kv, "neighbors", formatNeighbors(vehicle.neighbors));
+            addRow(kv, "threats", formatThreats(vehicle.threats));
+            addRow(kv, "link_quality", formatNumber(enhanced.link_quality, 1));
+            addRow(kv, "hop_count", formatInt(enhanced.hop_count));
+            addRow(kv, "priority", formatInt(enhanced.priority));
+            addRow(kv, "tx_time", formatNumber(enhanced.transmission_time, 3));
+            addRow(kv, "rx_time", formatNumber(enhanced.reception_time, 3));
+
+            card.appendChild(kv);
+            return card;
+        }
+
+        function renderVehicles(vehicles) {
+            grid.innerHTML = "";
+
+            if (!Array.isArray(vehicles) || vehicles.length === 0) {
+                const empty = document.createElement("div");
+                empty.className = "empty";
+                empty.textContent = "No vehicles available";
+                grid.appendChild(empty);
+                countEl.textContent = "0";
+                return;
+            }
+
+            vehicles.sort((a, b) => a.vehicle_id - b.vehicle_id);
+            countEl.textContent = String(vehicles.length);
+
+            const fragment = document.createDocumentFragment();
+            vehicles.forEach((vehicle) => {
+                fragment.appendChild(buildCard(vehicle));
+            });
+            grid.appendChild(fragment);
+        }
+
+        async function refresh() {
+            try {
+                setStatus("loading", "loading");
+                const response = await fetch(overviewUrl, { cache: "no-store" });
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                const data = await response.json();
+                renderVehicles(data);
+                setStatus("ok", "ok");
+                lastUpdateEl.textContent = new Date().toLocaleTimeString();
+            } catch (error) {
+                setStatus("error", "error");
+                grid.innerHTML = "";
+                const empty = document.createElement("div");
+                empty.className = "empty";
+                empty.textContent = `No data (${error.message})`;
+                grid.appendChild(empty);
+            }
+        }
+
+        refresh();
+        setInterval(refresh, refreshMs);
+    </script>
+</body>
+</html>

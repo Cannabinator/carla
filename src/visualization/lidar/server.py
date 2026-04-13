@@ -16,6 +16,7 @@ if str(project_root) not in sys.path:
 import asyncio
 import json
 import logging
+import math
 from typing import List, Optional, Dict, Any
 import threading
 
@@ -290,6 +291,15 @@ async def v2v_dashboard():
     return HTMLResponse(content="<h1>V2V dashboard not found</h1>", status_code=404)
 
 
+@app.get("/vehicles")
+async def vehicles_overview():
+    """Serve vehicles overview page."""
+    vehicles_path = Path(__file__).parent.parent / 'web' / 'vehicles_overview.html'
+    if vehicles_path.exists():
+        return HTMLResponse(content=vehicles_path.read_text())
+    return HTMLResponse(content="<h1>Vehicles overview not found</h1>", status_code=404)
+
+
 @app.on_event("startup")
 async def startup_event():
     """Store event loop reference when FastAPI starts."""
@@ -389,12 +399,127 @@ async def stream_lidar_data(update_rate: float = 0.1):
 
 
 # V2V API Endpoints
+def _enum_name(value: Any) -> str:
+    if value is None:
+        return "unknown"
+    return value.name if hasattr(value, "name") else str(value)
+
+
+def _bsm_to_dict_full(bsm) -> Dict[str, Any]:
+    return {
+        "vehicle_id": bsm.vehicle_id,
+        "timestamp": bsm.timestamp,
+        "msg_count": bsm.msg_count,
+        "vehicle_type": _enum_name(bsm.vehicle_type),
+        "position": {
+            "x": bsm.latitude,
+            "y": bsm.longitude,
+            "z": bsm.elevation
+        },
+        "position_accuracy": bsm.position_accuracy,
+        "speed": bsm.speed,
+        "heading": bsm.heading,
+        "steering_angle": bsm.steering_angle,
+        "acceleration": {
+            "longitudinal": bsm.longitudinal_accel,
+            "lateral": bsm.lateral_accel,
+            "vertical": bsm.vertical_accel
+        },
+        "yaw_rate": bsm.yaw_rate,
+        "dimensions": {
+            "length": bsm.vehicle_length,
+            "width": bsm.vehicle_width,
+            "height": bsm.vehicle_height
+        },
+        "brake_status": _enum_name(bsm.brake_status),
+        "brake_pressure": bsm.brake_pressure,
+        "transmission_state": bsm.transmission_state,
+        "throttle_confidence": bsm.throttle_confidence,
+        "brake_confidence": bsm.brake_confidence,
+        "steering_confidence": bsm.steering_confidence
+    }
+
+
+def _build_enhanced_metadata(vehicle_id: int) -> Dict[str, Any]:
+    enhanced_msg = None
+    if _v2v_network is not None and hasattr(_v2v_network, "enhanced_messages"):
+        enhanced_msg = _v2v_network.enhanced_messages.get(vehicle_id)
+
+    if not enhanced_msg:
+        return {
+            "transmission_time": None,
+            "reception_time": None,
+            "link_quality": None,
+            "hop_count": None,
+            "priority": None
+        }
+
+    return {
+        "transmission_time": enhanced_msg.transmission_time,
+        "reception_time": enhanced_msg.reception_time,
+        "link_quality": enhanced_msg.link_quality,
+        "hop_count": enhanced_msg.hop_count,
+        "priority": enhanced_msg.priority
+    }
+
+
 @app.get("/api/v2v/vehicles")
 async def get_vehicles():
     """Get list of all vehicle IDs in V2V network."""
     if _v2v_network is None:
         return []
     return list(_v2v_network.vehicles.keys())
+
+
+@app.get("/api/v2v/vehicles/overview")
+async def get_vehicle_overview():
+    """Get aggregated data for all vehicles in V2V network."""
+    if _v2v_network is None:
+        return []
+
+    overview = []
+    for vehicle_id in sorted(_v2v_network.vehicles.keys()):
+        bsm = _v2v_network.get_bsm(vehicle_id)
+        if not bsm:
+            continue
+
+        neighbors = []
+        for neighbor_bsm in _v2v_network.get_neighbors(vehicle_id):
+            distance = _v2v_network.get_distance(vehicle_id, neighbor_bsm.vehicle_id)
+            rel_speed = abs(neighbor_bsm.speed - bsm.speed)
+
+            neighbors.append({
+                "vehicle_id": neighbor_bsm.vehicle_id,
+                "distance": distance if distance else 0.0,
+                "relative_speed": rel_speed,
+                "bsm": _bsm_to_dict_full(neighbor_bsm)
+            })
+
+        threats = []
+        for threat in _v2v_network.get_threats(vehicle_id):
+            ttc = threat.get("ttc")
+            if ttc is None or not math.isfinite(ttc):
+                ttc_value = None
+            else:
+                ttc_value = ttc
+
+            threats.append({
+                "other_vehicle_id": threat["other_vehicle_id"],
+                "threat_level": threat["level"],
+                "time_to_collision": ttc_value,
+                "distance": threat["distance"],
+                "timestamp": threat["timestamp"]
+            })
+
+        overview.append({
+            "vehicle_id": vehicle_id,
+            "bsm": _bsm_to_dict_full(bsm),
+            "neighbors": neighbors,
+            "threats": threats,
+            "enhanced": _build_enhanced_metadata(vehicle_id)
+        })
+
+    return overview
 
 
 @app.get("/api/v2v/network/stats")

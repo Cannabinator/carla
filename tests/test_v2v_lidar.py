@@ -21,7 +21,7 @@ except ImportError:
     print("⚠️  CARLA module not found. Some tests will be skipped.")
     carla = None
 
-from src.visualization.lidar import LiDARDataCollector, ConnectionManager
+from src.lidar import LiDARDataCollector, ConnectionManager
 
 
 class TestLiDARDataCollector(unittest.TestCase):
