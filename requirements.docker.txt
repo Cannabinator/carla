@@ -13,8 +13,6 @@ pydantic>=2.0.0
 # Data processing (needed for LiDAR data handling)
 numpy>=1.24.0
 
-# MQTT transport for V2V communication
-paho-mqtt>=2.0.0
 
 # Note: The following are NOT included (optional/heavy):
 # - open3d (heavy 3D visualization)

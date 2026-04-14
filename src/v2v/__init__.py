@@ -1,4 +1,4 @@
-"""V2V Communication Package - Enhanced BSM Implementation"""
+"""V2V Communication Package — SAE J2735 BSM over IEEE 802.11p DSRC/WAVE"""
 
 from .messages import (
     BSMCore, BSMPartII, CooperativeAwarenessMessage, V2VEnhancedMessage,
@@ -7,12 +7,12 @@ from .messages import (
 )
 from .network_enhanced import V2VNetworkEnhanced
 from .api import V2VAPI, create_v2v_api
-from .mqtt_transport import MQTTTransport, BSMSerializer
+from .dsrc_channel import DSRCChannel, DSRCConfig
 
 __all__ = [
     'BSMCore', 'BSMPartII', 'CooperativeAwarenessMessage', 'V2VEnhancedMessage',
     'VehicleType', 'BrakingStatus',
     'create_bsm_from_carla', 'calculate_threat_level',
     'V2VNetworkEnhanced', 'V2VAPI', 'create_v2v_api',
-    'MQTTTransport', 'BSMSerializer'
+    'DSRCChannel', 'DSRCConfig',
 ]

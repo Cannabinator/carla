@@ -211,16 +211,32 @@
                     <span class="stat-value" id="messagesSent">-</span>
                 </div>
                 <div class="stat">
-                    <span class="stat-label">Avg Neighbors</span>
+                    <span class="stat-label">Messages Received</span>
+                    <span class="stat-value" id="messagesReceived">-</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Update Count</span>
+                    <span class="stat-value" id="updateCount">-</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Avg Neighbors (instant)</span>
                     <span class="stat-value" id="avgNeighbors">-</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Avg Neighbors (cumulative)</span>
+                    <span class="stat-value" id="cumulativeAvgNeighbors">-</span>
                 </div>
                 <div class="stat">
                     <span class="stat-label">Max Neighbors</span>
                     <span class="stat-value" id="maxNeighbors">-</span>
                 </div>
                 <div class="stat">
-                    <span class="stat-label">Update Rate</span>
+                    <span class="stat-label">Target Rate</span>
                     <span class="stat-value" id="updateRate">-</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Measured Hz</span>
+                    <span class="stat-value" id="measuredHz">-</span>
                 </div>
                 <div class="stat">
                     <span class="stat-label">V2V Range</span>
@@ -336,9 +352,13 @@
                 
                 document.getElementById('totalVehicles').textContent = stats.total_vehicles;
                 document.getElementById('messagesSent').textContent = stats.total_messages_sent.toLocaleString();
-                document.getElementById('avgNeighbors').textContent = stats.average_neighbors.toFixed(1);
+                document.getElementById('messagesReceived').textContent = (stats.total_messages_received || 0).toLocaleString();
+                document.getElementById('updateCount').textContent = stats.total_update_count || 0;
+                document.getElementById('avgNeighbors').textContent = (stats.average_neighbors || 0).toFixed(2);
+                document.getElementById('cumulativeAvgNeighbors').textContent = (stats.cumulative_avg_neighbors || 0).toFixed(2);
                 document.getElementById('maxNeighbors').textContent = stats.max_neighbors;
-                document.getElementById('updateRate').textContent = `${stats.update_rate_hz} Hz`;
+                document.getElementById('updateRate').textContent = `${stats.target_update_hz || stats.update_rate_hz} Hz`;
+                document.getElementById('measuredHz').textContent = `${(stats.measured_update_hz || 0).toFixed(3)} Hz`;
                 document.getElementById('v2vRange').textContent = `${stats.max_range_m} m`;
             } catch (error) {
                 console.error('Failed to fetch network stats:', error);
@@ -364,7 +384,7 @@
                         <div class="vehicle-id">Vehicle ${n.vehicle_id}</div>
                         <div class="vehicle-details">
                             Distance: ${n.distance.toFixed(1)} m | 
-                            Speed: ${n.bsm.speed.toFixed(1)} km/h |
+                            Speed: ${n.bsm.speed.toFixed(2)} m/s |
                             Heading: ${n.bsm.heading.toFixed(0)}°
                         </div>
                     </div>
@@ -410,7 +430,7 @@
                 const response = await fetch(`http://${window.location.hostname}:8001/vehicles/0`);
                 const bsm = await response.json();
                 
-                document.getElementById('egoSpeed').textContent = `${bsm.speed.toFixed(1)} km/h`;
+                document.getElementById('egoSpeed').textContent = `${bsm.speed.toFixed(2)} m/s  (${(bsm.speed * 3.6).toFixed(1)} km/h)`;
                 document.getElementById('egoHeading').textContent = `${bsm.heading.toFixed(0)}°`;
                 document.getElementById('egoPosition').textContent = 
                     `(${bsm.position.x.toFixed(0)}, ${bsm.position.y.toFixed(0)})`;

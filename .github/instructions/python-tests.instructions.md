@@ -52,12 +52,12 @@ Do not jump to Level 3 when Level 1 or 2 can catch the bug.
 - For neighbor and range metrics, verify distances are refreshed across updates (no stale cached values).
 - When tests inspect acceleration or cadence, assert tolerances explicitly and justify them in comments.
 
-## V2V MQTT 2 Hz Requirements
+## V2V DSRC 2 Hz Requirements
 
 - For V2V communication tests, enforce a target cadence of 2 Hz (0.5 s period) unless the test explicitly documents another mode.
-- When MQTT transport is enabled, verify both sides of behavior: local publish cadence and received message cadence.
-- Keep MQTT tests deterministic by mocking broker interactions for unit/component levels; reserve real broker checks for integration tests.
-- Separate transport correctness from network-physics correctness: test serialization/transport independently from neighbor discovery/threat logic.
+- Protocol-level tests (neighbor discovery, threat assessment, message counting) must use a transparent `DSRCConfig` (zero shadowing, zero CBR, NLOS disabled) so outcomes are deterministic and not dependent on channel physics.
+- Physics-level tests (PRR vs distance, CSMA contention, LOS/NLOS) live exclusively in `tests/v2v/test_dsrc_channel.py` and should use non-zero σ and CBR appropriate for the assertion being made.
+- Separate channel-physics correctness from protocol correctness: test `DSRCChannel` in isolation; test `V2VNetworkEnhanced` with a transparent channel.
 - For cadence assertions, prefer simulation-time or controlled fake-time clocks over uncontrolled wall-time sleeps.
 
 ## Determinism And Reliability

@@ -74,20 +74,38 @@ class VehicleConfig:
 
 
 @dataclass
-class MQTTConfig:
-    """MQTT transport configuration for V2V communication."""
-    enabled: bool = False  # Disabled by default — uses in-process mode
-    broker_host: str = 'localhost'
-    broker_port: int = 1883  # 1883=plain, 8883=TLS
-    client_id: str = 'v2v_network'
-    qos: int = 1  # 0=at most once, 1=at least once, 2=exactly once
-    keepalive: int = 60  # seconds
-    
-    # TLS/SSL settings (for encryption research)
-    tls_enabled: bool = False
-    tls_ca_certs: Optional[str] = None
-    tls_certfile: Optional[str] = None
-    tls_keyfile: Optional[str] = None
+class DSRCConfig:
+    """
+    DSRC/WAVE (IEEE 802.11p) channel model parameters for V2X simulation.
+
+    Defaults follow ETSI EN 302 663 §4 (ITS-G5 Class A OBU):
+      TX power: 23 dBm ERP, carrier: 5.9 GHz, sensitivity: -85 dBm.
+
+    Path loss exponents and shadowing σ values are calibrated from
+    Paier et al. (2008) vehicle-to-vehicle measurement campaigns.
+    """
+    # TX/RX parameters
+    tx_power_dbm: float = 23.0         # ETSI Class A max: 23 dBm ERP
+    antenna_gain_dbi: float = 2.0      # Omnidirectional OBU antenna
+    rx_sensitivity_dbm: float = -85.0  # Typical 802.11p receiver floor
+
+    # Log-distance + lognormal shadowing (Paier et al. 2008)
+    path_loss_exponent_los: float = 2.0    # Urban LOS
+    path_loss_exponent_nlos: float = 2.75  # Urban NLOS (WINNER+ B1)
+    shadowing_std_los_db: float = 4.0      # LOS log-normal σ
+    shadowing_std_nlos_db: float = 6.0     # NLOS log-normal σ
+
+    # CSMA/CA channel contention (Bianchi 2000 model)
+    channel_busy_ratio: float = 0.15  # CBR: 0=empty, 1=saturated
+
+    # LOS/NLOS determination via 2-D geometric occlusion
+    enable_nlos_model: bool = True
+
+    # PRR sigmoid steepness (Sommer et al. 2011 calibration)
+    prr_sigmoid_k: float = 2.0
+
+    # Reproducibility
+    random_seed: int = 42
 
 
 # Default configurations
@@ -95,4 +113,4 @@ DEFAULT_SIM_CONFIG = SimulationConfig()
 DEFAULT_VIZ_CONFIG = VisualizationConfig()
 DEFAULT_V2V_CONFIG = V2VConfig()
 DEFAULT_VEHICLE_CONFIG = VehicleConfig()
-DEFAULT_MQTT_CONFIG = MQTTConfig()
+DEFAULT_DSRC_CONFIG = DSRCConfig()

@@ -1,7 +1,10 @@
 """
 Enhanced V2V Network Manager
-Implements BSM-based V2V communication with 2 Hz tick rate and cooperative perception.
-Supports optional MQTT transport for real network message passing.
+
+Implements SAE J2735 BSM-based V2V communication using a physics-accurate
+DSRC/WAVE (IEEE 802.11p) channel model. Operates at a 2 Hz application
+update rate aligned with CARLA world.tick(), with no external broker or
+external processes.
 """
 
 import carla
@@ -9,7 +12,6 @@ from typing import Dict, List, Optional, Tuple
 import time
 import logging
 import math
-from collections import deque
 
 from .messages import (
     BSMCore, BSMPartII, V2VEnhancedMessage,
@@ -17,117 +19,97 @@ from .messages import (
     PRIORITY_ROUTINE, PRIORITY_HIGH, PRIORITY_EMERGENCY,
     V2V_RANGE_MEDIUM, SHARE_SENSOR_DATA_DISTANCE
 )
+from .dsrc_channel import DSRCChannel, DSRCConfig
 
 logger = logging.getLogger(__name__)
 
 
 class V2VNetworkEnhanced:
     """
-    Enhanced V2V Network Manager with BSM protocol support.
-    
+    Enhanced V2V Network Manager with SAE J2735 BSM protocol support.
+
     Features:
-    - 2 Hz tick rate for V2V updates
-    - Bidirectional data sharing
-    - BSM (Basic Safety Message) protocol
-    - Cooperative perception
-    - Threat assessment
-    - Message prioritization
-    - Optional MQTT transport for real network communication
+    - 2 Hz tick rate for V2V updates, gated on CARLA simulation time
+    - SAE J2735 Basic Safety Message (BSM) protocol
+    - IEEE 802.11p DSRC/WAVE channel model (log-distance path loss +
+      log-normal shadowing + CSMA/CA contention)
+    - Cooperative perception and threat assessment
+    - Deterministic, in-process operation — no external broker required
     """
     
-    def __init__(self, 
+    def __init__(self,
                  max_range: float = V2V_RANGE_MEDIUM,
                  update_rate_hz: float = 2.0,
                  enable_cooperative_perception: bool = True,
                  world=None,
-                 mqtt_config=None):
+                 dsrc_config: Optional[DSRCConfig] = None):
         """
         Initialize enhanced V2V network.
-        
+
         Args:
-            max_range: Maximum communication range in meters
-            update_rate_hz: V2V update frequency (default 2 Hz)
-            enable_cooperative_perception: Enable sensor data sharing
-            world: CARLA World instance (optional, auto-detected from vehicles)
-            mqtt_config: Optional MQTTConfig dataclass. When provided and
-                        mqtt_config.enabled is True, BSM messages are published
-                        and received via MQTT broker instead of in-process dicts.
+            max_range: Application-layer cooperative awareness zone in meters.
+                       Vehicles outside this radius are excluded from neighbor
+                       discovery regardless of physical channel reachability.
+            update_rate_hz: BSM application update frequency (default 2 Hz per
+                            SAE J2735 §7.1 minimum beacon interval).
+            enable_cooperative_perception: Enable sensor data sharing.
+            world: CARLA World instance (optional, auto-detected on first register).
+            dsrc_config: DSRCConfig for the IEEE 802.11p channel model. When None,
+                         ETSI EN 302 663 Class A OBU defaults are used.
         """
         self.max_range = max_range
         self.update_rate_hz = update_rate_hz
-        self.update_interval = 1.0 / update_rate_hz  # 0.5s for 2 Hz
+        self.update_interval = 1.0 / update_rate_hz  # 0.5 s for 2 Hz
         self.enable_coop_perception = enable_cooperative_perception
-        
+
         # Vehicle registry
         self.vehicles: Dict[int, carla.Actor] = {}
         self.bsm_messages: Dict[int, BSMCore] = {}
         self.enhanced_messages: Dict[int, V2VEnhancedMessage] = {}
-        
-        # Message counters (0-127, wraps around)
+
+        # Message counters (0-127, wraps around per SAE J2735)
         self.msg_counters: Dict[int, int] = {}
-        
-        # Network topology
-        self.neighbors: Dict[int, List[int]] = {}  # vehicle_id -> [neighbor_ids]
-        self.distances: Dict[Tuple[int, int], float] = {}  # (id1, id2) -> distance
-        
+
+        # Network topology — populated each 2 Hz tick
+        self.neighbors: Dict[int, List[int]] = {}   # vehicle_id → [neighbor_ids]
+        self.distances: Dict[Tuple[int, int], float] = {}  # (id1, id2) → metres
+
         # Threat assessment
-        self.threats: Dict[Tuple[int, int], dict] = {}  # (ego, other) -> threat_info
-        
-        # Previous velocities for acceleration calculation
+        self.threats: Dict[Tuple[int, int], dict] = {}  # (ego, other) → threat_info
+
+        # Previous speeds for BSM acceleration estimation
         self.prev_speeds: Dict[int, float] = {}
-        
+
         # Timing
         self.last_update_time = 0.0
         self.last_update_sim_time: Optional[float] = None
-        self.last_tick_time = 0.0
         self.world = world
 
-        # Track remote message signatures to avoid counting duplicates repeatedly
-        self._last_remote_signatures: Dict[int, Tuple[int, float]] = {}
-        
         # Statistics
         self.stats = {
             'total_messages_sent': 0,
             'total_messages_received': 0,
-            'average_neighbors': 0.0,
+            'average_neighbors': 0.0,        # spatial avg over vehicles at last update
+            'cumulative_avg_neighbors': 0.0,  # running Welford time-average
             'max_neighbors': 0,
-            'cooperative_shares': 0
+            'cooperative_shares': 0,
+            'total_update_count': 0,          # number of 2 Hz ticks executed
+            'measured_update_hz': 0.0,        # achieved update rate (wall clock)
         }
-        
-        # MQTT transport (optional)
-        self._mqtt_transport = None
-        self._mqtt_config = mqtt_config
-        if mqtt_config and mqtt_config.enabled:
-            self._init_mqtt(mqtt_config)
-        
-        logger.info(f"V2V Network initialized: {update_rate_hz} Hz, range {max_range}m"
-                    f"{' [MQTT enabled]' if self._mqtt_transport else ''}")
-    
-    def _init_mqtt(self, mqtt_config):
-        """Initialize MQTT transport from config."""
-        try:
-            from .mqtt_transport import MQTTTransport
-            
-            self._mqtt_transport = MQTTTransport(
-                broker_host=mqtt_config.broker_host,
-                broker_port=mqtt_config.broker_port,
-                client_id=mqtt_config.client_id,
-                qos=mqtt_config.qos,
-                keepalive=mqtt_config.keepalive,
-                tls_enabled=mqtt_config.tls_enabled,
-                tls_ca_certs=mqtt_config.tls_ca_certs,
-                tls_certfile=mqtt_config.tls_certfile,
-                tls_keyfile=mqtt_config.tls_keyfile
-            )
-            if not self._mqtt_transport.connect():
-                logger.warning("MQTT connection failed, falling back to in-process mode")
-                self._mqtt_transport = None
-        except ImportError:
-            logger.warning("paho-mqtt not installed, falling back to in-process mode")
-            self._mqtt_transport = None
-        except Exception as e:
-            logger.warning(f"MQTT initialization failed: {e}, falling back to in-process mode")
-            self._mqtt_transport = None
+        self._first_update_wall_time: Optional[float] = None
+
+        # DSRC/WAVE (IEEE 802.11p) channel model
+        self._dsrc_channel = DSRCChannel(dsrc_config)
+
+        logger.info(
+            "V2V Network initialized: %.1f Hz, range %.0fm "
+            "[DSRC/WAVE channel: TX=%.0f dBm, n_LOS=%.2f, n_NLOS=%.2f, CBR=%.2f]",
+            update_rate_hz, max_range,
+            self._dsrc_channel.config.tx_power_dbm,
+            self._dsrc_channel.config.path_loss_exponent_los,
+            self._dsrc_channel.config.path_loss_exponent_nlos,
+            self._dsrc_channel.config.channel_busy_ratio,
+        )
     
     def register(self, vehicle_id: int, vehicle: carla.Actor):
         """
@@ -155,8 +137,7 @@ class V2VNetworkEnhanced:
         self.msg_counters.pop(vehicle_id, None)
         self.neighbors.pop(vehicle_id, None)
         self.prev_speeds.pop(vehicle_id, None)
-        self._last_remote_signatures.pop(vehicle_id, None)
-        
+
         logger.debug(f"Vehicle {vehicle_id} unregistered from V2V network")
     
     def should_update(self) -> bool:
@@ -205,43 +186,42 @@ class V2VNetworkEnhanced:
             self.last_update_sim_time = sim_time
 
         successful_sends = 0
-        
-        # Update BSM messages for all vehicles
+
+        # ── Phase 1: Build BSMs from current CARLA snapshot ──────────────────
         for vehicle_id, vehicle in self.vehicles.items():
             bsm = self._create_bsm(vehicle, vehicle_id, snapshot, delta_time)
             self.bsm_messages[vehicle_id] = bsm
-            
-            # Publish via MQTT if transport is active
-            if self._mqtt_transport:
-                if self._mqtt_transport.publish_bsm(vehicle_id, bsm):
-                    successful_sends += 1
-            else:
-                # In-process mode: each generated BSM counts as one local send event.
-                successful_sends += 1
-            
-            # Update message counter
+            successful_sends += 1
+
+            # Wrap SAE J2735 msg_count field (0-127)
             self.msg_counters[vehicle_id] = (self.msg_counters[vehicle_id] + 1) % 128
-            
-            # Update speed history
             self.prev_speeds[vehicle_id] = bsm.speed
-        
-        # Merge BSMs received via MQTT from remote vehicles
-        if self._mqtt_transport:
-            self._merge_mqtt_received()
-        
-        # Discover neighbors and calculate distances
+
+        # ── Phase 2: Run DSRC/WAVE channel model ─────────────────────────────
+        # Positions come from bsm.latitude/longitude which carry CARLA world
+        # X/Y coordinates (not geodetic degrees — see create_bsm_from_carla).
+        positions: Dict[int, Tuple[float, float]] = {
+            vid: (bsm.latitude, bsm.longitude)
+            for vid, bsm in self.bsm_messages.items()
+        }
+        self._dsrc_channel.broadcast_all(self.bsm_messages, positions)
+
+        # ── Phase 3: Neighbor discovery using channel-filtered BSM view ───────
         self._discover_neighbors()
-        
-        # Assess threats
+
+        # ── Phase 4: Threat assessment ────────────────────────────────────────
         self._assess_threats()
-        
-        # Update statistics
+
+        # ── Phase 5: Statistics ───────────────────────────────────────────────
         self._update_stats()
         self.stats['total_messages_sent'] += successful_sends
-        
-        logger.debug(f"V2V update completed: {len(self.vehicles)} vehicles, "
-                    f"avg {self.stats['average_neighbors']:.1f} neighbors")
-        
+
+        logger.debug(
+            "V2V update: %d vehicles, avg %.1f neighbours, channel PRR=%.3f",
+            len(self.vehicles),
+            self.stats['average_neighbors'],
+            self._dsrc_channel.stats.get('prr', 1.0),
+        )
         return True
     
     def _create_bsm(self, vehicle: carla.Actor, vehicle_id: int, 
@@ -268,40 +248,50 @@ class V2VNetworkEnhanced:
         return None
     
     def _discover_neighbors(self):
-        """Discover neighboring vehicles within communication range"""
+        """
+        Discover neighbours within the cooperative awareness zone.
+
+        Two-stage filter:
+          1. Application layer: geometric distance ≤ max_range.
+          2. DSRC channel layer: BSM must have survived the IEEE 802.11p
+             path-loss + shadowing + CSMA/CA PRR check in broadcast_all().
+
+        Distances are always refreshed for all in-range pairs regardless of
+        channel delivery result, so get_distance() and the REST API always
+        reflect current geometry.
+        """
         vehicle_ids = list(self.vehicles.keys())
         self.distances.clear()
-        
-        # Reset neighbors for all vehicles
+
         for vid in vehicle_ids:
             self.neighbors[vid] = []
-        
-        # Check all vehicle pairs
+
         for vid1 in vehicle_ids:
             bsm1 = self.bsm_messages.get(vid1)
             if not bsm1:
                 continue
-            
-            # Check against all OTHER vehicles (not just forward in list)
+
+            # BSMs that vid1 successfully received via DSRC channel this tick
+            received_by_vid1 = self._dsrc_channel.get_received(vid1)
+
             for vid2 in vehicle_ids:
-                if vid1 == vid2:  # Skip self
+                if vid1 == vid2:
                     continue
-                    
+
                 bsm2 = self.bsm_messages.get(vid2)
                 if not bsm2:
                     continue
-                
-                # Calculate distance
+
                 dx = bsm2.latitude - bsm1.latitude
                 dy = bsm2.longitude - bsm1.longitude
-                distance = math.sqrt(dx**2 + dy**2)
-                
-                # Always refresh pair distances so logs/APIs reflect current state.
+                distance = math.sqrt(dx * dx + dy * dy)
+
+                # Always record geometric distance for APIs / stats
                 self.distances[(vid1, vid2)] = distance
                 self.distances[(vid2, vid1)] = distance
-                
-                # Check if within range and add to neighbors
-                if distance <= self.max_range:
+
+                # Neighbour only if within zone AND BSM was delivered by channel
+                if distance <= self.max_range and vid2 in received_by_vid1:
                     self.neighbors[vid1].append(vid2)
     
     def _assess_threats(self):
@@ -328,11 +318,34 @@ class V2VNetworkEnhanced:
                 }
     
     def _update_stats(self):
-        """Update network statistics"""
+        """Update network statistics (called once per 2 Hz update)."""
+        n = self.stats['total_update_count'] + 1
+        self.stats['total_update_count'] = n
+
         if self.neighbors:
-            neighbor_counts = [len(n) for n in self.neighbors.values()]
-            self.stats['average_neighbors'] = sum(neighbor_counts) / len(neighbor_counts)
-            self.stats['max_neighbors'] = max(neighbor_counts)
+            neighbor_counts = [len(nbrs) for nbrs in self.neighbors.values()]
+            instant_avg = sum(neighbor_counts) / len(neighbor_counts)
+            self.stats['average_neighbors'] = instant_avg
+            self.stats['max_neighbors'] = max(
+                self.stats['max_neighbors'], max(neighbor_counts)
+            )
+            # Welford running mean for time-averaged neighbours
+            prev_avg = self.stats['cumulative_avg_neighbors']
+            self.stats['cumulative_avg_neighbors'] = prev_avg + (instant_avg - prev_avg) / n
+
+            # Each neighbour relationship represents a successfully received BSM
+            self.stats['total_messages_received'] += sum(neighbor_counts)
+        else:
+            self.stats['average_neighbors'] = 0.0
+
+        # Measured update Hz (uses wall clock; available from 2nd update onward)
+        now = time.time()
+        if self._first_update_wall_time is None:
+            self._first_update_wall_time = now
+        elapsed_wall = now - self._first_update_wall_time
+        if n > 1 and elapsed_wall > 0.0:
+            # Exclude the first update from the denominator to avoid startup skew
+            self.stats['measured_update_hz'] = (n - 1) / elapsed_wall
         
     def get_neighbors(self, vehicle_id: int) -> List[BSMCore]:
         """
@@ -436,64 +449,33 @@ class V2VNetworkEnhanced:
                 f"Neighbors:{len(neighbors):2d} | "
                 f"Threats:{len(high_threats):2d} | "
                 f"Msgs:{self.msg_counters.get(ego_id, 0):3d}")
-    
-    # --- MQTT support methods ---
-    
-    def _merge_mqtt_received(self):
+
+    # ── Channel access ──────────────────────────────────────────────────────────
+
+    def get_channel_stats(self) -> dict:
         """
-        Merge BSM messages received via MQTT into local state.
-        
-        Only merges messages from vehicles NOT registered locally
-        (remote vehicles on other CARLA instances or external sources).
-        For locally registered vehicles, the locally created BSM is
-        authoritative to avoid overwriting with stale MQTT data.
-        """
-        if not self._mqtt_transport:
-            return
-        
-        received = self._mqtt_transport.get_received_bsm()
-        for vehicle_id, bsm in received.items():
-            if vehicle_id not in self.vehicles:
-                # Remote vehicle — use MQTT message as source of truth
-                self.bsm_messages[vehicle_id] = bsm
-                signature = (bsm.msg_count, bsm.timestamp)
-                if self._last_remote_signatures.get(vehicle_id) != signature:
-                    self.stats['total_messages_received'] += 1
-                    self._last_remote_signatures[vehicle_id] = signature
-    
-    @property
-    def mqtt_transport(self):
-        """
-        Access the MQTT transport layer for advanced configuration.
-        
+        Get DSRC/WAVE channel model statistics for research analysis.
+
         Returns:
-            MQTTTransport instance or None if MQTT is disabled
+            Dict containing:
+              total_broadcasts   — total (sender, receiver) pair attempts
+              total_deliveries   — successful packet deliveries
+              total_drops        — packets dropped by channel model
+              prr                — rolling packet reception rate [0, 1]
+              avg_snr_margin_db  — average SNR margin above sensitivity floor
         """
-        return self._mqtt_transport
-    
-    @property
-    def mqtt_enabled(self) -> bool:
-        """Check if MQTT transport is active."""
-        return self._mqtt_transport is not None and self._mqtt_transport.is_connected
-    
-    def get_mqtt_stats(self) -> Optional[dict]:
-        """
-        Get MQTT transport statistics for research analysis.
-        
-        Returns:
-            Dict with publish/receive counts, byte counts, latencies,
-            or None if MQTT is not enabled.
-        """
-        if self._mqtt_transport:
-            return self._mqtt_transport.get_stats()
-        return None
-    
+        return self._dsrc_channel.get_stats()
+
     def shutdown(self):
         """
-        Clean shutdown of V2V network including MQTT transport.
-        Call this before destroying the network to ensure clean disconnect.
+        Clean shutdown of the V2V network.
+
+        No external connections to close — the DSRC channel is in-process.
+        Call this before destroying CARLA actors to flush any pending state.
         """
-        if self._mqtt_transport:
-            self._mqtt_transport.disconnect()
-            self._mqtt_transport = None
-            logger.info("MQTT transport shut down")
+        logger.info(
+            "V2V Network shutdown. Final channel PRR=%.3f, deliveries=%d, drops=%d",
+            self._dsrc_channel.stats.get("prr", 1.0),
+            int(self._dsrc_channel.stats.get("total_deliveries", 0)),
+            int(self._dsrc_channel.stats.get("total_drops", 0)),
+        )

@@ -86,12 +86,12 @@ class SimulationConfig(BaseModel):
     spectator_follow: bool = True
     spectator_height: float = 50.0
     spectator_pitch: float = -90.0
-    # MQTT options
-    mqtt_enabled: bool = False
-    mqtt_broker_host: str = "mosquitto"
-    mqtt_broker_port: int = 1883
-    mqtt_qos: int = 1
-    mqtt_tls_enabled: bool = False
+    # DSRC/WAVE channel model
+    dsrc_tx_power_dbm: float = 23.0
+    dsrc_channel_busy_ratio: float = 0.15
+    # Agent behavior
+    ego_behavior: str = "normal"
+    leading_behavior: str = "normal"
 
 
 def set_collector(collector: Optional[Any]):
@@ -114,7 +114,7 @@ def set_collector(collector: Optional[Any]):
 
 def set_v2v_network(v2v_network):
     """Set the global V2V network."""
-    global _v2v_network
+    global _v2v_network, _simulation_status
     _v2v_network = v2v_network
     logger.info("V2V network registered with server")
 
@@ -532,10 +532,14 @@ async def get_network_stats():
     return {
         "total_vehicles": len(_v2v_network.vehicles),
         "total_messages_sent": stats['total_messages_sent'],
+        "total_messages_received": stats['total_messages_received'],
         "average_neighbors": stats['average_neighbors'],
+        "cumulative_avg_neighbors": stats['cumulative_avg_neighbors'],
         "max_neighbors": stats['max_neighbors'],
         "cooperative_shares": stats['cooperative_shares'],
-        "update_rate_hz": _v2v_network.update_rate_hz,
+        "total_update_count": stats['total_update_count'],
+        "target_update_hz": _v2v_network.update_rate_hz,
+        "measured_update_hz": stats['measured_update_hz'],
         "max_range_m": _v2v_network.max_range
     }
 
@@ -659,8 +663,7 @@ async def start_simulation(config: SimulationConfig):
         "vehicles": config.vehicles,
         "v2v_messages": 0,
         "error": None,
-        "mqtt_enabled": config.mqtt_enabled,
-        "mqtt_connected": False
+        "dsrc_channel_busy_ratio": config.dsrc_channel_busy_ratio,
     }
     
     # Run simulation in background thread
@@ -683,21 +686,34 @@ async def start_simulation(config: SimulationConfig):
                 spectator_follow=config.spectator_follow,
                 spectator_height=config.spectator_height,
                 spectator_pitch=config.spectator_pitch,
-                mqtt_enabled=config.mqtt_enabled,
-                mqtt_broker_host=config.mqtt_broker_host,
-                mqtt_broker_port=config.mqtt_broker_port,
-                mqtt_qos=config.mqtt_qos,
-                mqtt_tls_enabled=config.mqtt_tls_enabled,
+                dsrc_tx_power_dbm=config.dsrc_tx_power_dbm,
+                dsrc_channel_busy_ratio=config.dsrc_channel_busy_ratio,
+                ego_behavior=config.ego_behavior,
+                leading_behavior=config.leading_behavior,
                 status_callback=update_simulation_status,
                 server_module=server_module
             )
             _simulation_status["running"] = False
             _simulation_status["status"] = "completed"
+            # Preserve final counts for display after run ends
+            if _v2v_network is not None:
+                final = _v2v_network.get_network_stats()
+                _simulation_status["last_run_stats"] = {
+                    "messages_sent": final['total_messages_sent'],
+                    "messages_received": final['total_messages_received'],
+                    "update_count": final['total_update_count'],
+                    "measured_hz": final['measured_update_hz'],
+                    "max_neighbors": final['max_neighbors'],
+                    "cumulative_avg_neighbors": round(final['cumulative_avg_neighbors'], 2),
+                }
+            # Detach network so API endpoints return empty rather than stale data
+            set_v2v_network(None)
         except Exception as e:
             logger.error(f"Simulation error: {e}", exc_info=True)
             _simulation_status["running"] = False
             _simulation_status["status"] = "error"
             _simulation_status["error"] = str(e)
+            set_v2v_network(None)
     
     _simulation_thread = threading.Thread(target=run_simulation, daemon=True)
     _simulation_thread.start()
@@ -753,14 +769,14 @@ def update_simulation_status(frame: int, elapsed: float, v2v_msgs: int):
     _simulation_status["elapsed"] = int(elapsed)
     _simulation_status["v2v_messages"] = v2v_msgs
     _simulation_status["status"] = "running"
-    
-    # Update MQTT connection status from V2V network
-    if _v2v_network is not None and hasattr(_v2v_network, 'mqtt_enabled'):
-        _simulation_status["mqtt_enabled"] = _v2v_network.mqtt_enabled
-        if _v2v_network.mqtt_enabled and _v2v_network.mqtt_transport:
-            _simulation_status["mqtt_connected"] = _v2v_network.mqtt_transport.is_connected
-        else:
-            _simulation_status["mqtt_connected"] = False
+
+    # Update channel stats from V2V network if available
+    if _v2v_network is not None:
+        try:
+            ch_stats = _v2v_network.get_channel_stats()
+            _simulation_status["dsrc_prr"] = round(ch_stats.get("prr", 1.0), 3)
+        except Exception:
+            pass
 
 
 def should_stop_simulation() -> bool:

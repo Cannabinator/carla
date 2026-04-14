@@ -268,47 +268,45 @@
         </div>
 
         <div class="card">
-            <h2>MQTT Transport</h2>
-            
-            <div class="form-group checkbox-group">
-                <input type="checkbox" id="mqttEnabled" onchange="toggleMqttSettings()">
-                <label for="mqttEnabled">Enable MQTT for V2V Communication</label>
-            </div>
-            <p class="info-text" style="margin-bottom: 15px;">Route BSM messages through an MQTT broker for distributed V2V networking</p>
-            
-            <div id="mqttSettings" style="display: none;">
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="mqttBrokerHost">MQTT Broker Host</label>
-                    <input type="text" id="mqttBrokerHost" value="mosquitto" placeholder="e.g., mosquitto or broker IP">
-                        <p class="info-text">MQTT broker hostname or IP address</p>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="mqttBrokerPort">MQTT Broker Port</label>
-                        <input type="number" id="mqttBrokerPort" value="1883" min="1" max="65535">
-                        <p class="info-text">Default: 1883 (plain), 8883 (TLS)</p>
-                    </div>
+            <h2>Agent Behavior</h2>
+            <p class="info-text" style="margin-bottom: 15px;">Controls how the ego and leading vehicle drive. Requires CARLA agents to be downloaded (<code>./scripts/download_carla_agents.sh</code>). Falls back to Traffic Manager autopilot if unavailable.</p>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="egoBehavior">Ego Vehicle Behavior</label>
+                    <select id="egoBehavior">
+                        <option value="cautious">Cautious (slow, large gap, obeys all rules)</option>
+                        <option value="normal" selected>Normal (balanced speed and safety)</option>
+                        <option value="aggressive">Aggressive (fast, close gap, overtakes)</option>
+                    </select>
+                    <p class="info-text">Your (ego) vehicle driving style</p>
                 </div>
-                
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="mqttQos">QoS Level</label>
-                        <select id="mqttQos">
-                            <option value="0">0 - At most once (fire & forget)</option>
-                            <option value="1" selected>1 - At least once (acknowledged)</option>
-                            <option value="2">2 - Exactly once (guaranteed)</option>
-                        </select>
-                        <p class="info-text">Quality of Service for message delivery</p>
-                    </div>
-                    
-                    <div class="form-group">
-                        <div class="checkbox-group" style="margin-top: 28px;">
-                            <input type="checkbox" id="mqttTls">
-                            <label for="mqttTls">Enable TLS Encryption</label>
-                        </div>
-                        <p class="info-text">Secure broker connection with TLS/SSL</p>
-                    </div>
+                <div class="form-group">
+                    <label for="leadingBehavior">Leading Vehicle Behavior</label>
+                    <select id="leadingBehavior">
+                        <option value="cautious">Cautious (slow, large gap, obeys all rules)</option>
+                        <option value="normal" selected>Normal (balanced speed and safety)</option>
+                        <option value="aggressive">Aggressive (fast, close gap, overtakes)</option>
+                    </select>
+                    <p class="info-text">First traffic vehicle driving style</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>DSRC Channel</h2>
+            <p class="info-text" style="margin-bottom: 15px;">IEEE 802.11p / DSRC-WAVE channel parameters (ETSI EN 302 663). The in-process physics model applies log-distance path loss, log-normal shadowing, and CSMA/CA contention — no external broker required.</p>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="dsrcTxPower">TX Power (dBm ERP)</label>
+                    <input type="number" id="dsrcTxPower" value="23" min="0" max="33">
+                    <p class="info-text">ETSI EN 302 663 Class A OBU default: 23 dBm</p>
+                </div>
+
+                <div class="form-group">
+                    <label for="dsrcCbr">Channel Busy Ratio (0–1)</label>
+                    <input type="number" id="dsrcCbr" value="0.15" min="0" max="0.99" step="0.01">
+                    <p class="info-text">Ambient channel load for CSMA/CA contention (0 = empty, 0.15 = typical urban)</p>
                 </div>
             </div>
         </div>
@@ -343,12 +341,16 @@
                 </div>
                 <div class="stat-item">
                     <div class="stat-value" id="statV2V">0</div>
-                    <div class="stat-label">V2V Msgs</div>
+                    <div class="stat-label">V2V Msgs Sent</div>
                 </div>
                 <div class="stat-item">
-                    <div class="stat-value" id="statMqtt" style="font-size: 1em;">OFF</div>
-                    <div class="stat-label">MQTT</div>
+                    <div class="stat-value" id="statDsrcPrr">—</div>
+                    <div class="stat-label">DSRC PRR</div>
                 </div>
+            </div>
+            <div id="lastRunSummary" style="display:none; margin-top: 14px; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 6px; font-size: 0.85em;">
+                <div style="font-weight: 600; margin-bottom: 6px; color: #c4b5fd;">Last Run Summary</div>
+                <div id="lastRunContent" style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px; color: #a0aec0;"></div>
             </div>
         </div>
 
@@ -379,11 +381,6 @@
             addLog('Logs cleared');
         }
         
-        function toggleMqttSettings() {
-            const enabled = document.getElementById('mqttEnabled').checked;
-            document.getElementById('mqttSettings').style.display = enabled ? 'block' : 'none';
-        }
-        
         async function startSimulation() {
             const config = {
                 carla_host: document.getElementById('carlaHost').value,
@@ -394,18 +391,16 @@
                 lidar_quality: document.getElementById('lidarQuality').value,
                 csv_logging: document.getElementById('csvLogging').checked,
                 console_output: document.getElementById('consoleOutput').checked,
-                mqtt_enabled: document.getElementById('mqttEnabled').checked,
-                mqtt_broker_host: document.getElementById('mqttBrokerHost').value,
-                mqtt_broker_port: parseInt(document.getElementById('mqttBrokerPort').value),
-                mqtt_qos: parseInt(document.getElementById('mqttQos').value),
-                mqtt_tls_enabled: document.getElementById('mqttTls').checked
+                dsrc_tx_power_dbm: parseFloat(document.getElementById('dsrcTxPower').value),
+                dsrc_channel_busy_ratio: parseFloat(document.getElementById('dsrcCbr').value),
+                ego_behavior: document.getElementById('egoBehavior').value,
+                leading_behavior: document.getElementById('leadingBehavior').value,
             };
             
+            document.getElementById('lastRunSummary').style.display = 'none';
             addLog('Starting simulation with config: ' + JSON.stringify(config, null, 2));
             addLog('Connecting to CARLA at ' + config.carla_host + ':' + config.carla_port);
-            if (config.mqtt_enabled) {
-                addLog('MQTT enabled -> broker: ' + config.mqtt_broker_host + ':' + config.mqtt_broker_port + ' (QoS ' + config.mqtt_qos + ')');
-            }
+            addLog('DSRC channel: TX=' + config.dsrc_tx_power_dbm + ' dBm, CBR=' + config.dsrc_channel_busy_ratio);
             updateStatus('statusBadge', 'STARTING...', 'idle');
             
             document.getElementById('startBtn').disabled = true;
@@ -477,14 +472,15 @@
                     document.getElementById('statVehicles').textContent = status.vehicles || 0;
                     document.getElementById('statV2V').textContent = status.v2v_messages || 0;
                     
-                    // Update MQTT status
-                    const mqttEl = document.getElementById('statMqtt');
-                    if (status.mqtt_enabled) {
-                        mqttEl.textContent = status.mqtt_connected ? 'ON' : 'ERR';
-                        mqttEl.style.color = status.mqtt_connected ? '#4ade80' : '#ef4444';
+                    // Update DSRC channel PRR
+                    const dsrcPrrEl = document.getElementById('statDsrcPrr');
+                    if (status.dsrc_prr !== undefined) {
+                        dsrcPrrEl.textContent = (status.dsrc_prr * 100).toFixed(1) + '%';
+                        dsrcPrrEl.style.color = status.dsrc_prr > 0.8 ? '#4ade80'
+                                              : status.dsrc_prr > 0.5 ? '#facc15' : '#ef4444';
                     } else {
-                        mqttEl.textContent = 'OFF';
-                        mqttEl.style.color = '#667eea';
+                        dsrcPrrEl.textContent = '—';
+                        dsrcPrrEl.style.color = '#667eea';
                     }
                 } else if (status.status === 'completed') {
                     updateStatus('statusBadge', 'COMPLETED', 'idle');
@@ -495,6 +491,22 @@
                     if (statusPollInterval) {
                         clearInterval(statusPollInterval);
                         statusPollInterval = null;
+                    }
+                    // Show last-run scientific summary
+                    if (status.last_run_stats) {
+                        const s = status.last_run_stats;
+                        const summaryEl = document.getElementById('lastRunSummary');
+                        const contentEl = document.getElementById('lastRunContent');
+                        summaryEl.style.display = 'block';
+                        contentEl.innerHTML = [
+                            ['Msgs Sent', s.messages_sent.toLocaleString()],
+                            ['Msgs Received', s.messages_received.toLocaleString()],
+                            ['Updates (2 Hz)', s.update_count],
+                            ['Measured Hz', `${(s.measured_hz || 0).toFixed(3)} Hz`],
+                            ['Max Neighbors', s.max_neighbors],
+                            ['Cumul. Avg Nbrs', s.cumulative_avg_neighbors],
+                        ].map(([k,v]) => `<span style="color:#9ca3af">${k}</span><span>${v}</span>`).join('');
+                        addLog(`[STATS] Updates: ${s.update_count} @ ${(s.measured_hz||0).toFixed(3)} Hz | Sent: ${s.messages_sent} | Rcvd: ${s.messages_received} | Max nbrs: ${s.max_neighbors}`);
                     }
                 } else if (status.status === 'error') {
                     updateStatus('statusBadge', 'ERROR', 'error');

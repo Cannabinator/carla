@@ -23,8 +23,6 @@ opencv-python>=4.8.0
 matplotlib>=3.7.0
 pandas>=2.0.0
 
-# MQTT transport for V2V communication
-paho-mqtt>=2.0.0
 
 # For web-based dashboards (optional)
 # plotly>=5.18.0

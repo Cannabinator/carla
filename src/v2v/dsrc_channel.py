@@ -1,0 +1,389 @@
+"""
+DSRC/WAVE (IEEE 802.11p) Channel Model for V2X/V2V Simulation
+
+Models the physical medium characteristics of IEEE 802.11p (DSRC/WAVE) as used
+in SAE J2735 BSM broadcasts. Implements:
+
+  - Log-distance path loss with log-normal shadowing
+    Calibrated to ETSI EN 302 663 and ETSI EN 302 895 parameters.
+  - CSMA/CA channel contention modelled via the channel busy ratio (CBR).
+  - Optional LOS/NLOS distinction via 2-D geometry.
+  - Packet Reception Rate (PRR) via a sigmoid SNR-margin curve calibrated
+    against Sommer et al. (2011) and the WINNER+ B1 urban channel model.
+
+All computation is in-process and deterministic (seeded RNG). No threads,
+no external broker, no connections to open or close. Call broadcast_all()
+once per V2V update tick, then query get_received() per vehicle.
+
+Reference parameters follow ETSI EN 302 663 §4 for ITS-G5 Class A OBU:
+  TX power: 23 dBm ERP, carrier: 5.9 GHz, bandwidth: 10 MHz.
+
+Physical model references:
+  - Paier et al. (2008): "Characterization of vehicle-to-vehicle radio channels
+    from measurements at 5.2 GHz." Wireless Personal Communications.
+  - Sommer et al. (2011): "A computationally inexpensive empirical model of IEEE
+    802.11p radio shadowing in urban environments." WONS.
+  - Bianchi (2000): "Performance analysis of the IEEE 802.11 distributed
+    coordination function." IEEE J. Sel. Areas Commun.
+  - ETSI EN 302 663 V1.3.1 (2020): "ITS; Access layer specification."
+"""
+
+import math
+import logging
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
+import random
+
+from .messages import BSMCore
+
+logger = logging.getLogger(__name__)
+
+# ── Physical constants ─────────────────────────────────────────────────────────
+_C_SPEED_OF_LIGHT = 3.0e8       # m/s
+_DSRC_FREQ_HZ = 5.9e9           # 5.9 GHz DSRC center frequency (ETSI EN 302 663)
+_DSRC_LAMBDA = _C_SPEED_OF_LIGHT / _DSRC_FREQ_HZ  # wavelength ≈ 0.0508 m
+
+# Friis free-space path loss at reference distance d0 = 10 m:
+#   L0 = 20·log10(4π·d0 / λ)
+_REFERENCE_DIST_M = 10.0
+_L0_DB = 20.0 * math.log10(4.0 * math.pi * _REFERENCE_DIST_M / _DSRC_LAMBDA)
+# _L0_DB ≈ 47.8 dB
+
+# Carrier sensing range for CSMA/CA contention counting (IEEE 802.11 CS threshold)
+_CARRIER_SENSE_RANGE_M = 300.0
+
+
+@dataclass
+class DSRCConfig:
+    """
+    DSRC/WAVE channel model parameters.
+
+    Defaults follow ETSI EN 302 663 §4 (ITS-G5 Class A OBU).
+    Researchers may tune these to explore path loss conditions, shadowing
+    intensity, TX power, or channel congestion without changing simulation logic.
+
+    Channel busy ratio (CBR) calibration:
+      At 2 Hz BSM rate, BSM payload ~200 bytes @ 3 Mbps:
+        packet_duration ≈ 200*8 / 3e6 ≈ 0.53 ms
+        CBR ≈ N_vehicles × packet_duration / beacon_interval
+        For 15 vehicles at 2 Hz: CBR ≈ 15 × 0.53ms / 500ms ≈ 0.016 (1.6%)
+      Default CBR=0.15 represents a denser deployment (≈140 vehicles at 2 Hz)
+      consistent with ETSI ETSI TR 103 439 congestion scenarios.
+    """
+
+    # ── Transmitter / receiver ────────────────────────────────────────────────
+    tx_power_dbm: float = 23.0        # ETSI EN 302 663 Class A max: 23 dBm ERP
+    antenna_gain_dbi: float = 2.0     # Omnidirectional OBU antenna gain (TX + RX each)
+    rx_sensitivity_dbm: float = -85.0 # 802.11p typical receiver sensitivity floor
+
+    # ── Path loss model (log-distance + log-normal shadowing) ────────────────
+    path_loss_exponent_los: float = 2.0    # Urban LOS ≈ free space (Paier 2008)
+    path_loss_exponent_nlos: float = 2.75  # Urban NLOS, WINNER+ B1 scenario
+    shadowing_std_los_db: float = 4.0      # LOS log-normal σ (Paier et al. 2008)
+    shadowing_std_nlos_db: float = 6.0     # NLOS log-normal σ (Paier et al. 2008)
+
+    # ── CSMA/CA contention (channel busy ratio) ───────────────────────────────
+    # CBR ∈ [0, 1]: fraction of time the channel is sensed busy.
+    # 0.0 = empty channel (no contention), 1.0 = fully saturated.
+    channel_busy_ratio: float = 0.15
+
+    # ── LOS/NLOS detection ────────────────────────────────────────────────────
+    # When True, vehicles lying on the TX→RX line segment cause NLOS penalty.
+    # When False, LOS path loss and shadowing parameters are always used.
+    enable_nlos_model: bool = True
+
+    # ── PRR sigmoid steepness ─────────────────────────────────────────────────
+    # Larger values produce a sharper PRR transition around the sensitivity floor.
+    # k=2.0 matches Sommer et al. (2011) empirical calibration.
+    prr_sigmoid_k: float = 2.0
+
+    # ── Reproducibility ───────────────────────────────────────────────────────
+    random_seed: int = 42
+
+
+class DSRCChannel:
+    """
+    In-process DSRC/WAVE (IEEE 802.11p) channel model.
+
+    In-process physics-based packet delivery model that faithfully represents
+    the probabilistic, broadcast, and contention-sensitive nature of the
+    DSRC/WAVE medium. No external broker or network infrastructure is required.
+
+    Usage inside V2VNetworkEnhanced.update():
+
+        positions = {
+            vid: (bsm.latitude, bsm.longitude)
+            for vid, bsm in self.bsm_messages.items()
+        }
+        self._dsrc_channel.broadcast_all(self.bsm_messages, positions)
+
+    Then in _discover_neighbors():
+
+        received = self._dsrc_channel.get_received(receiver_id)
+        # received[sender_id] = BSMCore if packet was delivered, absent if dropped
+
+    No shutdown or teardown is required — there is no external state to release.
+    """
+
+    def __init__(self, config: Optional[DSRCConfig] = None) -> None:
+        self.config = config or DSRCConfig()
+        # Private RNG — seeded for reproducibility; isolated from global random state
+        self._rng = random.Random(self.config.random_seed)
+
+        # _received[receiver_id][sender_id] = BSMCore for this tick
+        self._received: Dict[int, Dict[int, BSMCore]] = {}
+
+        # Rolling statistics for research analysis
+        self.stats: Dict[str, float] = {
+            "total_broadcasts": 0.0,
+            "total_deliveries": 0.0,
+            "total_drops": 0.0,
+            "prr": 1.0,
+            "avg_snr_margin_db": 0.0,
+        }
+        self._snr_ring: List[float] = []  # rolling SNR margin samples (capped at 500)
+
+        logger.debug(
+            "DSRCChannel initialized: TX=%.0f dBm, sensitivity=%.0f dBm, "
+            "n_LOS=%.2f, n_NLOS=%.2f, CBR=%.2f",
+            self.config.tx_power_dbm,
+            self.config.rx_sensitivity_dbm,
+            self.config.path_loss_exponent_los,
+            self.config.path_loss_exponent_nlos,
+            self.config.channel_busy_ratio,
+        )
+
+    # ── Public API ─────────────────────────────────────────────────────────────
+
+    def broadcast_all(
+        self,
+        bsm_messages: Dict[int, BSMCore],
+        positions: Dict[int, Tuple[float, float]],
+    ) -> None:
+        """
+        Compute channel delivery for every (sender, receiver) pair this tick.
+
+        Args:
+            bsm_messages: Current BSMCore per registered vehicle.
+            positions: {vehicle_id: (x_m, y_m)} in CARLA world space.
+                       Typically derived from bsm.latitude / bsm.longitude,
+                       which store CARLA world coordinates (not geodetic).
+
+        Call once per V2V update tick. Results are stable until the next call.
+        """
+        self._received = {vid: {} for vid in bsm_messages}
+        vehicle_ids = list(bsm_messages.keys())
+
+        for sender_id, bsm in bsm_messages.items():
+            tx_pos = positions.get(sender_id)
+            if tx_pos is None:
+                continue
+
+            n_contenders = self._count_contenders(sender_id, tx_pos, positions)
+
+            for receiver_id in vehicle_ids:
+                if receiver_id == sender_id:
+                    continue
+
+                rx_pos = positions.get(receiver_id)
+                if rx_pos is None:
+                    continue
+
+                distance = _euclidean(tx_pos, rx_pos)
+
+                # Vehicles at the same location: deterministic delivery
+                if distance < 0.5:
+                    self._received[receiver_id][sender_id] = bsm
+                    self.stats["total_broadcasts"] += 1
+                    self.stats["total_deliveries"] += 1
+                    continue
+
+                nlos = (
+                    self.config.enable_nlos_model
+                    and self._is_nlos(sender_id, receiver_id, tx_pos, rx_pos, positions)
+                )
+                prr = self._compute_prr(distance, nlos, n_contenders)
+
+                self.stats["total_broadcasts"] += 1
+                if self._rng.random() < prr:
+                    self._received[receiver_id][sender_id] = bsm
+                    self.stats["total_deliveries"] += 1
+                else:
+                    self.stats["total_drops"] += 1
+
+        self._flush_stats()
+
+    def get_received(self, receiver_id: int) -> Dict[int, BSMCore]:
+        """
+        Return the BSMs successfully received by receiver_id this tick.
+
+        Args:
+            receiver_id: Vehicle querying its inbox.
+
+        Returns:
+            Mapping of sender_id → BSMCore for every packet that survived
+            the channel model. Absent senders had their packets dropped.
+        """
+        return self._received.get(receiver_id, {})
+
+    def get_stats(self) -> dict:
+        """Channel statistics for research analysis and reporting."""
+        return self.stats.copy()
+
+    # ── Channel physics ─────────────────────────────────────────────────────────
+
+    def _received_power_dbm(self, distance_m: float, nlos: bool) -> float:
+        """
+        Received signal power using log-distance path loss + log-normal shadowing.
+
+            P_rx = P_tx + 2·G_ant − [L0 + 10·n·log10(d/d0) + X_σ]
+
+        where X_σ ~ N(0, σ²) is the shadowing term.
+
+        Parameters follow ETSI EN 302 663 / Paier et al. 2008.
+        """
+        cfg = self.config
+        n = cfg.path_loss_exponent_nlos if nlos else cfg.path_loss_exponent_los
+        sigma = cfg.shadowing_std_nlos_db if nlos else cfg.shadowing_std_los_db
+
+        path_loss = _L0_DB + 10.0 * n * math.log10(distance_m / _REFERENCE_DIST_M)
+        shadowing = self._rng.gauss(0.0, sigma)
+
+        # Both TX and RX carry the same omnidirectional antenna
+        system_gain = cfg.tx_power_dbm + 2.0 * cfg.antenna_gain_dbi
+        return system_gain - path_loss - shadowing
+
+    def _compute_prr(
+        self, distance_m: float, nlos: bool, n_contenders: int
+    ) -> float:
+        """
+        Packet Reception Rate = P_channel × P_no_contention.
+
+        P_channel: logistic function of SNR margin over the sensitivity floor.
+          Calibrated against Sommer et al. (2011) Figure 3:
+            PRR ≈ 1 for SNR margin >> 0 dB
+            PRR ≈ 0.5 exactly at the sensitivity threshold (margin = 0 dB)
+            PRR ≈ 0 for SNR margin << 0 dB
+
+        P_no_contention: Bianchi (2000) CSMA/CA model — probability that no
+          other station transmits during this packet's transmission slot.
+        """
+        p_rx = self._received_power_dbm(distance_m, nlos)
+        snr_margin = p_rx - self.config.rx_sensitivity_dbm
+
+        # Record for stats (avoid unbounded growth)
+        self._snr_ring.append(snr_margin)
+        if len(self._snr_ring) > 500:
+            self._snr_ring = self._snr_ring[-500:]
+
+        k = self.config.prr_sigmoid_k
+        p_channel = 1.0 / (1.0 + math.exp(-k * snr_margin))
+
+        p_csma = self._csma_success_prob(n_contenders)
+        return p_channel * p_csma
+
+    def _csma_success_prob(self, n_contenders: int) -> float:
+        """
+        Probability of successful CSMA/CA transmission given N contenders.
+
+        Uses Bianchi (2000) unsaturated approximation:
+            P_success ≈ (1 − CBR)^(N−1)
+
+        where CBR is the channel busy ratio and N is the number of vehicles
+        within carrier-sense range that are simultaneously transmitting.
+        """
+        if n_contenders <= 1:
+            return 1.0
+        cbr = self.config.channel_busy_ratio
+        return max(0.0, (1.0 - cbr) ** (n_contenders - 1))
+
+    # ── Geometry helpers ────────────────────────────────────────────────────────
+
+    def _is_nlos(
+        self,
+        sender_id: int,
+        receiver_id: int,
+        tx: Tuple[float, float],
+        rx: Tuple[float, float],
+        all_positions: Dict[int, Tuple[float, float]],
+    ) -> bool:
+        """
+        Determine LOS/NLOS by 2-D geometric occlusion.
+
+        A third vehicle causes NLOS if its position lies within 2.5 m
+        (≈ vehicle width) of the TX→RX line segment. This is a computationally
+        lightweight approximation sufficient for urban block geometry as used by
+        Sommer et al.'s shadowing model.
+        """
+        for vid, pos in all_positions.items():
+            if vid == sender_id or vid == receiver_id:
+                continue
+            if _point_to_segment_dist(pos, tx, rx) < 2.5:
+                return True
+        return False
+
+    def _count_contenders(
+        self,
+        sender_id: int,
+        tx_pos: Tuple[float, float],
+        all_positions: Dict[int, Tuple[float, float]],
+    ) -> int:
+        """
+        Count vehicles within IEEE 802.11 carrier-sense range of the sender.
+
+        These are the stations that contend for the channel medium during
+        this sender's transmission slot (CSMA/CA contention domain).
+        """
+        count = 1  # the sender itself
+        for vid, pos in all_positions.items():
+            if vid == sender_id:
+                continue
+            if _euclidean(tx_pos, pos) <= _CARRIER_SENSE_RANGE_M:
+                count += 1
+        return count
+
+    # ── Internal stats ──────────────────────────────────────────────────────────
+
+    def _flush_stats(self) -> None:
+        """Refresh derived stats after a broadcast_all() call."""
+        total = self.stats["total_broadcasts"]
+        if total > 0:
+            self.stats["prr"] = self.stats["total_deliveries"] / total
+        if self._snr_ring:
+            self.stats["avg_snr_margin_db"] = (
+                sum(self._snr_ring) / len(self._snr_ring)
+            )
+
+
+# ── Module-level geometry utilities ────────────────────────────────────────────
+
+def _euclidean(
+    p1: Tuple[float, float], p2: Tuple[float, float]
+) -> float:
+    """Euclidean distance between two 2-D points."""
+    dx = p2[0] - p1[0]
+    dy = p2[1] - p1[1]
+    return math.sqrt(dx * dx + dy * dy)
+
+
+def _point_to_segment_dist(
+    p: Tuple[float, float],
+    a: Tuple[float, float],
+    b: Tuple[float, float],
+) -> float:
+    """
+    Perpendicular distance from point p to the finite line segment a–b.
+    Returns the distance to the nearest endpoint when the projection falls
+    outside the segment.
+    """
+    ax, ay = a
+    bx, by = b
+    px, py = p
+    dx, dy = bx - ax, by - ay
+    seg_len_sq = dx * dx + dy * dy
+    if seg_len_sq == 0.0:
+        return math.sqrt((px - ax) ** 2 + (py - ay) ** 2)
+    t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / seg_len_sq))
+    proj_x = ax + t * dx
+    proj_y = ay + t * dy
+    return math.sqrt((px - proj_x) ** 2 + (py - proj_y) ** 2)

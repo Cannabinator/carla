@@ -43,6 +43,13 @@ from src.config import DEFAULT_SIM_CONFIG, DEFAULT_V2V_CONFIG
 import uvicorn
 import threading
 
+try:
+    from src.agents.navigation.behavior_agent import BehaviorAgent
+    BEHAVIOR_AGENT_AVAILABLE = True
+except ImportError:
+    BehaviorAgent = None  # type: ignore[assignment,misc]
+    BEHAVIOR_AGENT_AVAILABLE = False
+
 # Setup logging
 log_dir = Path(__file__).parent.parent.parent / 'logs'
 log_dir.mkdir(exist_ok=True)
@@ -95,6 +102,7 @@ def run_complete_v2v_demo(config: ScenarioConfig, status_callback=None, server_m
             print(f"⏱️  Duration: {config.duration}s")
             print(f"🚗 Vehicles: {config.num_vehicles}")
             print(f"📡 V2V range: {config.v2v_range}m")
+            print(f"🤖 Agent mode: {'BehaviorAgent' if BEHAVIOR_AGENT_AVAILABLE else 'TM Autopilot (BehaviorAgent unavailable)'}")
             print(f"{'='*80}\n")
             
             # Set deterministic seeds for reproducibility
@@ -107,34 +115,28 @@ def run_complete_v2v_demo(config: ScenarioConfig, status_callback=None, server_m
             v2v: Optional[V2VNetworkEnhanced] = None
             if config.v2v_enabled:
                 print(f"📡 Initializing V2V Network...")
-                
-                # Build MQTT config if enabled in scenario config
-                mqtt_cfg = None
-                if getattr(config, 'mqtt_enabled', False):
-                    from src.config import MQTTConfig
-                    mqtt_cfg = MQTTConfig(
-                        enabled=True,
-                        broker_host=config.mqtt_broker_host,
-                        broker_port=config.mqtt_broker_port,
-                        client_id=config.mqtt_client_id,
-                        qos=config.mqtt_qos,
-                        tls_enabled=config.mqtt_tls_enabled,
-                        tls_ca_certs=config.mqtt_tls_ca_certs,
-                        tls_certfile=config.mqtt_tls_certfile,
-                        tls_keyfile=config.mqtt_tls_keyfile
-                    )
-                
+
+                # Build DSRCConfig from scenario config overrides (if any)
+                from src.v2v.dsrc_channel import DSRCConfig
+                dsrc_cfg = DSRCConfig(
+                    channel_busy_ratio=getattr(config, 'dsrc_channel_busy_ratio', 0.15),
+                    enable_nlos_model=getattr(config, 'dsrc_enable_nlos_model', True),
+                )
+                if getattr(config, 'dsrc_tx_power_dbm', None) is not None:
+                    dsrc_cfg.tx_power_dbm = config.dsrc_tx_power_dbm
+
                 v2v = V2VNetworkEnhanced(
                     max_range=config.v2v_range,
-                    update_rate_hz=2.0,  # SAE J2735 standard
+                    update_rate_hz=2.0,  # SAE J2735 standard beacon interval
                     enable_cooperative_perception=True,
                     world=session.world,
-                    mqtt_config=mqtt_cfg
+                    dsrc_config=dsrc_cfg,
                 )
-                
-                mqtt_status = " [MQTT]" if v2v.mqtt_enabled else ""
-                print(f"   ✓ V2V initialized: {config.v2v_range}m range, 2 Hz update rate{mqtt_status}")
-                
+
+                print(f"   ✓ V2V initialized: {config.v2v_range}m range, 2 Hz, "
+                      f"DSRC/WAVE channel (TX={dsrc_cfg.tx_power_dbm:.0f} dBm, "
+                      f"CBR={dsrc_cfg.channel_busy_ratio:.2f})")
+
                 # Note: V2V REST API available at separate scenario (v2v_api_scenario.py)
                 # to avoid threading conflicts with LiDAR API server
                 print(f"   💡 Tip: Run 'v2v_api_scenario.py' for REST API access\n")
@@ -230,16 +232,28 @@ def run_complete_v2v_demo(config: ScenarioConfig, status_callback=None, server_m
             tm.global_percentage_speed_difference(-20.0)  # 20% FASTER than speed limit (negative = faster!)
             tm.set_global_distance_to_leading_vehicle(config.safety_distance)
             
-            # Enable autopilot on ego with proper settings
-            ego.set_autopilot(True, config.tm_port)
-            tm.update_vehicle_lights(ego, True)
-            tm.ignore_lights_percentage(ego, 80)  # Ignore 80% of lights to reduce stopping
-            tm.ignore_signs_percentage(ego, 80)  # Ignore 80% of signs
-            tm.auto_lane_change(ego, True)
-            tm.distance_to_leading_vehicle(ego, 1.5)  # Closer following for ego
-            tm.vehicle_percentage_speed_difference(ego, -30.0)  # Ego drives 30% FASTER (negative!)
             print(f"   ✓ Traffic Manager configured: speed=+20% (faster!), ignores most lights/signs")
-            print(f"   ✓ Ego autopilot: speed=+30% (faster!), lane change enabled\n")
+
+            ego_agent = None
+            leading_agent = None
+            leading_vehicle = None
+
+            if BEHAVIOR_AGENT_AVAILABLE:
+                # Ego: BehaviorAgent with 'normal' behavior
+                ego_agent = BehaviorAgent(ego, behavior=config.ego_behavior)
+                ego_dest_wp = random.choice(session.world.get_map().generate_waypoints(2.0))
+                ego_agent.set_destination(ego_dest_wp.transform.location)
+                print(f"   ✓ Ego: BehaviorAgent (normal) - destination set")
+            else:
+                ego.set_autopilot(True, config.tm_port)
+                tm.update_vehicle_lights(ego, True)
+                tm.ignore_lights_percentage(ego, 80)  # Ignore 80% of lights to reduce stopping
+                tm.ignore_signs_percentage(ego, 80)  # Ignore 80% of signs
+                tm.auto_lane_change(ego, True)
+                tm.distance_to_leading_vehicle(ego, 1.5)  # Closer following for ego
+                tm.vehicle_percentage_speed_difference(ego, -30.0)  # Ego drives 30% FASTER (negative!)
+                print(f"   ✓ Ego autopilot (BehaviorAgent not available)")
+            print()
             
             # Spawn traffic vehicles with better error handling
             print(f"🚗 Spawning {num_vehicles-1} traffic vehicles on roads...")
@@ -280,7 +294,18 @@ def run_complete_v2v_demo(config: ScenarioConfig, status_callback=None, server_m
                     continue
             
             print(f"   ✓ Spawned {spawned_count} traffic vehicles ({failed_count} spawn failures)")
-            print(f"   ✓ Total vehicles in simulation: {len(traffic) + 1}\n")
+            print(f"   ✓ Total vehicles in simulation: {len(traffic) + 1}")
+
+            # Designate first traffic vehicle as intelligent leading vehicle
+            if BEHAVIOR_AGENT_AVAILABLE and traffic:
+                leading_vehicle = traffic[0]
+                leading_agent = BehaviorAgent(leading_vehicle, behavior=config.leading_behavior)
+                lead_dest_wp = random.choice(session.world.get_map().generate_waypoints(2.0))
+                leading_agent.set_destination(lead_dest_wp.transform.location)
+                # Remove autopilot from leading vehicle (BehaviorAgent controls it manually)
+                leading_vehicle.set_autopilot(False, config.tm_port)
+                print(f"   ✓ Leading vehicle (ID {leading_vehicle.id}): BehaviorAgent (normal)")
+            print()
             
             # ========================================================================
             # STEP 6: Setup Observers (Observer Pattern)
@@ -345,6 +370,17 @@ def run_complete_v2v_demo(config: ScenarioConfig, status_callback=None, server_m
             print(f"⏱️  Warming up simulation ({config.warmup_frames} frames)...")
             print(f"   Initializing Traffic Manager routes...")
             for i in range(config.warmup_frames):
+                # Drive BehaviorAgent-controlled vehicles during warmup
+                if ego_agent is not None:
+                    try:
+                        ego.apply_control(ego_agent.run_step())
+                    except Exception:
+                        pass
+                if leading_agent is not None and leading_vehicle is not None:
+                    try:
+                        leading_vehicle.apply_control(leading_agent.run_step())
+                    except Exception:
+                        pass
                 session.world.tick()
                 # Log ego speed during warmup to verify movement
                 if i % 20 == 0 and i > 0:
@@ -371,7 +407,28 @@ def run_complete_v2v_demo(config: ScenarioConfig, status_callback=None, server_m
                 while time.time() - start_time < config.duration:
                     frame_start: float = time.perf_counter()
                     frame += 1
-                    
+
+                    # Apply intelligent agent controls BEFORE tick
+                    if ego_agent is not None:
+                        try:
+                            ego_control = ego_agent.run_step()
+                            ego.apply_control(ego_control)
+                            if ego_agent.done():
+                                new_wp = random.choice(session.world.get_map().generate_waypoints(2.0))
+                                ego_agent.set_destination(new_wp.transform.location)
+                        except Exception as e:
+                            logger.debug(f"Ego agent step error: {e}")
+
+                    if leading_agent is not None and leading_vehicle is not None:
+                        try:
+                            lead_control = leading_agent.run_step()
+                            leading_vehicle.apply_control(lead_control)
+                            if leading_agent.done():
+                                new_wp = random.choice(session.world.get_map().generate_waypoints(2.0))
+                                leading_agent.set_destination(new_wp.transform.location)
+                        except Exception as e:
+                            logger.debug(f"Leading agent step error: {e}")
+
                     # CRITICAL: Tick world first, then get fresh snapshot immediately
                     session.world.tick()
                     snapshot: carla.WorldSnapshot = session.world.get_snapshot()
@@ -467,19 +524,15 @@ def run_complete_v2v_demo(config: ScenarioConfig, status_callback=None, server_m
                 print(f"   Avg neighbors:       {stats['average_neighbors']:.1f}")
                 print(f"   Max neighbors:       {stats['max_neighbors']}")
                 print(f"   Cooperative shares:  {stats['cooperative_shares']}")
-                
-                # MQTT transport statistics
-                mqtt_stats = v2v.get_mqtt_stats()
-                if mqtt_stats:
-                    print(f"\n   MQTT Transport:")
-                    print(f"     Messages published: {mqtt_stats['messages_published']}")
-                    print(f"     Messages received:  {mqtt_stats['messages_received']}")
-                    print(f"     Bytes published:    {mqtt_stats['bytes_published']:,}")
-                    print(f"     Bytes received:     {mqtt_stats['bytes_received']:,}")
-                    print(f"     Avg publish latency: {mqtt_stats['avg_publish_latency_ms']:.2f}ms")
-                    print(f"     Avg receive latency: {mqtt_stats['avg_receive_latency_ms']:.2f}ms")
-                    print(f"     Publish errors:     {mqtt_stats['publish_errors']}")
-                    print(f"     Deserialize errors: {mqtt_stats['deserialize_errors']}")
+
+                # DSRC/WAVE channel statistics
+                ch_stats = v2v.get_channel_stats()
+                print(f"\n   DSRC/WAVE Channel (IEEE 802.11p):")
+                print(f"     Total tx attempts:  {int(ch_stats['total_broadcasts'])}")
+                print(f"     Delivered:          {int(ch_stats['total_deliveries'])}")
+                print(f"     Dropped:            {int(ch_stats['total_drops'])}")
+                print(f"     Packet reception rate: {ch_stats['prr']:.3f}")
+                print(f"     Avg SNR margin:     {ch_stats['avg_snr_margin_db']:.1f} dB")
                 
                 # Show final ego BSM
                 ego_bsm = v2v.get_bsm(0)
@@ -543,11 +596,11 @@ def run_complete_v2v_demo(config: ScenarioConfig, status_callback=None, server_m
             # Now cleanup collector
             lidar_api.collector.cleanup()
             print("✓ LiDAR streaming stopped")
-        
-        # Shutdown V2V MQTT transport if active
+
+        # Shutdown V2V network (logs final channel stats, no external connections)
         if v2v:
             v2v.shutdown()
-        
+
         # Context manager handles CARLA cleanup automatically
         print(f"\n📝 Log file saved: {log_file}")
 
@@ -700,39 +753,34 @@ def run_simulation_headless(
     spectator_height: float = 50.0,
     spectator_pitch: float = -90.0,
     v2v_message_logging: bool = False,
-    mqtt_enabled: bool = False,
-    mqtt_broker_host: str = "localhost",
-    mqtt_broker_port: int = 1883,
-    mqtt_qos: int = 1,
-    mqtt_tls_enabled: bool = False,
+    dsrc_channel_busy_ratio: float = 0.15,
+    dsrc_tx_power_dbm: float = 23.0,
+    ego_behavior: str = 'normal',
+    leading_behavior: str = 'normal',
     status_callback = None,
     server_module = None
 ):
     """
     Run simulation in headless mode (callable from API).
-    
+
     Args:
         carla_host: CARLA server IP address
         carla_port: CARLA server port
         duration: Simulation duration in seconds
         vehicles: Number of vehicles
-        v2v_range: V2V communication range in meters
+        v2v_range: V2V cooperative awareness zone in meters
         lidar_quality: LiDAR quality ('high', 'medium', 'fast')
         csv_logging: Enable CSV logging
         console_output: Enable console output
         spectator_follow: Enable bird's-eye view camera following
         spectator_height: Height of spectator camera above vehicle
-        spectator_pitch: Pitch angle of spectator camera (degrees, -90 = straight down)
+        spectator_pitch: Pitch angle of spectator camera (degrees)
         v2v_message_logging: Enable detailed V2V message logging
-        mqtt_enabled: Enable MQTT transport for V2V communication
-        mqtt_broker_host: MQTT broker hostname/IP
-        mqtt_broker_port: MQTT broker port
-        mqtt_qos: MQTT QoS level (0, 1, or 2)
-        mqtt_tls_enabled: Enable TLS for MQTT connection
-        status_callback: Function to call with status updates (frame, elapsed, v2v_msgs)
-        server_module: Server module reference to avoid thread isolation issues
+        dsrc_channel_busy_ratio: DSRC CBR [0,1] — 0=empty, 1=saturated channel
+        dsrc_tx_power_dbm: DSRC transmit power (dBm, ETSI default: 23 dBm)
+        status_callback: Function called with status updates (frame, elapsed, v2v_msgs)
+        server_module: Server module reference for LiDAR server integration
     """
-    # Build configuration
     builder = (ScenarioBuilder()
         .with_carla_server(carla_host, carla_port)
         .with_duration(duration)
@@ -743,16 +791,12 @@ def run_simulation_headless(
         .with_carla_debug(enabled=False)
         .with_spectator_follow(enabled=spectator_follow, height=spectator_height, pitch=spectator_pitch)
         .with_v2v_message_logging(enabled=v2v_message_logging)
-    )
-    
-    if mqtt_enabled:
-        builder = builder.with_mqtt(
-            broker_host=mqtt_broker_host,
-            broker_port=mqtt_broker_port,
-            qos=mqtt_qos,
-            tls_enabled=mqtt_tls_enabled
+        .with_dsrc_channel(
+            tx_power_dbm=dsrc_tx_power_dbm,
+            channel_busy_ratio=dsrc_channel_busy_ratio,
         )
-    
+        .with_agent_behavior(ego_behavior=ego_behavior, leading_behavior=leading_behavior)
+    )
     config: ScenarioConfig = builder.build()
     
     # Apply LiDAR settings
