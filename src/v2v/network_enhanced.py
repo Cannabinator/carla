@@ -14,7 +14,7 @@ import logging
 import math
 
 from .messages import (
-    BSMCore, BSMPartII, V2VEnhancedMessage,
+    BSMCore, BSMPartII, V2VEnhancedMessage, DENM, DENMCauseCode,
     create_bsm_from_carla, calculate_threat_level,
     PRIORITY_ROUTINE, PRIORITY_HIGH, PRIORITY_EMERGENCY,
     V2V_RANGE_MEDIUM, SHARE_SENSOR_DATA_DISTANCE
@@ -97,6 +97,9 @@ class V2VNetworkEnhanced:
             'measured_update_hz': 0.0,        # achieved update rate (wall clock)
         }
         self._first_update_wall_time: Optional[float] = None
+
+        # DENM store: (station_id, action_id) → DENM
+        self.denm_store: Dict[Tuple[int, int], DENM] = {}
 
         # DSRC/WAVE (IEEE 802.11p) channel model
         self._dsrc_channel = DSRCChannel(dsrc_config)
@@ -449,6 +452,48 @@ class V2VNetworkEnhanced:
                 f"Neighbors:{len(neighbors):2d} | "
                 f"Threats:{len(high_threats):2d} | "
                 f"Msgs:{self.msg_counters.get(ego_id, 0):3d}")
+
+    # ── DENM management ─────────────────────────────────────────────────────────
+
+    def publish_denm(self, denm: DENM) -> None:
+        """
+        Store or update a DENM alert originating from *station_id*.
+
+        A DENM is uniquely identified by (station_id, action_id).
+        Calling publish_denm with the same key overwrites the previous entry
+        (i.e. this acts as an update / keep-alive).
+        """
+        self.denm_store[(denm.station_id, denm.action_id)] = denm
+        logger.debug(
+            "DENM published: station=%d action=%d cause=%s",
+            denm.station_id, denm.action_id, denm.cause_code.name,
+        )
+
+    def cancel_denm(self, station_id: int, action_id: int) -> bool:
+        """
+        Mark a DENM as cancelled (ETSI termination = isCancellation) and
+        remove it from the active store.
+
+        Returns True if the DENM existed and was removed, False otherwise.
+        """
+        key = (station_id, action_id)
+        if key in self.denm_store:
+            del self.denm_store[key]
+            logger.debug("DENM cancelled: station=%d action=%d", station_id, action_id)
+            return True
+        return False
+
+    def get_denm(self, station_id: Optional[int] = None) -> List[DENM]:
+        """
+        Return active DENMs.
+
+        Args:
+            station_id: If given, return only DENMs from that station.
+                        If None, return all active DENMs.
+        """
+        if station_id is None:
+            return list(self.denm_store.values())
+        return [d for (sid, _), d in self.denm_store.items() if sid == station_id]
 
     # ── Channel access ──────────────────────────────────────────────────────────
 

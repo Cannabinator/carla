@@ -14,7 +14,11 @@ import math
 from datetime import datetime
 from pathlib import Path
 
-from .messages import BSMCore, VehicleType, BrakingStatus
+from .messages import (
+    BSMCore, VehicleType, BrakingStatus,
+    DENM, DENMCauseCode,
+    create_cam_from_bsm,
+)
 from .network_enhanced import V2VNetworkEnhanced
 
 
@@ -76,6 +80,53 @@ class EnhancedMetadata(BaseModel):
     link_quality: Optional[float] = None
     hop_count: Optional[int] = None
     priority: Optional[int] = None
+
+
+class CAMResponse(BaseModel):
+    """ETSI ITS-G5 Cooperative Awareness Message response model"""
+    station_id: int
+    generation_time: float
+    reference_position: Dict[str, float]   # {x, y, z}
+    heading: float
+    speed: float
+    drive_direction: str
+    vehicle_role: str
+    vehicle_length: float
+    vehicle_width: float
+
+
+class DENMResponse(BaseModel):
+    """ETSI EN 302 637-3 Decentralized Environmental Notification Message response"""
+    station_id: int
+    action_id: int
+    detection_time: float
+    reference_time: float
+    event_position: Dict[str, float]   # {x, y, z}
+    cause_code: int
+    cause_code_name: str
+    subcause_code: int
+    information_quality: int
+    relevance_distance: float
+    relevance_traffic_direction: str
+    event_speed: Optional[float]
+    event_heading: Optional[float]
+    termination: Optional[str]
+
+
+class DENMPublish(BaseModel):
+    """Request body for publishing a DENM"""
+    station_id: int
+    action_id: int
+    detection_time: float
+    reference_time: float
+    event_position: Dict[str, float]   # {x, y, z}
+    cause_code: int = 0
+    subcause_code: int = 0
+    information_quality: int = 0
+    relevance_distance: float = 150.0
+    relevance_traffic_direction: str = "allTrafficDirections"
+    event_speed: Optional[float] = None
+    event_heading: Optional[float] = None
 
 
 class ThreatOverview(BaseModel):
@@ -142,6 +193,10 @@ class V2VAPI:
                     "/vehicles/{vehicle_id}/threats",
                     "/bsm",
                     "/bsm/{vehicle_id}",
+                    "/cam",
+                    "/cam/{station_id}",
+                    "/denm",
+                    "/denm/{station_id}",
                     "/network/stats",
                     "/ws/v2v"
                 ]
@@ -261,7 +316,75 @@ class V2VAPI:
                 update_rate_hz=self.v2v.update_rate_hz,
                 max_range_m=self.v2v.max_range
             )
-        
+
+        # ── CAM endpoints ────────────────────────────────────────────────────
+
+        @self.app.get("/cam", response_model=List[CAMResponse])
+        async def get_all_cam():
+            """Get ETSI ITS-G5 CAM derived from all current BSMs in the network"""
+            return [
+                self._cam_to_response(create_cam_from_bsm(bsm))
+                for bsm in self.v2v.get_all_bsm().values()
+            ]
+
+        @self.app.get("/cam/{station_id}", response_model=CAMResponse)
+        async def get_cam(station_id: int):
+            """Get CAM for a specific ITS station (vehicle)"""
+            bsm = self.v2v.get_bsm(station_id)
+            if not bsm:
+                raise HTTPException(status_code=404, detail="Station not found")
+            return self._cam_to_response(create_cam_from_bsm(bsm))
+
+        # ── DENM endpoints ───────────────────────────────────────────────────
+
+        @self.app.get("/denm", response_model=List[DENMResponse])
+        async def get_all_denm():
+            """Get all active DENM alerts in the network"""
+            return [self._denm_to_response(d) for d in self.v2v.get_denm()]
+
+        @self.app.get("/denm/{station_id}", response_model=List[DENMResponse])
+        async def get_denm_by_station(station_id: int):
+            """Get all active DENMs published by a specific station"""
+            denms = self.v2v.get_denm(station_id)
+            if not denms:
+                raise HTTPException(status_code=404, detail="No DENMs found for station")
+            return [self._denm_to_response(d) for d in denms]
+
+        @self.app.post("/denm", response_model=DENMResponse, status_code=201)
+        async def publish_denm(body: DENMPublish):
+            """Publish a new DENM alert (or update an existing one)"""
+            try:
+                cause = DENMCauseCode(body.cause_code)
+            except ValueError:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Unknown cause_code: {body.cause_code}"
+                )
+            pos = body.event_position
+            denm = DENM(
+                station_id=body.station_id,
+                action_id=body.action_id,
+                detection_time=body.detection_time,
+                reference_time=body.reference_time,
+                event_position=(pos.get("x", 0.0), pos.get("y", 0.0), pos.get("z", 0.0)),
+                cause_code=cause,
+                subcause_code=body.subcause_code,
+                information_quality=body.information_quality,
+                relevance_distance=body.relevance_distance,
+                relevance_traffic_direction=body.relevance_traffic_direction,
+                event_speed=body.event_speed,
+                event_heading=body.event_heading,
+            )
+            self.v2v.publish_denm(denm)
+            return self._denm_to_response(denm)
+
+        @self.app.delete("/denm/{station_id}/{action_id}", status_code=204)
+        async def cancel_denm(station_id: int, action_id: int):
+            """Cancel (terminate) a DENM alert"""
+            removed = self.v2v.cancel_denm(station_id, action_id)
+            if not removed:
+                raise HTTPException(status_code=404, detail="DENM not found")
+
         @self.app.websocket("/ws/v2v")
         async def websocket_v2v(websocket: WebSocket):
             """WebSocket endpoint for real-time V2V updates"""
@@ -287,6 +410,41 @@ class V2VAPI:
             except WebSocketDisconnect:
                 self.websocket_clients.remove(websocket)
     
+    def _cam_to_response(self, cam) -> CAMResponse:
+        """Convert CooperativeAwarenessMessage to CAMResponse"""
+        pos = cam.reference_position
+        return CAMResponse(
+            station_id=cam.station_id,
+            generation_time=cam.generation_time,
+            reference_position={"x": pos[0], "y": pos[1], "z": pos[2]},
+            heading=cam.heading,
+            speed=cam.speed,
+            drive_direction=cam.drive_direction,
+            vehicle_role=cam.vehicle_role,
+            vehicle_length=cam.vehicle_length,
+            vehicle_width=cam.vehicle_width,
+        )
+
+    def _denm_to_response(self, denm: DENM) -> DENMResponse:
+        """Convert DENM dataclass to DENMResponse"""
+        pos = denm.event_position
+        return DENMResponse(
+            station_id=denm.station_id,
+            action_id=denm.action_id,
+            detection_time=denm.detection_time,
+            reference_time=denm.reference_time,
+            event_position={"x": pos[0], "y": pos[1], "z": pos[2]},
+            cause_code=int(denm.cause_code),
+            cause_code_name=denm.cause_code.name,
+            subcause_code=denm.subcause_code,
+            information_quality=denm.information_quality,
+            relevance_distance=denm.relevance_distance,
+            relevance_traffic_direction=denm.relevance_traffic_direction,
+            event_speed=denm.event_speed,
+            event_heading=denm.event_heading,
+            termination=denm.termination,
+        )
+
     def _bsm_to_response(self, bsm: BSMCore) -> BSMResponse:
         """Convert BSMCore to BSMResponse"""
         return BSMResponse(

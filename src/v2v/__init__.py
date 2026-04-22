@@ -2,8 +2,9 @@
 
 from .messages import (
     BSMCore, BSMPartII, CooperativeAwarenessMessage, V2VEnhancedMessage,
+    DENM, DENMCauseCode,
     VehicleType, BrakingStatus,
-    create_bsm_from_carla, calculate_threat_level
+    create_bsm_from_carla, create_cam_from_bsm, calculate_threat_level
 )
 from .network_enhanced import V2VNetworkEnhanced
 from .api import V2VAPI, create_v2v_api
@@ -11,8 +12,9 @@ from .dsrc_channel import DSRCChannel, DSRCConfig
 
 __all__ = [
     'BSMCore', 'BSMPartII', 'CooperativeAwarenessMessage', 'V2VEnhancedMessage',
+    'DENM', 'DENMCauseCode',
     'VehicleType', 'BrakingStatus',
-    'create_bsm_from_carla', 'calculate_threat_level',
+    'create_bsm_from_carla', 'create_cam_from_bsm', 'calculate_threat_level',
     'V2VNetworkEnhanced', 'V2VAPI', 'create_v2v_api',
     'DSRCChannel', 'DSRCConfig',
 ]
