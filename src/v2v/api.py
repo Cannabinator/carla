@@ -57,7 +57,7 @@ class ThreatInfo(BaseModel):
     """Threat assessment information"""
     other_vehicle_id: int
     threat_level: int  # 0-4
-    time_to_collision: float
+    time_to_collision: Optional[float]  # None when vehicles are not converging
     distance: float
     timestamp: float
 
@@ -280,11 +280,16 @@ class V2VAPI:
                 raise HTTPException(status_code=404, detail="Vehicle not found")
             
             threats = self.v2v.get_threats(vehicle_id)
-            # Map field names from internal format to API format
+            # Map field names from internal format to API format.
+            # ttc is float('inf') when vehicles are not converging — map to None
+            # so the JSON response stays valid (JSON has no Infinity literal).
+            def _safe_ttc(ttc: float) -> Optional[float]:
+                return None if not math.isfinite(ttc) else ttc
+
             return [ThreatInfo(
                 other_vehicle_id=t['other_vehicle_id'],
                 threat_level=t['level'],
-                time_to_collision=t['ttc'],
+                time_to_collision=_safe_ttc(t['ttc']),
                 distance=t['distance'],
                 timestamp=t['timestamp']
             ) for t in threats]

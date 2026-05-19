@@ -61,11 +61,31 @@ class DataCollector:
         filename = self.run_dir / 'lidar' / f'{frame:06d}.npy'
         np.save(filename, points)
         
-    def log_vehicle_state(self, vehicle, frame, timestamp):
-        """Log vehicle state (position, rotation, velocity)."""
-        transform = vehicle.get_transform()
-        velocity = vehicle.get_velocity()
+    def log_vehicle_state(self, vehicle, frame, timestamp, snapshot=None):
+        """Log vehicle state (position, rotation, velocity).
         
+        Args:
+            vehicle: CARLA vehicle actor
+            frame: Current simulation frame
+            timestamp: Simulation timestamp in seconds
+            snapshot: WorldSnapshot for fresh velocity data.  When provided,
+                      velocity is read from the snapshot (current tick).
+                      When None, falls back to actor.get_velocity() which
+                      returns data from the PREVIOUS tick (stale by one step).
+        """
+        if snapshot is not None:
+            actor_snap = snapshot.find(vehicle.id)
+            if actor_snap is not None:
+                transform = actor_snap.get_transform()
+                velocity = actor_snap.get_velocity()
+            else:
+                # Actor not in snapshot (destroyed this tick) — fall back
+                transform = vehicle.get_transform()
+                velocity = vehicle.get_velocity()
+        else:
+            transform = vehicle.get_transform()
+            velocity = vehicle.get_velocity()  # stale: cached from previous tick
+
         self.log_file.write(f'{frame},{timestamp:.3f},'
                           f'{transform.location.x:.3f},{transform.location.y:.3f},{transform.location.z:.3f},'
                           f'{transform.rotation.pitch:.3f},{transform.rotation.yaw:.3f},{transform.rotation.roll:.3f},'

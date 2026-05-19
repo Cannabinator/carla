@@ -36,6 +36,71 @@ class VehicleType(IntEnum):
     UNKNOWN = 99
 
 
+# ── Vehicle-type detection from CARLA blueprint ID ────────────────────────────
+# Maps substrings of vehicle.type_id to VehicleType.
+# Checked in order; first match wins.  "passenger_car" catch-all is not listed
+# here — any 4-wheeled blueprint that misses all patterns falls back to
+# PASSENGER_CAR in _vehicle_type_from_actor().
+_BLUEPRINT_TYPE_MAP: list = [
+    # Emergency
+    ("ambulance",           VehicleType.EMERGENCY),
+    ("firetruck",           VehicleType.EMERGENCY),
+    ("police",              VehicleType.EMERGENCY),
+    # Buses / large passenger vans
+    ("fusorosa",            VehicleType.BUS),      # Mitsubishi Fuso Rosa (full bus)
+    ("carlacola",           VehicleType.BUS),      # CarlaMotors generic bus
+    (".t2",                 VehicleType.BUS),      # VW Transporter T2 / T2_2021 (minibus)
+    # Trucks / utility
+    ("cybertruck",          VehicleType.TRUCK),    # Tesla Cybertruck
+    ("sprinter",            VehicleType.TRUCK),    # Mercedes Sprinter
+    # Motorcycles / bicycles / micro-vehicles
+    ("harley",              VehicleType.MOTORCYCLE),
+    ("kawasaki",            VehicleType.MOTORCYCLE),
+    ("vespa",               VehicleType.MOTORCYCLE),
+    ("yamaha",              VehicleType.MOTORCYCLE),
+    ("ninja",               VehicleType.MOTORCYCLE),
+    ("crossbike",           VehicleType.MOTORCYCLE),
+    ("century",             VehicleType.MOTORCYCLE),  # diamondback.century
+    ("omafiets",            VehicleType.MOTORCYCLE),  # gazelle.omafiets bicycle
+    ("low_rider",           VehicleType.MOTORCYCLE),
+]
+
+
+def _vehicle_type_from_actor(vehicle) -> 'VehicleType':
+    """
+    Derive VehicleType from the CARLA actor's blueprint ID.
+
+    Uses vehicle.type_id (e.g. 'vehicle.ford.ambulance') to classify the
+    vehicle.  Falls back to actor.attributes['number_of_wheels'] (a cached
+    blueprint dict — no RPC call) so that any two-wheeled blueprint not yet
+    in _BLUEPRINT_TYPE_MAP is still classified as MOTORCYCLE rather than
+    PASSENGER_CAR.
+
+    Args:
+        vehicle: CARLA vehicle actor with .type_id attribute.
+
+    Returns:
+        VehicleType enum value.
+    """
+    type_id = getattr(vehicle, 'type_id', '').lower()
+
+    for fragment, vtype in _BLUEPRINT_TYPE_MAP:
+        if fragment in type_id:
+            return vtype
+
+    # Wheel-count fallback: two-wheeled vehicles not caught by name lookup.
+    # Uses actor.attributes (a cached blueprint dict — no RPC call) rather than
+    # get_physics_control() which is a blocking server round-trip.
+    try:
+        num_wheels = int(getattr(vehicle, 'attributes', {}).get('number_of_wheels', '4'))
+        if num_wheels <= 2:
+            return VehicleType.MOTORCYCLE
+    except (ValueError, TypeError):
+        pass
+
+    return VehicleType.PASSENGER_CAR
+
+
 class BrakingStatus(IntEnum):
     """Braking system status"""
     UNAVAILABLE = 0
@@ -335,7 +400,7 @@ def create_bsm_from_carla(vehicle, vehicle_id: int, msg_count: int,
         timestamp=sim_timestamp,
         msg_count=msg_count % 128,
         vehicle_id=vehicle_id,
-        vehicle_type=VehicleType.PASSENGER_CAR,
+        vehicle_type=_vehicle_type_from_actor(vehicle),
         latitude=transform.location.x,
         longitude=transform.location.y,
         elevation=transform.location.z,
