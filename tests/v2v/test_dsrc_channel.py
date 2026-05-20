@@ -154,8 +154,8 @@ class TestDSRCChannelPhysics(unittest.TestCase):
         At 10 m LOS with σ=0, SNR margin >> 0 → PRR must be > 0.99.
 
         P_rx at 10 m (reference distance) = P_tx + 2*G_ant - L0
-                              = 23 + 4 - 47.8 ≈ -20.8 dBm
-        SNR margin = -20.8 - (-85) = 64.2 dB → logistic(k*64.2) ≈ 1.0
+                              = 23 + 4 - 67.9 ≈ -40.9 dBm
+        SNR margin = -40.9 - (-85) = 44.1 dB → logistic(k*44.1) ≈ 1.0
         """
         cfg = self._no_shadow_config()
         channel = DSRCChannel(cfg)
@@ -184,20 +184,23 @@ class TestDSRCChannelPhysics(unittest.TestCase):
         PRR must monotonically decrease with distance at fixed σ=0, LOS.
 
         With ETSI EN 302 663 defaults (TX=23 dBm, sensitivity=-85 dBm,
-        n_LOS=2.0, L0≈47.8 dB at 10 m), the noise-floor range is ~10.2 km.
-        PRR is saturated at 1.0 well below 1 km, so we test near the
-        sensitivity crossover point where the sigmoid is not yet saturated.
+        n_LOS=2.0, L0≈67.9 dB at 10 m), the sensitivity crossover is ~1.6 km.
+        PRR is saturated at 1.0 well below 1 km, so we test near and past the
+        crossover point where the sigmoid produces a strict ordering.
         """
         cfg = self._no_shadow_config()
         channel = DSRCChannel(cfg)
+        # 1 km: before crossover (PRR ≈ 1.0)
+        # 1.6 km: near crossover (PRR ≈ 0.5)
+        # 3.0 km: well past crossover (PRR ≈ 0)
         prr_near = channel._compute_prr(1_000.0, nlos=False, n_contenders=1)
-        prr_mid = channel._compute_prr(8_500.0, nlos=False, n_contenders=1)
-        prr_far = channel._compute_prr(11_000.0, nlos=False, n_contenders=1)
+        prr_mid = channel._compute_prr(1_600.0, nlos=False, n_contenders=1)
+        prr_far = channel._compute_prr(3_000.0, nlos=False, n_contenders=1)
 
         self.assertGreater(prr_near, prr_mid,
-                           "PRR at 1 km should exceed PRR at 8.5 km")
+                           "PRR at 1 km should exceed PRR at 1.6 km")
         self.assertGreater(prr_mid, prr_far,
-                           "PRR at 8.5 km should exceed PRR at 11 km")
+                           "PRR at 1.6 km should exceed PRR at 3 km")
 
     def test_nlos_prr_lower_than_los_same_distance(self):
         """

@@ -45,9 +45,11 @@ _DSRC_LAMBDA = _C_SPEED_OF_LIGHT / _DSRC_FREQ_HZ  # wavelength ≈ 0.0508 m
 
 # Friis free-space path loss at reference distance d0 = 10 m:
 #   L0 = 20·log10(4π·d0 / λ)
+#   L0 = 20·log10(4π·10 / 0.05085) ≈ 67.9 dB
+# (Note: the Friis loss at d0=1 m would be ≈ 47.8 dB; this model uses d0=10 m.)
 _REFERENCE_DIST_M = 10.0
 _L0_DB = 20.0 * math.log10(4.0 * math.pi * _REFERENCE_DIST_M / _DSRC_LAMBDA)
-# _L0_DB ≈ 47.8 dB
+# _L0_DB ≈ 67.9 dB
 
 # Carrier sensing range for CSMA/CA contention counting (IEEE 802.11 CS threshold)
 _CARRIER_SENSE_RANGE_M = 300.0

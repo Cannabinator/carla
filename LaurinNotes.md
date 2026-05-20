@@ -57,3 +57,21 @@ in der klasse `messages.py` sind verschiedene V2V Message Standards und funktion
 
 ## Next Level implementation
 I want the Whole programm to change from a monolithic use case to a server/client structure. Instead of starting a scenario running on a dedicated carla server 
+
+
+## Notes 13.5.2026
+
+das system besteht aus 2 getrennten schichten 
+
+1. GlobalRoutePlanner.py 
+    1. Global Planner einmalig bei setDestination() ausgeführt. 
+ 
+    2. LocalPlanner.py läuft jeden frame 
+        - steuert richtung (lateral) und gas/bremse longitudinal
+
+
+
+Verkehrsfluss steuerung 
+   - Ego Vehicle wird falls verfügbar über den behaviour agent gesteuert 
+   - Background traffic, läuft über den Carla traffic manager (20% über erlaubter geschwindigkeit)
+
