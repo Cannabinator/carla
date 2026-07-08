@@ -36,6 +36,7 @@ from src.utils import (
     ScenarioBuilder, ScenarioConfig,
     ConsoleObserver, CARLADebugObserver, CSVDataLogger, CompactLogObserver,
     SpectatorFollowObserver, V2VMessageLogger,
+    RunDirectory, PotholeEventLogger,
     LiDARQuality, VehicleColor, SemanticTag,
     LazyVehicleStats, Timer, calculate_distance_3d
 )
@@ -92,7 +93,10 @@ def run_complete_v2v_demo(config: ScenarioConfig, status_callback=None, server_m
         # STEP 1: Initialize CARLA Session (Context Manager Pattern)
         # ============================================================================
         with CARLASession(config.host, config.port, config) as session:
-            
+
+            # Create timestamped run directory — all output files go here
+            run_dir = RunDirectory()
+
             print(f"\n{'='*80}")
             print(f"🚀 COMPLETE V2V + LiDAR DEMONSTRATION")
             print(f"{'='*80}")
@@ -103,12 +107,26 @@ def run_complete_v2v_demo(config: ScenarioConfig, status_callback=None, server_m
             print(f"🚗 Vehicles: {config.num_vehicles}")
             print(f"📡 V2V range: {config.v2v_range}m")
             print(f"🤖 Agent mode: {'BehaviorAgent' if BEHAVIOR_AGENT_AVAILABLE else 'TM Autopilot (BehaviorAgent unavailable)'}")
+            print(f"📂 Run directory: {run_dir.path}")
             print(f"{'='*80}\n")
             
             # Set deterministic seeds for reproducibility
             random.seed(config.random_seed)
             np.random.seed(config.random_seed)
-            
+
+            # ========================================================================
+            # POTHOLE INITIALIZATION (static, deterministic — seed 12345)
+            # ========================================================================
+            from src.utils.potholes import PotholeManager
+            pothole_mgr = PotholeManager()
+            pothole_mgr.initialize(session.world)
+            n_minor    = sum(1 for p in pothole_mgr.potholes if p.severity == 1)
+            n_moderate = sum(1 for p in pothole_mgr.potholes if p.severity == 2)
+            n_severe   = sum(1 for p in pothole_mgr.potholes if p.severity == 3)
+            print(f"🕳️  Potholes: {len(pothole_mgr)} static potholes "
+                  f"(seed={PotholeManager.POTHOLE_SEED}) — "
+                  f"{n_minor} minor / {n_moderate} moderate / {n_severe} severe")
+
             # ========================================================================
             # STEP 2: Initialize V2V Network (Enhanced BSM Protocol)
             # ========================================================================
@@ -212,7 +230,19 @@ def run_complete_v2v_demo(config: ScenarioConfig, status_callback=None, server_m
                     print(f"   ✓ LiDAR registered with main server on port {config.lidar_web_port}")
                 
                 # Don't call lidar_api.start_server() - use existing server
-            
+
+            # Register potholes with server (independent of whether LiDAR is enabled)
+            if server_module is not None:
+                server_module.set_pothole_manager(pothole_mgr)
+                print(f"🕳️  Potholes registered with main server (via module ref)")
+            else:
+                try:
+                    from src.lidar import server as lidar_server
+                    lidar_server.set_pothole_manager(pothole_mgr)
+                    print(f"🕳️  Potholes registered with lidar server")
+                except ImportError:
+                    logger.warning("Could not register pothole manager with server")
+
             # ========================================================================
             # STEP 5: Setup Traffic Manager (Deterministic)
             # ========================================================================
@@ -329,16 +359,13 @@ def run_complete_v2v_demo(config: ScenarioConfig, status_callback=None, server_m
                 print(f"   ✓ CARLA debug visualization")
             
             if config.csv_logging:
-                csv_path: Optional[Path] = Path(config.csv_output_path) if config.csv_output_path else None
-                if csv_path is None:
-                    csv_path = log_dir / f"scenario_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-                observers.append(CSVDataLogger(output_path=csv_path))
-                print(f"   ✓ CSV data logger: {csv_path}")
-            
+                observers.append(CSVDataLogger(run_dir=run_dir))
+                print(f"   ✓ Ego telemetry logger: {run_dir.ego_telemetry_path}")
+
             if config.compact_logging:
                 observers.append(CompactLogObserver(logger))
                 print(f"   ✓ Compact log observer")
-            
+
             # Bird's-eye view spectator camera following ego vehicle
             if config.spectator_follow:
                 observers.append(SpectatorFollowObserver(
@@ -349,19 +376,20 @@ def run_complete_v2v_demo(config: ScenarioConfig, status_callback=None, server_m
                     update_interval_frames=1
                 ))
                 print(f"   ✓ Spectator follow camera (height={config.spectator_height}m, pitch={config.spectator_pitch}°)")
-            
+
             # Detailed V2V message logging for research analysis
             if config.v2v_message_logging and v2v:
-                v2v_log_path: Optional[Path] = Path(config.v2v_log_output_path) if config.v2v_log_output_path else None
-                if v2v_log_path is None:
-                    v2v_log_path = log_dir / f"v2v_messages_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
                 observers.append(V2VMessageLogger(
                     v2v_network=v2v,
-                    output_path=v2v_log_path,
+                    run_dir=run_dir,
                     log_interval_frames=config.v2v_update_interval_frames
                 ))
-                print(f"   ✓ V2V message logger: {v2v_log_path}")
-            
+                print(f"   ✓ V2V message logger: {run_dir.v2v_messages_path}")
+
+            # Pothole proximity events — always active for data collection
+            observers.append(PotholeEventLogger(run_dir=run_dir, fps=config.fps))
+            print(f"   ✓ Pothole event logger: {run_dir.pothole_events_path}")
+
             print(f"   Total: {len(observers)} observers registered\n")
             
             # ========================================================================
@@ -441,7 +469,11 @@ def run_complete_v2v_demo(config: ScenarioConfig, status_callback=None, server_m
                     # Update V2V network with fresh snapshot at 2 Hz
                     if v2v and frame % config.v2v_update_interval_frames == 0:
                         v2v.update(force=True, snapshot=snapshot)
-                    
+
+                    # Draw pothole debug boxes in CARLA client (same interval as V2V)
+                    if frame % config.v2v_update_interval_frames == 0:
+                        pothole_mgr.draw_debug()
+
                     # Create vehicle state object (uses lazy evaluation internally)
                     state: VehicleState = VehicleState.from_snapshot(
                         frame=frame,
@@ -467,7 +499,11 @@ def run_complete_v2v_demo(config: ScenarioConfig, status_callback=None, server_m
                         'bsm': v2v.get_bsm(0) if v2v else None,
                         'neighbor_distance_map': neighbor_distance_map,
                         'total_vehicles': actor_mgr.count(),
-                        'lidar_points': lidar_api.get_point_count() if lidar_api else 0
+                        'lidar_points': lidar_api.get_point_count() if lidar_api else 0,
+                        'potholes': pothole_mgr.to_dict_list(),
+                        'nearby_potholes': pothole_mgr.get_nearby(
+                            state.position[0], state.position[1], radius=50.0
+                        ),
                     }
                     
                     # Notify all observers (they use lazy evaluation internally)
@@ -559,15 +595,66 @@ def run_complete_v2v_demo(config: ScenarioConfig, status_callback=None, server_m
                 print(f"\n🎯 LiDAR:")
                 print(f"   Total points streamed: {lidar_api.get_point_count() * frame:,}")
                 print(f"   Web server port:       {config.lidar_web_port}")
-            
+
+            # Pothole statistics
+            print(f"\n🕳️  Potholes (seed={PotholeManager.POTHOLE_SEED}):")
+            print(f"   Total:           {len(pothole_mgr)}")
+            sev_counts = {1: 0, 2: 0, 3: 0}
+            for ph in pothole_mgr.potholes:
+                sev_counts[ph.severity] += 1
+            print(f"   Minor  (sev 1):  {sev_counts[1]}")
+            print(f"   Moderate (sev 2):{sev_counts[2]}")
+            print(f"   Severe (sev 3):  {sev_counts[3]}")
+            print(f"   REST API:        /api/potholes")
+
             # Notify observers of completion
             for observer in observers:
                 observer.on_complete(frame, elapsed_time)
             
             print(f"\n{'='*80}")
+            # Write run_summary.json
+            v2v_stats = v2v.get_network_stats() if v2v else {}
+            run_dir.write_summary({
+                'carla': {
+                    'host': config.host,
+                    'port': config.port,
+                    'map': session.world.get_map().name,
+                },
+                'config': {
+                    'duration_s': config.duration,
+                    'num_vehicles': config.num_vehicles,
+                    'v2v_range_m': config.v2v_range,
+                    'lidar_enabled': config.lidar_enabled,
+                    'random_seed': config.random_seed,
+                },
+                'potholes': {
+                    'seed': PotholeManager.POTHOLE_SEED,
+                    'count': len(pothole_mgr),
+                    'severity_1_minor':    sum(1 for p in pothole_mgr.potholes if p.severity == 1),
+                    'severity_2_moderate': sum(1 for p in pothole_mgr.potholes if p.severity == 2),
+                    'severity_3_severe':   sum(1 for p in pothole_mgr.potholes if p.severity == 3),
+                    'locations': pothole_mgr.to_dict_list(),
+                },
+                'results': {
+                    'total_frames': frame,
+                    'real_time_s': round(elapsed_time, 2),
+                    'simulated_time_s': round(frame / config.fps, 2),
+                    'v2v_messages_sent': v2v_stats.get('total_messages_sent', 0),
+                    'avg_neighbors': round(v2v_stats.get('average_neighbors', 0.0), 2),
+                    'max_neighbors': v2v_stats.get('max_neighbors', 0),
+                },
+                'files': {
+                    'ego_telemetry':  'ego_telemetry.csv'  if config.csv_logging else None,
+                    'v2v_messages':   'v2v_messages.csv'   if config.v2v_message_logging else None,
+                    'pothole_events': 'pothole_events.csv',
+                },
+            })
+            print(f"📋 Run summary written: {run_dir.run_summary_path}")
+
+            print(f"\n{'='*80}")
             print(f"✅ SIMULATION COMPLETED SUCCESSFULLY")
             print(f"{'='*80}\n")
-            
+
             logger.info(f"Scenario completed: {frame} frames in {elapsed_time:.2f}s")
     
     except Exception as e:

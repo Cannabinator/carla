@@ -64,6 +64,7 @@ if assets_dir.exists():
 # Type is Any since LiDARDataCollector may not be available without CARLA
 _collector: Optional[Any] = None
 _v2v_network: Optional[object] = None
+_pothole_manager: Optional[Any] = None  # PotholeManager instance (set by scenario)
 _streaming_task: Optional[asyncio.Task] = None
 _event_loop: Optional[asyncio.AbstractEventLoop] = None  # Store event loop reference
 
@@ -127,6 +128,18 @@ def set_v2v_network(v2v_network):
     global _v2v_network, _simulation_status
     _v2v_network = v2v_network
     logger.info("V2V network registered with server")
+
+
+def set_pothole_manager(manager: Optional[Any]) -> None:
+    """Register the PotholeManager instance.
+
+    Called by the scenario after pothole initialization so the REST API
+    can serve pothole data to the web viewer and external clients.
+    """
+    global _pothole_manager
+    _pothole_manager = manager
+    if manager is not None:
+        logger.info(f"PotholeManager registered: {len(manager)} potholes (seed={manager.POTHOLE_SEED})")
 
 
 class ConnectionManager:
@@ -673,6 +686,35 @@ async def get_vehicle_bsm(vehicle_id: int):
             "vertical": bsm.vertical_accel
         }
     }
+
+
+# ── Pothole API Endpoints ──────────────────────────────────────────────────────
+
+@app.get("/api/potholes")
+async def get_potholes():
+    """Return all 15 static pothole locations and metadata.
+
+    Each pothole record contains:
+    - id, x, y, z  — CARLA world coordinates
+    - radius        — visual / proximity radius in metres
+    - severity      — 1=minor (yellow), 2=moderate (orange), 3=severe (red)
+    - road_id, lane_id, s — waypoint identifiers for map-level queries
+    """
+    if _pothole_manager is None:
+        return []
+    return _pothole_manager.to_dict_list()
+
+
+@app.get("/api/potholes/{pothole_id}")
+async def get_pothole(pothole_id: int):
+    """Return a single pothole by its integer ID (0–14)."""
+    from fastapi import HTTPException as _HTTPException
+    if _pothole_manager is None:
+        raise _HTTPException(status_code=503, detail="Pothole manager not yet initialized")
+    matches = [p for p in _pothole_manager.potholes if p.id == pothole_id]
+    if not matches:
+        raise _HTTPException(status_code=404, detail=f"Pothole {pothole_id} not found")
+    return matches[0].to_dict()
 
 
 # Simulation Control API Endpoints

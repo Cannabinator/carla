@@ -201,6 +201,10 @@
                 <span class="stat-label">Latency:</span>
                 <span class="stat-value" id="latency">0 ms</span>
             </div>
+            <div class="stat">
+                <span class="stat-label">Potholes:</span>
+                <span class="stat-value" id="pothole-count">—</span>
+            </div>
         </div>
         
         <div id="legend">
@@ -219,6 +223,7 @@
             <button id="size-btn" onclick="togglePointSize()">Point Size: 0.5</button>
             <button id="color-btn" onclick="cycleColorMode()">Color: Distance</button>
             <button onclick="toggleGrid()">Toggle Grid</button>
+            <button id="pothole-btn" onclick="togglePotholes()" style="background:#FFA500;">Potholes: ON</button>
         </div>
         
         <div class="loading" id="loading">Connecting...</div>
@@ -341,6 +346,11 @@
         let freeFlyMode = false;
         let egoPosition = { x: 0, y: 0, z: 0 };
         let egoActorId = 0;   // updated from binary header for ego self-filtering
+
+        // ── Pothole overlay state ─────────────────────────────────────────────────
+        let potholeMarkers = [];
+        let potholesVisible = true;
+        const POTHOLE_DISC_COLORS = { 1: 0xFFFF00, 2: 0xFF8C00, 3: 0xFF2200 };
         
         function init() {
             // Scene
@@ -433,6 +443,9 @@
             
             // Start animation loop
             animate();
+
+            // Load static potholes from REST API
+            loadPotholes();
         }
         
         function connectWebSocket() {
@@ -935,6 +948,79 @@
         
         // Initialize when page loads
         window.addEventListener('load', () => { init(); updateLegend(); });
+
+        // ── Pothole overlay ───────────────────────────────────────────────────────
+        function loadPotholes() {
+            fetch('/api/potholes')
+                .then(r => r.ok ? r.json() : [])
+                .catch(() => [])
+                .then(data => {
+                    if (!Array.isArray(data)) return;
+                    renderPotholes(data);
+                });
+        }
+
+        function renderPotholes(potholes) {
+            // Remove previous markers from scene
+            for (const m of potholeMarkers) {
+                scene.remove(m);
+                if (m.geometry) m.geometry.dispose();
+                if (m.material) m.material.dispose();
+            }
+            potholeMarkers.length = 0;
+
+            for (const ph of potholes) {
+                const color  = POTHOLE_DISC_COLORS[ph.severity] || 0xFFFF00;
+                // Enlarge radius for visibility in the 3-D scene
+                const radius = Math.max(ph.radius * 3.0, 0.8);
+
+                // Filled disc — lies flat in XY plane (Three.js CircleGeometry
+                // faces +Z, which is "up" in the CARLA-Z-up coordinate system)
+                const discGeo = new THREE.CircleGeometry(radius, 24);
+                const discMat = new THREE.MeshBasicMaterial({
+                    color,
+                    side: THREE.DoubleSide,
+                    transparent: true,
+                    opacity: 0.65,
+                    depthTest: false,   // always render above road surface
+                });
+                const disc = new THREE.Mesh(discGeo, discMat);
+                // CARLA world → Three.js: x→x, y→-y, z→z  (same as LiDAR points)
+                disc.position.set(ph.x, -ph.y, ph.z + 0.15);
+                disc.visible = potholesVisible;
+                scene.add(disc);
+                potholeMarkers.push(disc);
+
+                // White border ring for crisp edge definition
+                const ringGeo = new THREE.RingGeometry(radius * 0.82, radius, 24);
+                const ringMat = new THREE.MeshBasicMaterial({
+                    color: 0xffffff,
+                    side: THREE.DoubleSide,
+                    transparent: true,
+                    opacity: 0.85,
+                    depthTest: false,
+                });
+                const ring = new THREE.Mesh(ringGeo, ringMat);
+                ring.position.set(ph.x, -ph.y, ph.z + 0.16);
+                ring.visible = potholesVisible;
+                scene.add(ring);
+                potholeMarkers.push(ring);
+            }
+
+            const countEl = document.getElementById('pothole-count');
+            if (countEl) countEl.textContent = potholes.length;
+            console.log('Potholes loaded: ' + potholes.length);
+        }
+
+        function togglePotholes() {
+            potholesVisible = !potholesVisible;
+            for (const m of potholeMarkers) m.visible = potholesVisible;
+            const btn = document.getElementById('pothole-btn');
+            if (btn) {
+                btn.textContent = 'Potholes: ' + (potholesVisible ? 'ON' : 'OFF');
+                btn.style.backgroundColor = potholesVisible ? '#FFA500' : '#757575';
+            }
+        }
     </script>
 </body>
 </html>

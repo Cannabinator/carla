@@ -21,7 +21,9 @@ from .observers import (
     CSVDataLogger,
     CompactLogObserver,
     SpectatorFollowObserver,
-    V2VMessageLogger
+    V2VMessageLogger,
+    RunDirectory,
+    PotholeEventLogger,
 )
 from .builder import (
     ScenarioConfig,
@@ -42,6 +44,7 @@ from .enums import (
 from .binary_protocol import BinaryProtocol, compare_bandwidth
 from .octree import OctreeDownsampler
 from .lazy import LazyProperty, LazyVehicleStats, memoize, lazy_init, Timer
+from .potholes import PotholeManager, PotholeInfo
 
 __all__ = [
     'DataCollector',
@@ -64,6 +67,8 @@ __all__ = [
     'CompactLogObserver',
     'SpectatorFollowObserver',
     'V2VMessageLogger',
+    'RunDirectory',
+    'PotholeEventLogger',
     'ScenarioConfig',
     'ScenarioBuilder',
     'quick_scenario',
@@ -85,4 +90,6 @@ __all__ = [
     'memoize',
     'lazy_init',
     'Timer',
+    'PotholeManager',
+    'PotholeInfo',
 ]

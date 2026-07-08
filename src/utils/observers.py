@@ -6,6 +6,7 @@ Separates scenario logic from visualization concerns.
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
 import carla
+import json
 from datetime import datetime
 from pathlib import Path
 import csv
@@ -13,6 +14,76 @@ import csv
 from .session import VehicleState
 from ..v2v import V2VNetworkEnhanced
 from ..config import DEFAULT_VIZ_CONFIG
+
+
+class RunDirectory:
+    """
+    Creates and manages a single timestamped output directory for one
+    simulation run.  All data files produced during the run (CSVs, JSON
+    summary) are stored under::
+
+        data/runs/run_YYYYMMDD_HHMMSS/
+            ego_telemetry.csv     ← per-frame ego vehicle data
+            v2v_messages.csv      ← V2V BSM message log (if enabled)
+            pothole_events.csv    ← pothole proximity events (always)
+            run_summary.json      ← metadata + final statistics
+
+    Usage::
+
+        run_dir = RunDirectory()
+        print(run_dir.path)            # data/runs/run_20260708_092748
+        run_dir.write_summary({...})   # writes run_summary.json
+    """
+
+    def __init__(self, base_dir: Optional[Path] = None) -> None:
+        self.created_at: datetime = datetime.now()
+        ts = self.created_at.strftime('%Y%m%d_%H%M%S')
+        self.run_id: str = f"run_{ts}"
+
+        if base_dir is None:
+            base_dir = Path(__file__).parent.parent.parent / 'data' / 'runs'
+        self.path: Path = base_dir / self.run_id
+        self.path.mkdir(parents=True, exist_ok=True)
+
+    # ── File path properties ──────────────────────────────────────────────
+
+    @property
+    def ego_telemetry_path(self) -> Path:
+        """Per-frame ego vehicle telemetry CSV."""
+        return self.path / 'ego_telemetry.csv'
+
+    @property
+    def v2v_messages_path(self) -> Path:
+        """V2V BSM message exchange log CSV."""
+        return self.path / 'v2v_messages.csv'
+
+    @property
+    def pothole_events_path(self) -> Path:
+        """Pothole proximity ENTER/EXIT event log CSV."""
+        return self.path / 'pothole_events.csv'
+
+    @property
+    def run_summary_path(self) -> Path:
+        """JSON file with run metadata and final statistics."""
+        return self.path / 'run_summary.json'
+
+    # ── Summary writer ────────────────────────────────────────────────────
+
+    def write_summary(self, data: Dict[str, Any]) -> None:
+        """Merge *data* with run metadata and write ``run_summary.json``."""
+        summary: Dict[str, Any] = {
+            'run_id': self.run_id,
+            'created': self.created_at.isoformat(),
+        }
+        summary.update(data)
+        with open(self.run_summary_path, 'w') as fh:
+            json.dump(summary, fh, indent=2, default=str)
+
+    def __str__(self) -> str:
+        return str(self.path)
+
+    def __repr__(self) -> str:
+        return f"RunDirectory('{self.path}')"
 
 
 class ScenarioObserver(ABC):
@@ -166,19 +237,33 @@ class CARLADebugObserver(ScenarioObserver):
 
 
 class CSVDataLogger(ScenarioObserver):
-    """Log vehicle and V2V data to CSV file with detailed BSM information."""
-    
-    def __init__(self, output_path: Optional[Path] = None):
+    """Log per-frame ego-vehicle and V2V data to CSV.
+
+    When a ``RunDirectory`` is provided the file is written to
+    ``run_dir.ego_telemetry_path``.  Passing an explicit ``output_path``
+    overrides this (backward-compatible with existing callers).
+    """
+
+    def __init__(
+        self,
+        output_path: Optional[Path] = None,
+        run_dir: Optional['RunDirectory'] = None,
+    ):
         """
         Args:
-            output_path: CSV file path. If None, auto-generated in logs/
+            output_path: Explicit CSV file path (overrides run_dir).
+            run_dir:     RunDirectory for this simulation run.  If given and
+                         output_path is None, uses run_dir.ego_telemetry_path.
         """
         if output_path is None:
-            log_dir = Path(__file__).parent.parent.parent / 'logs'
-            log_dir.mkdir(exist_ok=True)
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            output_path = log_dir / f'v2v_data_{timestamp}.csv'
-        
+            if run_dir is not None:
+                output_path = run_dir.ego_telemetry_path
+            else:
+                log_dir = Path(__file__).parent.parent.parent / 'logs'
+                log_dir.mkdir(exist_ok=True)
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                output_path = log_dir / f'ego_telemetry_{timestamp}.csv'
+
         self.output_path = output_path
         self.csv_file = None
         self.writer = None
@@ -194,25 +279,39 @@ class CSVDataLogger(ScenarioObserver):
         threats = v2v_data.get('threats', [])
         bsm = v2v_data.get('bsm', None)
         neighbor_distance_map = v2v_data.get('neighbor_distance_map', {})
-        
-        # Prepare neighbor data (IDs and distances)
+
+        # Neighbour data (up to 5)
         neighbor_ids = ','.join([str(n.vehicle_id) for n in neighbors[:5]]) if neighbors else ''
         neighbor_distances = ','.join([
             f"{neighbor_distance_map.get(n.vehicle_id, 0.0):.1f}" for n in neighbors[:5]
         ]) if neighbors else ''
-        
+
         # Threat data
         threat_count = len([t for t in threats if t.get('level', 0) >= 2]) if threats else 0
         min_ttc = min([t.get('ttc', 999) for t in threats], default=999) if threats else 999
-        
+
         # BSM data
         bsm_heading = bsm.heading if bsm and hasattr(bsm, 'heading') else 0
         bsm_accel = bsm.longitudinal_accel if bsm and hasattr(bsm, 'longitudinal_accel') else 0
-        
+
+        # Pothole proximity data
+        nearby_potholes = v2v_data.get('nearby_potholes', [])
+        if nearby_potholes:
+            closest = min(
+                nearby_potholes,
+                key=lambda p: (p.x - state.position[0]) ** 2 + (p.y - state.position[1]) ** 2,
+            )
+            closest_dist: Any = round(
+                ((closest.x - state.position[0]) ** 2 + (closest.y - state.position[1]) ** 2) ** 0.5, 2
+            )
+            closest_id: Any = closest.id
+            closest_sev: Any = closest.severity
+        else:
+            closest_dist = closest_id = closest_sev = ''
+
         # Write row
         self.writer.writerow({  # type: ignore
             'frame': state.frame,
-            'timestamp': datetime.now().isoformat(),
             'sim_timestamp': f"{state.sim_time:.3f}",
             'wall_timestamp': datetime.now().isoformat(),
             'pos_x': state.position[0],
@@ -236,15 +335,19 @@ class CSVDataLogger(ScenarioObserver):
             'min_ttc': min_ttc,
             'bsm_heading': bsm_heading,
             'bsm_accel': bsm_accel,
-            'lidar_points': v2v_data.get('lidar_points', 0)
+            'lidar_points': v2v_data.get('lidar_points', 0),
+            'nearby_potholes': len(nearby_potholes),
+            'closest_pothole_id': closest_id,
+            'closest_pothole_dist_m': closest_dist,
+            'closest_pothole_severity': closest_sev,
         })
         self.total_rows += 1
-    
+
     def _open_csv(self):
         """Open CSV file and write header."""
         self.csv_file = open(self.output_path, 'w', newline='')
         fieldnames = [
-            'frame', 'timestamp', 'sim_timestamp', 'wall_timestamp',
+            'frame', 'sim_timestamp', 'wall_timestamp',
             'pos_x', 'pos_y', 'pos_z',
             'vel_x', 'vel_y', 'vel_z',
             'speed_kmh', 'speed_ms',
@@ -253,11 +356,14 @@ class CSVDataLogger(ScenarioObserver):
             'v2v_neighbors', 'neighbor_ids', 'neighbor_distances',
             'threats', 'min_ttc',
             'bsm_heading', 'bsm_accel',
-            'lidar_points'
+            'lidar_points',
+            # Pothole proximity columns
+            'nearby_potholes', 'closest_pothole_id',
+            'closest_pothole_dist_m', 'closest_pothole_severity',
         ]
         self.writer = csv.DictWriter(self.csv_file, fieldnames=fieldnames)
         self.writer.writeheader()
-    
+
     def on_complete(self, total_frames: int, elapsed_time: float):
         """Close CSV file."""
         if self.csv_file:
@@ -450,26 +556,35 @@ class V2VMessageLogger(ScenarioObserver):
     Creates a dedicated CSV file for V2V message analysis.
     """
     
-    def __init__(self, v2v_network, output_path: Optional[Path] = None,
-                 log_interval_frames: int = 10):
+    def __init__(
+        self,
+        v2v_network,
+        output_path: Optional[Path] = None,
+        run_dir: Optional['RunDirectory'] = None,
+        log_interval_frames: int = 10,
+    ):
         """
         Initialize V2V message logger.
-        
+
         Args:
-            v2v_network: V2VNetworkEnhanced instance to log from
-            output_path: CSV file path. If None, auto-generated in logs/
-            log_interval_frames: How often to log V2V messages (default every 10 frames = 2Hz at 20 FPS)
+            v2v_network:         V2VNetworkEnhanced instance to log from.
+            output_path:         Explicit CSV path (overrides run_dir).
+            run_dir:             RunDirectory; if given uses v2v_messages_path.
+            log_interval_frames: How often to log (default 10 frames = 2 Hz).
         """
         from ..v2v import V2VNetworkEnhanced
-        
+
         self.v2v: V2VNetworkEnhanced = v2v_network
         self.log_interval = log_interval_frames
-        
+
         if output_path is None:
-            log_dir = Path(__file__).parent.parent.parent / 'logs'
-            log_dir.mkdir(exist_ok=True)
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            output_path = log_dir / f'v2v_messages_{timestamp}.csv'
+            if run_dir is not None:
+                output_path = run_dir.v2v_messages_path
+            else:
+                log_dir = Path(__file__).parent.parent.parent / 'logs'
+                log_dir.mkdir(exist_ok=True)
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                output_path = log_dir / f'v2v_messages_{timestamp}.csv'
         
         self.output_path = output_path
         self.csv_file = None
@@ -564,3 +679,115 @@ class V2VMessageLogger(ScenarioObserver):
         if self.csv_file:
             self.csv_file.close()
             print(f"📡 Logged {self.total_messages} V2V messages to {self.output_path}")
+
+
+class PotholeEventLogger(ScenarioObserver):
+    """
+    Logs ENTER and EXIT events when the ego vehicle enters or leaves the
+    proximity zone of any pothole.
+
+    Writes one row per event to ``run_dir.pothole_events_path``.  The file
+    is created lazily (only if at least one event occurs) so runs without
+    pothole encounters produce no file rather than an empty CSV.
+
+    Columns:
+        frame, sim_timestamp, wall_timestamp,
+        event (ENTER|EXIT),
+        pothole_id, severity, distance_m,
+        ego_speed_kmh, ego_x, ego_y
+    """
+
+    def __init__(
+        self,
+        run_dir: 'RunDirectory',
+        trigger_radius: float = 12.0,
+        fps: int = 20,
+    ) -> None:
+        """
+        Args:
+            run_dir:        RunDirectory for this simulation run.
+            trigger_radius: Distance in metres at which an ENTER event fires.
+            fps:            Simulation frame rate (unused for now, kept for parity).
+        """
+        self.output_path: Path = run_dir.pothole_events_path
+        self.trigger_radius: float = trigger_radius
+        # id → PotholeInfo for potholes ego is currently inside
+        self._active: Dict[int, Any] = {}
+        self.csv_file = None
+        self.writer = None
+        self.total_events: int = 0
+
+    def _open_csv(self) -> None:
+        self.csv_file = open(self.output_path, 'w', newline='')
+        fieldnames = [
+            'frame', 'sim_timestamp', 'wall_timestamp',
+            'event',
+            'pothole_id', 'severity', 'distance_m',
+            'ego_speed_kmh', 'ego_x', 'ego_y',
+        ]
+        self.writer = csv.DictWriter(self.csv_file, fieldnames=fieldnames)
+        self.writer.writeheader()
+
+    def on_frame(self, frame: int, state: VehicleState, v2v_data: Dict[str, Any]):
+        nearby = v2v_data.get('nearby_potholes', [])  # already within 50 m
+        r2 = self.trigger_radius ** 2
+        ex, ey = state.position[0], state.position[1]
+
+        # Build distance map for potholes inside trigger radius
+        entered: Dict[int, Any] = {}
+        for ph in nearby:
+            d2 = (ph.x - ex) ** 2 + (ph.y - ey) ** 2
+            if d2 <= r2:
+                entered[ph.id] = (ph, d2 ** 0.5)
+
+        if not entered and not self._active:
+            return  # nothing to do — avoid opening the file pointlessly
+
+        if self.csv_file is None:
+            self._open_csv()
+
+        wall_ts = datetime.now().isoformat()
+
+        # ENTER events — potholes newly inside trigger radius
+        for pid, (ph, dist) in entered.items():
+            if pid not in self._active:
+                self.writer.writerow({  # type: ignore
+                    'frame': frame,
+                    'sim_timestamp': f"{state.sim_time:.3f}",
+                    'wall_timestamp': wall_ts,
+                    'event': 'ENTER',
+                    'pothole_id': pid,
+                    'severity': ph.severity,
+                    'distance_m': f"{dist:.2f}",
+                    'ego_speed_kmh': f"{state.speed_kmh:.2f}",
+                    'ego_x': f"{ex:.3f}",
+                    'ego_y': f"{ey:.3f}",
+                })
+                self.total_events += 1
+
+        # EXIT events — potholes that were active but are now outside radius
+        for pid, ph in list(self._active.items()):
+            if pid not in entered:
+                self.writer.writerow({  # type: ignore
+                    'frame': frame,
+                    'sim_timestamp': f"{state.sim_time:.3f}",
+                    'wall_timestamp': wall_ts,
+                    'event': 'EXIT',
+                    'pothole_id': pid,
+                    'severity': ph.severity,
+                    'distance_m': f"{self.trigger_radius:.2f}",
+                    'ego_speed_kmh': f"{state.speed_kmh:.2f}",
+                    'ego_x': f"{ex:.3f}",
+                    'ego_y': f"{ey:.3f}",
+                })
+                self.total_events += 1
+
+        # Update active set
+        self._active = {pid: ph for pid, (ph, _) in entered.items()}
+
+    def on_complete(self, total_frames: int, elapsed_time: float):
+        if self.csv_file:
+            self.csv_file.close()
+            print(f"🕳️  Logged {self.total_events} pothole events to {self.output_path}")
+        else:
+            print(f"🕳️  No pothole proximity events recorded during this run")
