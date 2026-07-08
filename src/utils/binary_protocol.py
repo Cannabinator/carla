@@ -1,211 +1,205 @@
 """
 Binary WebSocket protocol for efficient LiDAR data transfer.
-Phase 3: Performance Optimization - Reduce bandwidth by 40%.
+Version 2: Fixes V1 header alignment bug, adds object_idx per point,
+ego_actor_id and num_vehicles in header for ego self-filtering.
 
-This is an original implementation using Python's standard library struct module
-for binary serialization and zlib for compression. No third-party code was used.
+Wire format (all little-endian, no alignment padding):
 
-Dependencies:
-- NumPy (BSD-3-Clause) - https://numpy.org/
-- Python standard library: struct, zlib
+  Header (28 bytes):
+    4s  magic         b'LIDR'
+    H   version       2
+    H   flags         bit 0 = zlib-compressed point data
+    d   timestamp     float64, seconds
+    I   num_points    uint32
+    I   num_vehicles  uint32
+    I   ego_actor_id  uint32  (used by frontend to filter ego self-hits)
+
+  Ego Transform (24 bytes):
+    6f  x, y, z, yaw, pitch, roll  (float32 each)
+
+  Point Data (num_points × 20 bytes):
+    5f per point: x, y, z, tag, object_idx  (all float32)
+    - tag       cast from uint32 (max CARLA tag = 28, exact in f32)
+    - object_idx cast from uint32 (CARLA IDs < 2^24, exact in f32)
+
+  Total overhead: 52 bytes + 20 × num_points
+  vs JSON:        ~60 bytes/point  →  6× bandwidth reduction
+
+JS parsing (DataView for first 52 bytes, Float32Array for points):
+  view.getFloat64(8, true)   → timestamp
+  view.getUint32(16, true)   → num_points
+  view.getUint32(20, true)   → num_vehicles
+  view.getUint32(24, true)   → ego_actor_id
+  new Float32Array(buf, 28, 6)          → ego transform
+  new Float32Array(buf, 52, n*5)        → points  (offset 52 is 4-byte aligned)
 """
 
 import struct
 import numpy as np
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Dict, Any
 import zlib
 
 
 class BinaryProtocol:
-    """
-    Binary protocol for LiDAR point cloud data.
-    
-    Format:
-    - Header (24 bytes):
-      * Magic: 4 bytes ('LIDR')
-      * Version: 2 bytes (uint16)
-      * Flags: 2 bytes (uint16)
-      * Point count: 4 bytes (uint32)
-      * Timestamp: 8 bytes (double)
-      * Reserved: 4 bytes
-    
-    - Ego Transform (28 bytes):
-      * Position: 12 bytes (3 x float32)
-      * Rotation: 12 bytes (3 x float32)
-      * Reserved: 4 bytes
-    
-    - Point Data (variable):
-      * Each point: 16 bytes (4 x float32)
-        - X, Y, Z: position (float32)
-        - Tag: semantic tag (float32 cast to uint8)
-    
-    Total overhead: 52 bytes + (16 * num_points)
-    vs JSON: ~100 bytes header + (50-80 * num_points)
-    Savings: ~40-50% bandwidth reduction
-    """
-    
     MAGIC = b'LIDR'
-    VERSION = 1
-    HEADER_SIZE = 24
-    TRANSFORM_SIZE = 28
-    POINT_SIZE = 16  # 4 floats per point
-    
-    # Flags
+    VERSION = 2
+
+    # Explicit little-endian ('<') eliminates native alignment padding.
+    # V1 used native format '4sHHIdd' which struct.calcsize() = 32 on 64-bit
+    # Linux (8-byte alignment for double), but HEADER_SIZE was hardcoded to 24,
+    # making every V1 decode silently return None.
+    HEADER_FORMAT = '<4sHHdIII'
+    HEADER_SIZE = struct.calcsize(HEADER_FORMAT)    # 28 bytes, verified
+
+    TRANSFORM_FORMAT = '<6f'
+    TRANSFORM_SIZE = struct.calcsize(TRANSFORM_FORMAT)  # 24 bytes
+
+    POINT_SIZE = 20   # 5 × float32: x, y, z, tag, object_idx
+
     FLAG_COMPRESSED = 1 << 0
-    FLAG_HAS_INTENSITY = 1 << 1
-    FLAG_HAS_COLOR = 1 << 2
-    
+
     @staticmethod
     def encode(
         points: np.ndarray,
         ego_transform: Tuple[Tuple[float, float, float], Tuple[float, float, float]],
         timestamp: float = 0.0,
-        compress: bool = False
+        num_vehicles: int = 1,
+        ego_actor_id: int = 0,
+        compress: bool = False,
     ) -> bytes:
-        """
-        Encode point cloud to binary format.
-        
+        """Encode a structured or Nx5 point cloud to binary.
+
         Args:
-            points: Nx4 array (x, y, z, tag)
+            points: Structured numpy array with fields (x, y, z, object_tag,
+                    object_idx) OR plain Nx5 float32 array.
             ego_transform: ((x, y, z), (yaw, pitch, roll))
-            timestamp: Frame timestamp
-            compress: Use zlib compression
-        
+            timestamp: Frame timestamp in seconds.
+            num_vehicles: Number of registered vehicles.
+            ego_actor_id: CARLA actor ID of the ego vehicle (vehicle_id=0).
+            compress: Apply zlib level-1 compression to point data.
+
         Returns:
-            Binary encoded data
+            Binary payload ready to send over WebSocket.
         """
         num_points = len(points)
-        flags = 0
-        if compress:
-            flags |= BinaryProtocol.FLAG_COMPRESSED
-        
-        # Build header
+        flags = BinaryProtocol.FLAG_COMPRESSED if compress else 0
+
         header = struct.pack(
-            '4sHHIdd',
+            BinaryProtocol.HEADER_FORMAT,
             BinaryProtocol.MAGIC,
             BinaryProtocol.VERSION,
             flags,
+            float(timestamp),
             num_points,
-            timestamp,
-            0  # reserved
+            num_vehicles,
+            ego_actor_id,
         )
-        
-        # Build ego transform
+
         pos, rot = ego_transform
         transform = struct.pack(
-            '6fi',
-            pos[0], pos[1], pos[2],
-            rot[0], rot[1], rot[2],
-            0  # reserved
+            BinaryProtocol.TRANSFORM_FORMAT,
+            float(pos[0]), float(pos[1]), float(pos[2]),
+            float(rot[0]), float(rot[1]), float(rot[2]),
         )
-        
-        # Build point data (convert to float32)
-        points_f32 = points.astype(np.float32)
-        point_data = points_f32.tobytes()
-        
-        # Combine
-        payload = header + transform + point_data
-        
-        # Optional compression
+
+        # Build Nx5 float32 array from structured or plain array.
+        if points.dtype.names:
+            pts = np.column_stack([
+                points['x'].astype(np.float32),
+                points['y'].astype(np.float32),
+                points['z'].astype(np.float32),
+                points['object_tag'].astype(np.float32),
+                points['object_idx'].astype(np.float32),
+            ])
+        else:
+            pts = np.asarray(points[:, :5], dtype=np.float32)
+
+        point_data = pts.tobytes()
         if compress:
-            point_data_compressed = zlib.compress(point_data, level=1)
-            payload = header + transform + point_data_compressed
-        
-        return payload
-    
+            point_data = zlib.compress(point_data, level=1)
+
+        return header + transform + point_data
+
     @staticmethod
-    def decode(data: bytes) -> Optional[Tuple[np.ndarray, dict]]:
-        """
-        Decode binary point cloud data.
-        
-        Args:
-            data: Binary encoded data
-        
+    def decode(data: bytes) -> Optional[Tuple[np.ndarray, Dict[str, Any]]]:
+        """Decode a binary payload produced by encode().
+
         Returns:
-            Tuple of (points array, metadata dict) or None if invalid
+            (points Nx5 float32, metadata dict) or None if payload is invalid.
         """
-        if len(data) < BinaryProtocol.HEADER_SIZE + BinaryProtocol.TRANSFORM_SIZE:
+        min_size = BinaryProtocol.HEADER_SIZE + BinaryProtocol.TRANSFORM_SIZE
+        if len(data) < min_size:
             return None
-        
-        # Parse header
+
         try:
-            magic, version, flags, num_points, timestamp, _ = struct.unpack(
-                '4sHHIdd',
-                data[:BinaryProtocol.HEADER_SIZE]
-            )
+            magic, version, flags, timestamp, num_points, num_vehicles, ego_actor_id = \
+                struct.unpack(BinaryProtocol.HEADER_FORMAT,
+                              data[:BinaryProtocol.HEADER_SIZE])
         except struct.error:
             return None
-        
+
         if magic != BinaryProtocol.MAGIC:
             return None
-        
-        # Parse ego transform
+
         offset = BinaryProtocol.HEADER_SIZE
         try:
-            pos_x, pos_y, pos_z, rot_yaw, rot_pitch, rot_roll, _ = struct.unpack(
-                '6fi',
-                data[offset:offset + BinaryProtocol.TRANSFORM_SIZE]
+            ex, ey, ez, eyaw, epitch, eroll = struct.unpack(
+                BinaryProtocol.TRANSFORM_FORMAT,
+                data[offset:offset + BinaryProtocol.TRANSFORM_SIZE],
             )
         except struct.error:
             return None
-        
-        # Parse point data
+
         offset += BinaryProtocol.TRANSFORM_SIZE
         point_data = data[offset:]
-        
-        # Decompress if needed
+
         if flags & BinaryProtocol.FLAG_COMPRESSED:
             try:
                 point_data = zlib.decompress(point_data)
             except zlib.error:
                 return None
-        
-        # Convert to numpy array
-        expected_size = num_points * BinaryProtocol.POINT_SIZE
-        if len(point_data) != expected_size:
+
+        expected = num_points * BinaryProtocol.POINT_SIZE
+        if len(point_data) != expected:
             return None
-        
-        points = np.frombuffer(point_data, dtype=np.float32).reshape(-1, 4)
-        
-        # Build metadata
-        metadata = {
+
+        points = np.frombuffer(point_data, dtype=np.float32).reshape(-1, 5)
+
+        metadata: Dict[str, Any] = {
             'version': version,
             'flags': flags,
             'timestamp': timestamp,
             'num_points': num_points,
-            'ego_position': (pos_x, pos_y, pos_z),
-            'ego_rotation': (rot_yaw, rot_pitch, rot_roll),
-            'compressed': bool(flags & BinaryProtocol.FLAG_COMPRESSED)
+            'num_vehicles': num_vehicles,
+            'ego_actor_id': ego_actor_id,
+            'ego_position': (ex, ey, ez),
+            'ego_rotation': (eyaw, epitch, eroll),
+            'compressed': bool(flags & BinaryProtocol.FLAG_COMPRESSED),
         }
-        
         return points, metadata
-    
+
     @staticmethod
     def estimate_size(num_points: int, compress: bool = False) -> int:
-        """Estimate binary payload size."""
-        base_size = BinaryProtocol.HEADER_SIZE + BinaryProtocol.TRANSFORM_SIZE
-        point_size = num_points * BinaryProtocol.POINT_SIZE
-        
+        """Estimate binary payload size in bytes."""
+        base = BinaryProtocol.HEADER_SIZE + BinaryProtocol.TRANSFORM_SIZE
+        point_bytes = num_points * BinaryProtocol.POINT_SIZE
         if compress:
-            # Assume 50% compression ratio
-            point_size = int(point_size * 0.5)
-        
-        return base_size + point_size
+            point_bytes = int(point_bytes * 0.5)
+        return base + point_bytes
 
 
 def compare_bandwidth(num_points: int) -> dict:
-    """
-    Compare bandwidth usage: JSON vs Binary.
-    
+    """Compare bandwidth usage: JSON vs Binary.
+
     Args:
         num_points: Number of points in point cloud
-    
+
     Returns:
         Dict with size comparisons
     """
-    # JSON estimate (conservative)
-    json_overhead = 100  # {"points":[], "ego_transform":{...}}
-    json_point_size = 60  # [1.234, 5.678, 9.012, 10] with formatting
+    # JSON estimate: ~70 bytes/point for [x, y, z, tag, idx] arrays
+    json_overhead = 100
+    json_point_size = 70
     json_size = json_overhead + (num_points * json_point_size)
     
     # Binary sizes

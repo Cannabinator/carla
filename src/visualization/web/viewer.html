@@ -204,38 +204,10 @@
         </div>
         
         <div id="legend">
-            <h3>Semantic Labels</h3>
-            <div class="legend-item">
-                <div class="legend-color" style="background-color: #808080;"></div>
-                <span>Unlabeled (0)</span>
-            </div>
-            <div class="legend-item">
-                <div class="legend-color" style="background-color: #708090;"></div>
-                <span>Building (1)</span>
-            </div>
-            <div class="legend-item">
-                <div class="legend-color" style="background-color: #ff0000;"></div>
-                <span>Fence (2)</span>
-            </div>
-            <div class="legend-item">
-                <div class="legend-color" style="background-color: #4169E1;"></div>
-                <span>Vehicle (10)</span>
-            </div>
-            <div class="legend-item">
-                <div class="legend-color" style="background-color: #FF1493;"></div>
-                <span>Pedestrian (4)</span>
-            </div>
-            <div class="legend-item">
-                <div class="legend-color" style="background-color: #00FF00;"></div>
-                <span>Vegetation (9)</span>
-            </div>
-            <div class="legend-item">
-                <div class="legend-color" style="background-color: #A9A9A9;"></div>
-                <span>Road (7)</span>
-            </div>
-            <div class="legend-item">
-                <div class="legend-color" style="background-color: #FFFF00;"></div>
-                <span>Traffic Sign (12)</span>
+            <h3>Distance Gradient</h3>
+            <canvas id="gradient-canvas" width="160" height="20" style="border-radius:3px;display:block;margin-bottom:6px;"></canvas>
+            <div style="display:flex;justify-content:space-between;font-size:11px;color:#aaa;">
+                <span>0 m (close)</span><span>100 m (far)</span>
             </div>
         </div>
         
@@ -245,6 +217,7 @@
             <button id="follow-btn" onclick="toggleFollowMode()">Enable Follow</button>
             <button id="freefly-btn" onclick="toggleFreeFly()">Enable Free-Fly</button>
             <button id="size-btn" onclick="togglePointSize()">Point Size: 0.5</button>
+            <button id="color-btn" onclick="cycleColorMode()">Color: Distance</button>
             <button onclick="toggleGrid()">Toggle Grid</button>
         </div>
         
@@ -257,33 +230,102 @@
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/PointerLockControls.js"></script>
     
     <script>
-        // CARLA Semantic Tag Colors (based on CARLA documentation)
+        // ── Binary protocol constants (must match src/utils/binary_protocol.py V2) ──
+        // Header layout (28 bytes, little-endian):
+        //   0-3   magic 'LIDR'
+        //   4-5   version (uint16)
+        //   6-7   flags   (uint16)  bit 0 = zlib-compressed (not used in JS path)
+        //   8-15  timestamp (float64)
+        //   16-19 num_points (uint32)
+        //   20-23 num_vehicles (uint32)
+        //   24-27 ego_actor_id (uint32)
+        // Transform (24 bytes, float32 × 6): x, y, z, yaw, pitch, roll
+        // Points (num_points × 20 bytes, float32 × 5): x, y, z, tag, object_idx
+        const BINARY_HEADER_SIZE    = 28;
+        const BINARY_TRANSFORM_SIZE = 24;
+        const BINARY_POINT_STRIDE   = 5;   // floats per point
+        const BINARY_POINTS_OFFSET  = BINARY_HEADER_SIZE + BINARY_TRANSFORM_SIZE; // 52
+
+        // ── CARLA Semantic Tag Colors (complete set, tags 0-28) ──────────────────
+        // Source: https://carla.readthedocs.io/en/latest/ref_sensors/#semantic-segmentation-camera
         const SEMANTIC_COLORS = {
-            0: 0x808080,   // Unlabeled - Gray
-            1: 0x708090,   // Building - Slate Gray
-            2: 0xff0000,   // Fence - Red
-            3: 0x800080,   // Other - Purple
-            4: 0xFF1493,   // Pedestrian - Deep Pink
-            5: 0x00CED1,   // Pole - Dark Turquoise
-            6: 0x32CD32,   // RoadLine - Lime Green
-            7: 0xA9A9A9,   // Road - Dark Gray
-            8: 0xD2B48C,   // Sidewalk - Tan
-            9: 0x00FF00,   // Vegetation - Green
-            10: 0x4169E1,  // Vehicle - Royal Blue
-            11: 0xFFFFFF,  // Wall - White
-            12: 0xFFFF00,  // TrafficSign - Yellow
-            13: 0x87CEEB,  // Sky - Sky Blue
-            14: 0x8B4513,  // Ground - Saddle Brown
-            15: 0xFF8C00,  // Bridge - Dark Orange
-            16: 0x9370DB,  // RailTrack - Medium Purple
-            17: 0x228B22,  // GuardRail - Forest Green
-            18: 0xFFD700,  // TrafficLight - Gold
-            19: 0xB8860B,  // Static - Dark Golden Rod
-            20: 0x00FFFF,  // Dynamic - Cyan
-            21: 0x8A2BE2,  // Water - Blue Violet
-            22: 0xA52A2A   // Terrain - Brown
+            0:  0x808080,  // Unlabeled
+            1:  0x596275,  // Building
+            2:  0xCC3311,  // Fence
+            3:  0x7B2D8B,  // Other
+            4:  0xFF69B4,  // Pedestrian
+            5:  0x40E0D0,  // Pole
+            6:  0xFFFFFF,  // RoadLine
+            7:  0x808080,  // Road (same gray family as unlabeled, slightly darker below)
+            8:  0xC8A882,  // Sidewalk
+            9:  0x228B22,  // Vegetation
+            10: 0x4169E1,  // Vehicle  (Royal Blue — keep distinctive)
+            11: 0xDDDDDD,  // Wall
+            12: 0xFFD700,  // TrafficSign
+            13: 0x87CEEB,  // Sky
+            14: 0x8B4513,  // Ground
+            15: 0xFF8C00,  // Bridge
+            16: 0x9370DB,  // RailTrack
+            17: 0x3CB371,  // GuardRail
+            18: 0xFFFF00,  // TrafficLight
+            19: 0xB8860B,  // Static
+            20: 0x00CED1,  // Dynamic
+            21: 0x1E90FF,  // Water
+            22: 0xA0785A,  // Terrain
+            // Tags 23-28 are present in some CARLA builds
+            23: 0xFF6347,  // Any
+            24: 0x20B2AA,  // Any
+            25: 0xDA70D6,  // Any
+            26: 0xF0E68C,  // Any
+            27: 0x00FA9A,  // Any
+            28: 0xFF4500,  // Any
         };
-        
+        // Fix Road vs Unlabeled contrast (Road = darker gray)
+        SEMANTIC_COLORS[7] = 0x555555;
+
+        // ── Viridis colormap (distance gradient) ─────────────────────────────────
+        // 32 perceptually-uniform control points sampled from the Viridis LUT.
+        // Close = purple, mid = teal/green, far = yellow.
+        const VIRIDIS_LUT = [
+            [0.267, 0.005, 0.329], [0.283, 0.141, 0.458], [0.253, 0.266, 0.530],
+            [0.207, 0.372, 0.553], [0.164, 0.471, 0.558], [0.128, 0.566, 0.551],
+            [0.134, 0.659, 0.518], [0.267, 0.749, 0.441], [0.477, 0.821, 0.318],
+            [0.741, 0.873, 0.150], [0.993, 0.906, 0.144],
+        ];
+        function viridisColor(t) {
+            t = Math.max(0.0, Math.min(1.0, t));
+            const idx = t * (VIRIDIS_LUT.length - 1);
+            const i   = Math.floor(idx);
+            const f   = idx - i;
+            if (i >= VIRIDIS_LUT.length - 1) return VIRIDIS_LUT[VIRIDIS_LUT.length - 1];
+            const c0 = VIRIDIS_LUT[i], c1 = VIRIDIS_LUT[i + 1];
+            return [c0[0] + f*(c1[0]-c0[0]), c0[1] + f*(c1[1]-c0[1]), c0[2] + f*(c1[2]-c0[2])];
+        }
+
+        // ── Color mode state ──────────────────────────────────────────────────────
+        // 'distance'  — Viridis gradient (purple=close → yellow=far)  [default]
+        // 'semantic'  — CARLA semantic tags
+        // 'height'    — Z-value gradient (blue=low → orange=high)
+        let colorMode = 'distance';
+        const LIDAR_MAX_RANGE = 100.0;  // metres — matches sensor 'range' config
+        // egoPosition is kept in world coords; distance is computed relative to it
+
+        function heightColor(z) {
+            // z roughly in [-2, 5] for typical road scenes; map to [0,1]
+            const t = Math.max(0, Math.min(1, (z + 2.0) / 7.0));
+            // Blue(low) → Cyan → Green → Yellow → Orange(high)
+            const stops = [
+                [0.0, 0.0, 0.8], [0.0, 0.8, 0.8], [0.0, 0.8, 0.0],
+                [0.8, 0.8, 0.0], [0.9, 0.4, 0.0],
+            ];
+            const idx = t * (stops.length - 1);
+            const i   = Math.floor(idx);
+            const f   = idx - i;
+            if (i >= stops.length - 1) return stops[stops.length - 1];
+            const c0 = stops[i], c1 = stops[i + 1];
+            return [c0[0] + f*(c1[0]-c0[0]), c0[1] + f*(c1[1]-c0[1]), c0[2] + f*(c1[2]-c0[2])];
+        }
+
         // Scene setup
         let scene, camera, renderer;
         let orbitControls;
@@ -293,11 +335,12 @@
         let frameCount = 0;
         let lastFrameTime = Date.now();
         let lastDataTime = Date.now();
-        let pointSize = 0.5;  // Larger points for better visibility
+        let pointSize = 0.5;
         let showGrid = true;
-        let followMode = false;  // Start in orbit mode for easier initial orientation
+        let followMode = false;
         let freeFlyMode = false;
-        let egoPosition = { x: 0, y: 0, z: 0 };  // Track ego vehicle position
+        let egoPosition = { x: 0, y: 0, z: 0 };
+        let egoActorId = 0;   // updated from binary header for ego self-filtering
         
         function init() {
             // Scene
@@ -397,11 +440,12 @@
             const wsUrl = `${protocol}//${window.location.host}/ws`;
             
             ws = new WebSocket(wsUrl);
+            // Force binary data as ArrayBuffer (not Blob) for all browsers
+            ws.binaryType = 'arraybuffer';
             
             ws.onopen = () => {
                 console.log('WebSocket connected');
                 document.getElementById('status-indicator').className = 'status-indicator status-connected';
-                // Show "waiting" status instead of hiding - we're connected but may not have data
                 const loadingEl = document.getElementById('loading');
                 loadingEl.textContent = 'Connected - Waiting for simulation...';
                 loadingEl.style.color = '#4CAF50';
@@ -409,24 +453,33 @@
             
             ws.onmessage = (event) => {
                 try {
+                    if (event.data instanceof ArrayBuffer) {
+                        // Binary point-cloud frame
+                        document.getElementById('loading').style.display = 'none';
+                        const parsed = decodeBinaryPointCloud(event.data);
+                        if (parsed) {
+                            updatePointCloudFromBinary(parsed);
+                            updateStats({ num_points: parsed.numPoints, num_vehicles: parsed.numVehicles });
+                        }
+                        lastDataTime = Date.now();
+                        return;
+                    }
+
+                    // Text: status or JSON fallback
                     const data = JSON.parse(event.data);
-                    
-                    // Handle status messages from server
                     if (data.type === 'status') {
                         handleStatusMessage(data);
                         return;
                     }
-                    
-                    // Handle point cloud data
+                    // JSON fallback (server without BinaryProtocol)
                     if (data.type === 'pointcloud' || data.points) {
-                        // Hide loading message once we get real data
                         document.getElementById('loading').style.display = 'none';
                         updatePointCloud(data);
                         updateStats(data);
                         lastDataTime = Date.now();
                     }
                 } catch (e) {
-                    console.error('Error parsing WebSocket message:', e);
+                    console.error('Error processing WebSocket message:', e);
                 }
             };
             
@@ -441,10 +494,103 @@
                 document.getElementById('loading').style.display = 'block';
                 document.getElementById('loading').textContent = 'Reconnecting...';
                 document.getElementById('loading').style.color = '#f44336';
-                
-                // Attempt to reconnect after 2 seconds
                 setTimeout(connectWebSocket, 2000);
             };
+        }
+
+        // ── Binary decoder ────────────────────────────────────────────────────────
+        function decodeBinaryPointCloud(buffer) {
+            if (buffer.byteLength < BINARY_POINTS_OFFSET) return null;
+
+            const view = new DataView(buffer);
+            // Validate magic 'LIDR' = 0x4C494452
+            if (view.getUint32(0, true) !== 0x5244494C) return null;  // little-endian 'LIDR'
+
+            const numPoints    = view.getUint32(16, true);
+            const numVehicles  = view.getUint32(20, true);
+            const actorId      = view.getUint32(24, true);
+
+            // Ego transform (6 × float32 at offset 28)
+            const ex    = view.getFloat32(28, true);
+            const ey    = view.getFloat32(32, true);
+            const ez    = view.getFloat32(36, true);
+            const eyaw  = view.getFloat32(40, true);
+
+            const expectedBytes = BINARY_POINTS_OFFSET + numPoints * BINARY_POINT_STRIDE * 4;
+            if (buffer.byteLength < expectedBytes) return null;
+
+            // Point data as a flat Float32Array view — no copy
+            const points = new Float32Array(buffer, BINARY_POINTS_OFFSET, numPoints * BINARY_POINT_STRIDE);
+
+            return { numPoints, numVehicles, actorId, ex, ey, ez, eyaw, points };
+        }
+
+        // ── Update scene from binary frame ────────────────────────────────────────
+        function updatePointCloudFromBinary(parsed) {
+            const { numPoints, numVehicles, actorId, ex, ey, ez, eyaw, points } = parsed;
+
+            egoActorId    = actorId;
+            egoPosition.x = ex;
+            egoPosition.y = ey;
+            egoPosition.z = ez;
+
+            if (followMode) _updateFollowCamera(ex, ey, ez, eyaw);
+
+            const positions = new Float32Array(numPoints * 3);
+            const colors    = new Float32Array(numPoints * 3);
+            let write = 0;
+
+            for (let i = 0; i < numPoints; i++) {
+                const base = i * BINARY_POINT_STRIDE;
+                const px  = points[base];
+                const py  = points[base + 1];
+                const pz  = points[base + 2];
+                const tag = points[base + 3];
+                const idx = points[base + 4];
+
+                // Ego self-hit filtering: skip points that hit the ego car body
+                if (actorId !== 0 && idx === actorId) continue;
+
+                positions[write * 3]     = px;
+                positions[write * 3 + 1] = -py;   // CARLA Y-right → Three.js Y-left
+                positions[write * 3 + 2] = pz;
+
+                let r, g, b;
+                if (colorMode === 'distance') {
+                    // Points are ego-relative (Python subtracts sensor pos before encoding),
+                    // so distance from sensor = sqrt(px²+py²+pz²) exactly.
+                    const dist = Math.sqrt(px*px + py*py + pz*pz);
+                    const [vr, vg, vb] = viridisColor(dist / LIDAR_MAX_RANGE);
+                    r = vr; g = vg; b = vb;
+                } else if (colorMode === 'height') {
+                    const [hr, hg, hb] = heightColor(pz);
+                    r = hr; g = hg; b = hb;
+                } else {
+                    // semantic
+                    const hex = SEMANTIC_COLORS[tag | 0] !== undefined
+                        ? SEMANTIC_COLORS[tag | 0] : 0x808080;
+                    r = ((hex >> 16) & 0xFF) / 255;
+                    g = ((hex >>  8) & 0xFF) / 255;
+                    b = ( hex        & 0xFF) / 255;
+                }
+
+                colors[write * 3]     = r;
+                colors[write * 3 + 1] = g;
+                colors[write * 3 + 2] = b;
+                write++;
+            }
+
+            // Slice to actual written count (some ego points were skipped)
+            const posSlice = positions.slice(0, write * 3);
+            const colSlice = colors.slice(0, write * 3);
+
+            const geometry = new THREE.BufferGeometry();
+            geometry.setAttribute('position', new THREE.BufferAttribute(posSlice, 3));
+            geometry.setAttribute('color',    new THREE.BufferAttribute(colSlice, 3));
+            geometry.computeBoundingSphere();
+
+            pointCloud.geometry.dispose();
+            pointCloud.geometry = geometry;
         }
         
         function handleStatusMessage(data) {
@@ -470,86 +616,86 @@
             console.log('Server status:', data.status, data.message);
         }
         
-        function updatePointCloud(data) {
-            if (!data.points || data.num_points === 0) {
-                return;
+        function _updateFollowCamera(x, y, z, yawDeg) {
+            let forwardX = -50, forwardY = 0;
+            if (yawDeg !== undefined) {
+                const yawRad = yawDeg * Math.PI / 180;
+                forwardX = -50 * Math.cos(yawRad);
+                forwardY = -50 * Math.sin(yawRad);
             }
-            
-            const positions = new Float32Array(data.num_points * 3);
-            const colors = new Float32Array(data.num_points * 3);
-            
-            // Update ego position from server data (more accurate than calculating from points)
+            const targetCamPos = new THREE.Vector3(x + forwardX, -(y + forwardY), z + 40);
+            const targetLookAt = new THREE.Vector3(x, -y, z);
+            camera.position.lerp(targetCamPos, 0.1);
+            const currentLookAt = new THREE.Vector3();
+            camera.getWorldDirection(currentLookAt);
+            currentLookAt.multiplyScalar(100).add(camera.position);
+            currentLookAt.lerp(targetLookAt, 0.15);
+            camera.lookAt(currentLookAt);
+        }
+
+        function updatePointCloud(data) {
+            // JSON fallback path (server without BinaryProtocol).
+            if (!data.points || data.num_points === 0) return;
+
+            const n = data.num_points;
+            const positions = new Float32Array(n * 3);
+            const colors    = new Float32Array(n * 3);
+
             if (data.ego_transform) {
                 egoPosition.x = data.ego_transform.x;
                 egoPosition.y = data.ego_transform.y;
                 egoPosition.z = data.ego_transform.z;
-                
-                // Update camera to follow ego vehicle (smooth interpolation)
                 if (followMode) {
-                    // Calculate vehicle's forward direction from rotation (if available)
-                    let forwardX = -50;  // Default: behind vehicle (doubled distance)
-                    let forwardY = 0;
-                    
-                    if (data.ego_transform.yaw !== undefined) {
-                        const yawRad = data.ego_transform.yaw * Math.PI / 180;
-                        // Camera positioned behind vehicle (opposite to forward direction)
-                        forwardX = -50 * Math.cos(yawRad);
-                        forwardY = -50 * Math.sin(yawRad);
-                    }
-                    
-                    const targetCamPos = new THREE.Vector3(
-                        egoPosition.x + forwardX,  // Behind vehicle
-                        -(egoPosition.y + forwardY),  // Offset to side (negated for coordinate fix)
-                        egoPosition.z + 40         // Above (doubled height)
+                    _updateFollowCamera(
+                        egoPosition.x, egoPosition.y, egoPosition.z,
+                        data.ego_transform.yaw
                     );
-                    
-                    const targetLookAt = new THREE.Vector3(
-                        egoPosition.x,  // Look at vehicle position
-                        -egoPosition.y,  // Negated for coordinate fix
-                        egoPosition.z
-                    );
-                    
-                    // Smooth camera movement (lerp factor 0.1 for smooth but responsive)
-                    camera.position.lerp(targetCamPos, 0.1);
-                    
-                    // Make camera look at ego vehicle
-                    const currentLookAt = new THREE.Vector3();
-                    camera.getWorldDirection(currentLookAt);
-                    currentLookAt.multiplyScalar(100).add(camera.position);
-                    currentLookAt.lerp(targetLookAt, 0.15);
-                    camera.lookAt(currentLookAt);
                 }
             }
-            
-            // Build point cloud geometry
-            for (let i = 0; i < data.num_points; i++) {
-                // Positions (CARLA uses X-forward, Y-right, Z-up)
-                // IMPORTANT: Negate Y to fix left/right mirroring
-                positions[i * 3] = data.points.x[i];
-                positions[i * 3 + 1] = -data.points.y[i];  // Negate Y to fix mirroring
-                positions[i * 3 + 2] = data.points.z[i];
-                
-                // Colors based on semantic tag
+
+            let write = 0;
+            for (let i = 0; i < n; i++) {
+                const px  = data.points.x[i];
+                const py  = data.points.y[i];
+                const pz  = data.points.z[i];
                 const tag = data.points.tag[i];
-                const color = new THREE.Color(SEMANTIC_COLORS[tag] || 0x808080);
-                colors[i * 3] = color.r;
-                colors[i * 3 + 1] = color.g;
-                colors[i * 3 + 2] = color.b;
+                const idx = data.points.idx ? data.points.idx[i] : -1;
+
+                if (egoActorId !== 0 && idx === egoActorId) continue;
+
+                positions[write * 3]     = px;
+                positions[write * 3 + 1] = -py;
+                positions[write * 3 + 2] = pz;
+
+                let r, g, b;
+                if (colorMode === 'distance') {
+                    const dx = px - egoPosition.x, dy = py - egoPosition.y, dz = pz - egoPosition.z;
+                    const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+                    const [vr, vg, vb] = viridisColor(dist / LIDAR_MAX_RANGE);
+                    r = vr; g = vg; b = vb;
+                } else if (colorMode === 'height') {
+                    const [hr, hg, hb] = heightColor(pz);
+                    r = hr; g = hg; b = hb;
+                } else {
+                    const hex = SEMANTIC_COLORS[tag] !== undefined ? SEMANTIC_COLORS[tag] : 0x808080;
+                    r = ((hex >> 16) & 0xFF) / 255;
+                    g = ((hex >>  8) & 0xFF) / 255;
+                    b = ( hex        & 0xFF) / 255;
+                }
+
+                colors[write * 3]     = r;
+                colors[write * 3 + 1] = g;
+                colors[write * 3 + 2] = b;
+                write++;
             }
-            
+
             const geometry = new THREE.BufferGeometry();
-            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-            
-            // Compute bounding sphere for proper culling and rendering
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions.slice(0, write*3), 3));
+            geometry.setAttribute('color',    new THREE.BufferAttribute(colors.slice(0, write*3), 3));
             geometry.computeBoundingSphere();
-            
+
             pointCloud.geometry.dispose();
             pointCloud.geometry = geometry;
-            
-            // Force geometry update
-            pointCloud.geometry.attributes.position.needsUpdate = true;
-            pointCloud.geometry.attributes.color.needsUpdate = true;
         }
         
         function updateStats(data) {
@@ -653,13 +799,77 @@
         }
         
         function togglePointSize() {
-            // Cycle through sizes: 0.5 -> 1.0 -> 2.0 -> 0.5
-            if (pointSize === 0.5) pointSize = 0.5;
-            else if (pointSize === 1.0) pointSize = 1.0;
-            else pointSize = 0.5;
-            
+            // Cycle: 0.5 → 1.0 → 2.0 → 0.5
+            if (pointSize < 0.75) {
+                pointSize = 1.0;
+            } else if (pointSize < 1.5) {
+                pointSize = 2.0;
+            } else {
+                pointSize = 0.5;
+            }
             pointCloud.material.size = pointSize;
             document.getElementById('size-btn').textContent = `Point Size: ${pointSize.toFixed(1)}`;
+        }
+
+        function cycleColorMode() {
+            const modes = ['distance', 'semantic', 'height'];
+            const next  = modes[(modes.indexOf(colorMode) + 1) % modes.length];
+            colorMode = next;
+            const labels = { distance: 'Color: Distance', semantic: 'Color: Semantic', height: 'Color: Height' };
+            document.getElementById('color-btn').textContent = labels[colorMode];
+            updateLegend();
+        }
+
+        function updateLegend() {
+            const legendEl = document.getElementById('legend');
+            if (colorMode === 'distance') {
+                legendEl.innerHTML = `
+                    <h3>Distance Gradient</h3>
+                    <canvas id="gradient-canvas" width="160" height="20" style="border-radius:3px;display:block;margin-bottom:6px;"></canvas>
+                    <div style="display:flex;justify-content:space-between;font-size:11px;color:#aaa;">
+                        <span>0 m (close)</span><span>${LIDAR_MAX_RANGE} m (far)</span>
+                    </div>`;
+                // Draw Viridis gradient strip
+                requestAnimationFrame(() => {
+                    const cv = document.getElementById('gradient-canvas');
+                    if (!cv) return;
+                    const ctx = cv.getContext('2d');
+                    for (let x = 0; x < cv.width; x++) {
+                        const [r, g, b] = viridisColor(x / (cv.width - 1));
+                        ctx.fillStyle = `rgb(${Math.round(r*255)},${Math.round(g*255)},${Math.round(b*255)})`;
+                        ctx.fillRect(x, 0, 1, cv.height);
+                    }
+                });
+            } else if (colorMode === 'height') {
+                legendEl.innerHTML = `
+                    <h3>Height Gradient</h3>
+                    <canvas id="gradient-canvas" width="160" height="20" style="border-radius:3px;display:block;margin-bottom:6px;"></canvas>
+                    <div style="display:flex;justify-content:space-between;font-size:11px;color:#aaa;">
+                        <span>low</span><span>high</span>
+                    </div>`;
+                requestAnimationFrame(() => {
+                    const cv = document.getElementById('gradient-canvas');
+                    if (!cv) return;
+                    const ctx = cv.getContext('2d');
+                    for (let x = 0; x < cv.width; x++) {
+                        const [r, g, b] = heightColor((x / cv.width) * 7.0 - 2.0);
+                        ctx.fillStyle = `rgb(${Math.round(r*255)},${Math.round(g*255)},${Math.round(b*255)})`;
+                        ctx.fillRect(x, 0, 1, cv.height);
+                    }
+                });
+            } else {
+                legendEl.innerHTML = `
+                    <h3>Semantic Labels</h3>
+                    <div class="legend-item"><div class="legend-color" style="background:#808080;"></div><span>Unlabeled (0)</span></div>
+                    <div class="legend-item"><div class="legend-color" style="background:#596275;"></div><span>Building (1)</span></div>
+                    <div class="legend-item"><div class="legend-color" style="background:#CC3311;"></div><span>Fence (2)</span></div>
+                    <div class="legend-item"><div class="legend-color" style="background:#FF69B4;"></div><span>Pedestrian (4)</span></div>
+                    <div class="legend-item"><div class="legend-color" style="background:#555555;"></div><span>Road (7)</span></div>
+                    <div class="legend-item"><div class="legend-color" style="background:#228B22;"></div><span>Vegetation (9)</span></div>
+                    <div class="legend-item"><div class="legend-color" style="background:#4169E1;"></div><span>Vehicle (10)</span></div>
+                    <div class="legend-item"><div class="legend-color" style="background:#FFD700;"></div><span>TrafficSign (12)</span></div>
+                    <div class="legend-item"><div class="legend-color" style="background:#FFFF00;"></div><span>TrafficLight (18)</span></div>`;
+            }
         }
         
         function setupPointerLock(controls, moveState) {
@@ -724,7 +934,7 @@
         }
         
         // Initialize when page loads
-        window.addEventListener('load', init);
+        window.addEventListener('load', () => { init(); updateLegend(); });
     </script>
 </body>
 </html>

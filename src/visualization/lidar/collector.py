@@ -8,7 +8,16 @@ import numpy as np
 import carla
 import logging
 import threading
-from typing import Dict, Optional
+import time as _time
+from typing import Dict, Optional, Tuple
+
+try:
+    try:
+        from src.utils.binary_protocol import BinaryProtocol
+    except ImportError:
+        from utils.binary_protocol import BinaryProtocol  # type: ignore
+except ImportError:
+    BinaryProtocol = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -58,10 +67,10 @@ class LiDARDataCollector:
         config = {
             'channels': '64',
             'range': '100.0',
-            'points_per_second': '1000000',
+            'points_per_second': '2000000',
             'rotation_frequency': '20.0',
             'upper_fov': '15.0',
-            'lower_fov': '-25.0',
+            'lower_fov': '-30.0',
             'horizontal_fov': '360.0',
         }
         config.update({k: str(v) for k, v in self.lidar_config.items()})
@@ -91,10 +100,11 @@ class LiDARDataCollector:
             return
             
         try:
-            # Convert to numpy array: [x, y, z, cos_angle, object_tag, object_idx]
+            # Convert to numpy array: [x, y, z, cos_angle, object_idx, object_tag]
+            # CARLA binary layout: x, y, z, cos_inc_angle, object_idx (actor ID), object_tag (semantic label)
             points = np.frombuffer(data.raw_data, dtype=np.dtype([
                 ('x', np.float32), ('y', np.float32), ('z', np.float32),
-                ('cos_inc_angle', np.float32), ('object_tag', np.uint32), ('object_idx', np.uint32)
+                ('cos_inc_angle', np.float32), ('object_idx', np.uint32), ('object_tag', np.uint32)
             ]))
             
             # Downsample only if factor > 1
@@ -179,34 +189,29 @@ class LiDARDataCollector:
         
         return world_points
         
-    def get_combined_pointcloud(self) -> Optional[Dict]:
-        """Get combined point cloud from all vehicles in world coordinates.
-        
+    def _get_raw_combined(self) -> Optional[Tuple]:
+        """Thread-safe internal helper: return combined point cloud data.
+
         Returns:
-            Dictionary with point cloud data or None if no data available
+            (combined structured array, ego_transform dict, ego_actor_id int,
+             num_vehicles int) or None if no data is available.
         """
-        # Return None immediately if not active
         if not self._is_active:
             return None
-            
+
         all_points = []
-        vehicle_ids = []
         ego_transform = None
-        
-        # Thread-safe data access
+        ego_actor_id = 0
+
         with self._lock:
-            # Double-check active inside lock
             if not self._is_active:
                 return None
-                
+
             for vehicle_id, points in self.latest_data.items():
                 if points is not None and len(points) > 0:
-                    # Transform to world coordinates
                     world_points = self.transform_to_world_coords(vehicle_id, points)
                     all_points.append(world_points)
-                    vehicle_ids.extend([vehicle_id] * len(world_points))
-                    
-                    # Get ego vehicle transform (vehicle_id=0)
+
                     if vehicle_id == 0 and vehicle_id in self.vehicle_transforms:
                         transform = self.vehicle_transforms[vehicle_id]
                         ego_transform = {
@@ -215,30 +220,84 @@ class LiDARDataCollector:
                             'z': float(transform.location.z),
                             'yaw': float(transform.rotation.yaw),
                             'pitch': float(transform.rotation.pitch),
-                            'roll': float(transform.rotation.roll)
+                            'roll': float(transform.rotation.roll),
                         }
-        
+                        ego_actor_id = int(self.actor_ids.get(0, 0))
+
+            num_vehicles = len(self.vehicles)
+
         if not all_points:
             return None
-            
-        # Combine all point clouds
+
         combined = np.concatenate(all_points)
-        
-        # Prepare data for JSON serialization
-        data = {
+        return combined, ego_transform, ego_actor_id, num_vehicles
+
+    def get_combined_pointcloud(self) -> Optional[Dict]:
+        """Get combined point cloud from all vehicles in world coordinates.
+
+        Returns:
+            Dictionary with point cloud data or None if no data available.
+            The ``points`` sub-dict now includes ``idx`` (object_idx) so the
+            frontend can filter ego self-hits.
+        """
+        raw = self._get_raw_combined()
+        if raw is None:
+            return None
+
+        combined, ego_transform, _, num_vehicles = raw
+
+        return {
             'num_points': int(len(combined)),
             'points': {
                 'x': combined['x'].astype(float).tolist(),
                 'y': combined['y'].astype(float).tolist(),
                 'z': combined['z'].astype(float).tolist(),
                 'tag': combined['object_tag'].astype(int).tolist(),
+                'idx': combined['object_idx'].astype(int).tolist(),
             },
-            'vehicle_ids': vehicle_ids,
-            'num_vehicles': len(self.vehicles),
-            'ego_transform': ego_transform  # Add ego vehicle position for camera following
+            'num_vehicles': num_vehicles,
+            'ego_transform': ego_transform,
         }
-        
-        return data
+
+    def get_combined_pointcloud_binary(self) -> Optional[bytes]:
+        """Get combined point cloud encoded as a binary payload.
+
+        Uses :class:`BinaryProtocol` V2 format (52-byte header+transform,
+        then num_points × 20 bytes of float32 point data).  Returns *None*
+        when no data is available or when the BinaryProtocol import failed.
+        """
+        if BinaryProtocol is None:
+            return None
+
+        raw = self._get_raw_combined()
+        if raw is None:
+            return None
+
+        combined, ego_transform, ego_actor_id, num_vehicles = raw
+
+        if ego_transform is not None:
+            pos = (ego_transform['x'], ego_transform['y'], ego_transform['z'])
+            rot = (ego_transform['yaw'], ego_transform['pitch'], ego_transform['roll'])
+        else:
+            pos = (0.0, 0.0, 0.0)
+            rot = (0.0, 0.0, 0.0)
+
+        # Translate all points to ego-sensor-relative coordinates.
+        # This makes distance = sqrt(px²+py²+pz²) exactly correct in the frontend,
+        # regardless of where in the world the vehicle is — no floating-point
+        # cancellation and no stale-header issues.
+        combined_rel = combined.copy()
+        combined_rel['x'] -= pos[0]
+        combined_rel['y'] -= pos[1]
+        combined_rel['z'] -= pos[2]
+
+        return BinaryProtocol.encode(
+            combined_rel,
+            ego_transform=((0.0, 0.0, 0.0), rot),  # ego is at origin in relative frame
+            timestamp=_time.time(),
+            num_vehicles=num_vehicles,
+            ego_actor_id=ego_actor_id,
+        )
     
     def cleanup(self):
         """Cleanup sensors - MUST be called before destroying vehicles."""

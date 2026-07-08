@@ -191,8 +191,8 @@ def run_complete_v2v_demo(config: ScenarioConfig, status_callback=None, server_m
                     world=session.world,
                     web_port=config.lidar_web_port,
                     channels=32 if config.lidar_quality == LiDARQuality.FAST.value else 64,
-                    points_per_second=500000 if config.lidar_quality == LiDARQuality.FAST.value else 1000000,
-                    lidar_range=80.0,
+                    points_per_second=500000 if config.lidar_quality == LiDARQuality.FAST.value else 2000000,
+                    lidar_range=100.0,
                     downsample_factor=1 if config.lidar_quality == LiDARQuality.HIGH.value else 2,
                     v2v_network=v2v  # Pass V2V network for unified visualization
                 )

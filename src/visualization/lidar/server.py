@@ -37,6 +37,16 @@ except ImportError:
     # CARLA not installed - frontend-only mode
     pass
 
+# BinaryProtocol for efficient point-cloud streaming
+BinaryProtocol = None
+try:
+    try:
+        from src.utils.binary_protocol import BinaryProtocol
+    except ImportError:
+        from utils.binary_protocol import BinaryProtocol  # type: ignore
+except ImportError:
+    pass
+
 logger = logging.getLogger(__name__)
 
 # Forward declaration for run_simulation_headless (imported lazily to avoid circular import)
@@ -138,22 +148,37 @@ class ConnectionManager:
             logger.info(f"WebSocket disconnected. Remaining: {len(self.active_connections)}")
     
     async def broadcast(self, message: str):
-        """Broadcast message to all connected clients."""
+        """Broadcast text message to all connected clients."""
         if not self.active_connections:
             return
-            
+
         disconnected = []
         for connection in self.active_connections:
             try:
                 await connection.send_text(message)
             except Exception as e:
-                logger.debug(f"Error sending to client (will disconnect): {e}")
+                logger.debug(f"Error sending text to client (will disconnect): {e}")
                 disconnected.append(connection)
-        
-        # Remove disconnected clients
+
         for conn in disconnected:
             self.disconnect(conn)
-    
+
+    async def broadcast_bytes(self, data: bytes):
+        """Broadcast binary payload to all connected clients."""
+        if not self.active_connections:
+            return
+
+        disconnected = []
+        for connection in self.active_connections:
+            try:
+                await connection.send_bytes(data)
+            except Exception as e:
+                logger.debug(f"Error sending bytes to client (will disconnect): {e}")
+                disconnected.append(connection)
+
+        for conn in disconnected:
+            self.disconnect(conn)
+
     async def send_status(self, status: str, message: str = ""):
         """Send status message to all clients."""
         status_msg = json.dumps({
@@ -322,10 +347,11 @@ async def websocket_endpoint(websocket: WebSocket):
     
     try:
         while True:
-            # Keep connection alive and receive pings
-            data = await websocket.receive_text()
-            # Echo back for ping/pong
-            if data == "ping":
+            # receive() handles both text and binary frames so we don't get
+            # a WrongMessageTypeError when the client sends a text ping while
+            # the server is streaming binary point-cloud frames.
+            msg = await websocket.receive()
+            if msg.get("text") == "ping":
                 await websocket.send_text("pong")
     except WebSocketDisconnect:
         manager.disconnect(websocket)
@@ -370,24 +396,39 @@ async def stream_lidar_data(update_rate: float = 0.1):
                 continue
             
             # We have collector and connections - stream data
-            data = current_collector.get_combined_pointcloud()
-            if data and data.get('num_points', 0) > 0:
-                # Add type field so client knows this is point data
-                data['type'] = 'pointcloud'
+            # Prefer binary (fast, ~6× less bandwidth); fall back to JSON.
+            binary_payload = None
+            if hasattr(current_collector, 'get_combined_pointcloud_binary'):
+                binary_payload = current_collector.get_combined_pointcloud_binary()
+
+            if binary_payload is not None:
                 success_count += 1
                 if success_count == 1:
-                    logger.info(f"📡 First data streamed! {data['num_points']} points to {len(manager.active_connections)} clients")
-                    await manager.send_status("streaming", "LiDAR data streaming...")
-                elif success_count % 100 == 0:  # Log every 100 successful frames
-                    logger.info(f"📡 Streaming: {success_count} frames sent, {data['num_points']} points, {len(manager.active_connections)} clients")
-                await manager.broadcast(json.dumps(data))
-                no_data_count = 0  # Reset on success
+                    logger.info(f"📡 First binary frame streamed to {len(manager.active_connections)} clients")
+                    await manager.send_status("streaming", "LiDAR data streaming (binary)...")
+                elif success_count % 100 == 0:
+                    logger.info(f"📡 Streaming: {success_count} binary frames, {len(manager.active_connections)} clients")
+                await manager.broadcast_bytes(binary_payload)
+                no_data_count = 0
             else:
-                no_data_count += 1
-                if no_data_count == 1:
-                    vehicles = list(current_collector.vehicles.keys()) if hasattr(current_collector, 'vehicles') else 'N/A'
-                    logger.warning(f"⚠️  No data: vehicles={vehicles}, active={current_collector.is_active()}")
-                    await manager.send_status("waiting_data", "Collector ready, waiting for LiDAR data...")
+                # JSON fallback (no BinaryProtocol or no data yet)
+                data = current_collector.get_combined_pointcloud()
+                if data and data.get('num_points', 0) > 0:
+                    data['type'] = 'pointcloud'
+                    success_count += 1
+                    if success_count == 1:
+                        logger.info(f"📡 First JSON frame streamed! {data['num_points']} points to {len(manager.active_connections)} clients")
+                        await manager.send_status("streaming", "LiDAR data streaming...")
+                    elif success_count % 100 == 0:
+                        logger.info(f"📡 Streaming: {success_count} frames sent, {data['num_points']} points, {len(manager.active_connections)} clients")
+                    await manager.broadcast(json.dumps(data))
+                    no_data_count = 0
+                else:
+                    no_data_count += 1
+                    if no_data_count == 1:
+                        vehicles = list(current_collector.vehicles.keys()) if hasattr(current_collector, 'vehicles') else 'N/A'
+                        logger.warning(f"⚠️  No data: vehicles={vehicles}, active={current_collector.is_active()}")
+                        await manager.send_status("waiting_data", "Collector ready, waiting for LiDAR data...")
                     
             await asyncio.sleep(update_rate)
         except asyncio.CancelledError:
