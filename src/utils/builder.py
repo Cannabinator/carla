@@ -77,6 +77,11 @@ class ScenarioConfig:
     ego_behavior: str = 'normal'       # 'cautious', 'normal', 'aggressive'
     leading_behavior: str = 'normal'   # 'cautious', 'normal', 'aggressive'
 
+    # V2X extensions (V2I + V2P)
+    num_pedestrians: int = 0           # Walkers to spawn and register as VRUs
+    num_cyclists: int = 0              # Two-wheeled vehicles to spawn as VRUs
+    v2x_rsu_enabled: bool = False      # Create RSUs from CARLA traffic lights
+
 
 class ScenarioBuilder:
     """Fluent builder for scenario configuration."""
@@ -239,6 +244,25 @@ class ScenarioBuilder:
         """Set BehaviorAgent behavior types for ego and leading vehicle."""
         self._config.ego_behavior = ego_behavior
         self._config.leading_behavior = leading_behavior
+        return self
+
+    def with_v2x(
+        self,
+        num_pedestrians: int = 5,
+        num_cyclists: int = 3,
+        rsu_enabled: bool = True,
+    ):
+        """
+        Enable V2X extensions: pedestrian/cyclist VRUs and RSU infrastructure.
+
+        Args:
+            num_pedestrians: Number of walker actors to spawn and register as VRUs.
+            num_cyclists:    Number of two-wheeled vehicles to spawn as VRUs.
+            rsu_enabled:     Create RSUs from CARLA traffic lights at intersections.
+        """
+        self._config.num_pedestrians = num_pedestrians
+        self._config.num_cyclists = num_cyclists
+        self._config.v2x_rsu_enabled = rsu_enabled
         return self
 
     # Build

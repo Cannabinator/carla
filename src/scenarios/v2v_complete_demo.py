@@ -31,6 +31,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.v2v import V2VNetworkEnhanced, V2VAPI
+from src.v2x import V2XNetworkEnhanced, RoadSideUnit, VRUProfile
 from src.utils import (
     CARLASession, VehicleState, ActorManager,
     ScenarioBuilder, ScenarioConfig,
@@ -87,6 +88,7 @@ def run_complete_v2v_demo(config: ScenarioConfig, status_callback=None, server_m
     v2v_api: Optional[V2VAPI] = None
     api_thread: Optional[threading.Thread] = None
     observers: List[Any] = []
+    walker_controllers: List[Any] = []
     
     try:
         # ============================================================================
@@ -143,17 +145,33 @@ def run_complete_v2v_demo(config: ScenarioConfig, status_callback=None, server_m
                 if getattr(config, 'dsrc_tx_power_dbm', None) is not None:
                     dsrc_cfg.tx_power_dbm = config.dsrc_tx_power_dbm
 
-                v2v = V2VNetworkEnhanced(
-                    max_range=config.v2v_range,
-                    update_rate_hz=2.0,  # SAE J2735 standard beacon interval
-                    enable_cooperative_perception=True,
-                    world=session.world,
-                    dsrc_config=dsrc_cfg,
+                _use_v2x = (
+                    getattr(config, 'num_pedestrians', 0) > 0
+                    or getattr(config, 'num_cyclists', 0) > 0
+                    or getattr(config, 'v2x_rsu_enabled', False)
                 )
-
-                print(f"   ✓ V2V initialized: {config.v2v_range}m range, 2 Hz, "
-                      f"DSRC/WAVE channel (TX={dsrc_cfg.tx_power_dbm:.0f} dBm, "
-                      f"CBR={dsrc_cfg.channel_busy_ratio:.2f})")
+                if _use_v2x:
+                    v2v = V2XNetworkEnhanced(
+                        max_range=config.v2v_range,
+                        update_rate_hz=2.0,
+                        enable_cooperative_perception=True,
+                        world=session.world,
+                        dsrc_config=dsrc_cfg,
+                    )
+                    print(f"   ✓ V2X network (V2V+V2I+V2P) initialized: {config.v2v_range}m range, 2 Hz, "
+                          f"DSRC/WAVE channel (TX={dsrc_cfg.tx_power_dbm:.0f} dBm, "
+                          f"CBR={dsrc_cfg.channel_busy_ratio:.2f})")
+                else:
+                    v2v = V2VNetworkEnhanced(
+                        max_range=config.v2v_range,
+                        update_rate_hz=2.0,  # SAE J2735 standard beacon interval
+                        enable_cooperative_perception=True,
+                        world=session.world,
+                        dsrc_config=dsrc_cfg,
+                    )
+                    print(f"   ✓ V2V initialized: {config.v2v_range}m range, 2 Hz, "
+                          f"DSRC/WAVE channel (TX={dsrc_cfg.tx_power_dbm:.0f} dBm, "
+                          f"CBR={dsrc_cfg.channel_busy_ratio:.2f})")
 
                 # Note: V2V REST API available at separate scenario (v2v_api_scenario.py)
                 # to avoid threading conflicts with LiDAR API server
@@ -336,7 +354,126 @@ def run_complete_v2v_demo(config: ScenarioConfig, status_callback=None, server_m
                 leading_vehicle.set_autopilot(False, config.tm_port)
                 print(f"   ✓ Leading vehicle (ID {leading_vehicle.id}): BehaviorAgent (normal)")
             print()
-            
+
+            # ========================================================================
+            # STEP 5b: Spawn VRUs (Pedestrians + Cyclists) — V2X Extension
+            # VRU IDs are offset from vehicle IDs to avoid collisions:
+            #   pedestrians: num_vehicles … num_vehicles+num_pedestrians-1
+            #   cyclists:    num_vehicles+num_pedestrians … (+ num_cyclists-1)
+            # Walker AI controllers must be started AFTER a world.tick().
+            # ========================================================================
+            walker_controllers: List[carla.Actor] = []
+            _num_pedestrians = getattr(config, 'num_pedestrians', 0)
+            _num_cyclists    = getattr(config, 'num_cyclists', 0)
+
+            if _num_pedestrians > 0:
+                print(f"🚶 Spawning {_num_pedestrians} pedestrians (VRU V2P)...")
+                walker_bps   = list(session.bp_lib.filter('walker.pedestrian.*'))
+                walker_ai_bp = session.bp_lib.find('controller.ai.walker')
+                walkers_spawned = 0
+                _ped_vru_base = num_vehicles
+
+                for ped_idx in range(_num_pedestrians):
+                    nav_loc = session.world.get_random_location_from_navigation()
+                    if nav_loc is None:
+                        continue
+                    w_bp = random.choice(walker_bps)
+                    walker = session.world.try_spawn_actor(
+                        w_bp, carla.Transform(nav_loc)
+                    )
+                    if walker is None:
+                        continue
+                    session.add_actor(walker)
+                    ctrl = session.world.try_spawn_actor(
+                        walker_ai_bp,
+                        carla.Transform(nav_loc),
+                        attach_to=walker,
+                    )
+                    if ctrl is not None:
+                        session.add_actor(ctrl)
+                        walker_controllers.append(ctrl)
+                    # Register as VRU (requires V2XNetworkEnhanced)
+                    if isinstance(v2v, V2XNetworkEnhanced):
+                        v2v.register_vru(
+                            _ped_vru_base + ped_idx, walker, VRUProfile.PEDESTRIAN
+                        )
+                    walkers_spawned += 1
+
+                # CRITICAL: tick once so walker physics initialise before controllers start
+                session.world.tick()
+                for ctrl in walker_controllers:
+                    try:
+                        ctrl.start()
+                        dest = session.world.get_random_location_from_navigation()
+                        if dest:
+                            ctrl.go_to_location(dest)
+                        ctrl.set_max_speed(1.4)  # ~5 km/h walking speed
+                    except Exception as e:
+                        logger.debug(f"Walker controller start error: {e}")
+
+                print(f"   ✓ Spawned {walkers_spawned} pedestrians "
+                      f"({_num_pedestrians - walkers_spawned} spawn failures)")
+
+            if _num_cyclists > 0:
+                print(f"🚲 Spawning {_num_cyclists} cyclists (VRU V2P)...")
+                cyclist_bps = [
+                    bp for bp in session.bp_lib.filter('vehicle.*')
+                    if int(bp.get_attribute('number_of_wheels')) == 2
+                ]
+                cyclists_spawned = 0
+                _cyc_vru_base = num_vehicles + _num_pedestrians
+
+                for cyc_idx in range(_num_cyclists):
+                    if not cyclist_bps:
+                        logger.warning("No 2-wheeled blueprints found; skipping cyclists")
+                        break
+                    bp = random.choice(cyclist_bps)
+                    # Cyclists use road spawn points (they need paved surface)
+                    sp_offset = num_vehicles + cyc_idx
+                    if sp_offset >= len(road_spawn_points):
+                        break
+                    cyclist = session.world.try_spawn_actor(
+                        bp, road_spawn_points[sp_offset]
+                    )
+                    if cyclist is None:
+                        continue
+                    session.add_actor(cyclist)
+                    cyclist.set_autopilot(True, config.tm_port)
+                    tm.vehicle_percentage_speed_difference(cyclist, 60.0)  # ~15 km/h
+                    if isinstance(v2v, V2XNetworkEnhanced):
+                        v2v.register_vru(
+                            _cyc_vru_base + cyc_idx, cyclist, VRUProfile.CYCLIST
+                        )
+                    cyclists_spawned += 1
+
+                print(f"   ✓ Spawned {cyclists_spawned} cyclists "
+                      f"({_num_cyclists - cyclists_spawned} spawn failures)")
+
+            # ========================================================================
+            # STEP 5c: Create RSUs from CARLA Traffic Lights — V2X Extension
+            # RSU IDs use intersection_id; we limit to the first 10 intersections
+            # to avoid flooding the network.
+            # ========================================================================
+            if getattr(config, 'v2x_rsu_enabled', False) and isinstance(v2v, V2XNetworkEnhanced):
+                print(f"🚦 Creating RSUs from CARLA traffic lights...")
+                all_tl = list(session.world.get_actors().filter('traffic.traffic_light'))
+                # Group by intersection_id (CARLA groups lights at same junction)
+                intersection_seen: dict = {}
+                for tl in all_tl:
+                    iid = tl.get_pole_index()  # 0-based pole index per junction
+                    junction_id = id(tl) % 10000  # Stable pseudo-ID per actor
+                    # Use first light per intersection for simplicity
+                    if junction_id not in intersection_seen:
+                        intersection_seen[junction_id] = tl
+                # Register up to 10 RSUs
+                rsu_count = 0
+                for rsu_idx, (jid, tl) in enumerate(list(intersection_seen.items())[:10]):
+                    rsu = RoadSideUnit.from_traffic_light(tl, intersection_id=rsu_idx + 1)
+                    v2v.register_rsu(rsu)
+                    rsu_count += 1
+                print(f"   ✓ Registered {rsu_count} RSUs (MAP+SPAT, 2 Hz)")
+                print()
+
             # ========================================================================
             # STEP 6: Setup Observers (Observer Pattern)
             # ========================================================================
@@ -589,6 +726,15 @@ def run_complete_v2v_demo(config: ScenarioConfig, status_callback=None, server_m
                                 (ego_bsm.latitude, ego_bsm.longitude, ego_bsm.elevation)
                             )
                             print(f"     ID {n.vehicle_id}: {n.speed*3.6:.1f} km/h at {dist:.1f}m")
+
+                # V2X-specific stats (only when V2XNetworkEnhanced is active)
+                if isinstance(v2v, V2XNetworkEnhanced):
+                    v2x_summary = v2v.get_v2x_summary()
+                    print(f"\n   V2X Extensions:")
+                    print(f"     RSUs active:       {v2x_summary['rsu_count']}")
+                    print(f"     VRUs tracked:      {v2x_summary['vru_count']}")
+                    print(f"     Active SPAT msgs:  {v2x_summary['active_spat']}")
+                    print(f"     Active VRUAM msgs: {v2x_summary['active_vruam']}")
             
             # LiDAR statistics
             if lidar_api:
@@ -688,6 +834,13 @@ def run_complete_v2v_demo(config: ScenarioConfig, status_callback=None, server_m
         if v2v:
             v2v.shutdown()
 
+        # Stop walker AI controllers before session destroys actors
+        for ctrl in walker_controllers:
+            try:
+                ctrl.stop()
+            except Exception:
+                pass
+
         # Context manager handles CARLA cleanup automatically
         print(f"\n📝 Log file saved: {log_file}")
 
@@ -776,6 +929,14 @@ Examples:
                        help='Enable detailed V2V message logging for analysis')
     parser.add_argument('--v2v-log-output',
                        help='V2V message log file path (default: auto-generated in logs/)')
+
+    # V2X extensions
+    parser.add_argument('--pedestrians', type=int, default=0,
+                       help='Number of pedestrians to spawn as VRUs (default: 0)')
+    parser.add_argument('--cyclists', type=int, default=0,
+                       help='Number of cyclists to spawn as VRUs (default: 0)')
+    parser.add_argument('--rsu', action='store_true',
+                       help='Create RSUs from CARLA traffic lights (V2I)')
     
     args = parser.parse_args()
     
@@ -819,6 +980,12 @@ Examples:
         if args.v2v_log_output:
             config.v2v_log_output_path = args.v2v_log_output
     
+    # Apply V2X settings
+    if getattr(args, 'pedestrians', 0) or getattr(args, 'cyclists', 0) or getattr(args, 'rsu', False):
+        config.num_pedestrians = getattr(args, 'pedestrians', 0)
+        config.num_cyclists    = getattr(args, 'cyclists', 0)
+        config.v2x_rsu_enabled = getattr(args, 'rsu', False)
+
     # Run the complete demonstration
     run_complete_v2v_demo(config)
 

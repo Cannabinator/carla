@@ -177,7 +177,9 @@ erDiagram
         float ego_x
         float ego_y
     }
-
+    TRAFFIC_PARTICIPANT {
+      int   
+    }
     EGO_TELEMETRY_FRAME {
         int frame_id PK
         string run_id FK
