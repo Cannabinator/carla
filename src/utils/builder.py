@@ -44,6 +44,13 @@ class ScenarioConfig:
     global_speed_difference: float = -30.0  # -30% slower
     ego_speed_difference: float = 0.0
     safety_distance: float = 3.0
+
+    # Physics substepping — keeps physics dt <= 0.01 s for accurate dynamics.
+    # Constraint: fixed_delta_seconds <= max_substep_delta_time * max_substeps
+    # e.g.  0.05 <= 0.01 * 10 = 0.10 ✓
+    substepping: bool = True
+    max_substep_delta_time: float = 0.01   # must stay below 0.01666 s
+    max_substeps: int = 10
     
     # Visualization
     console_output: bool = True

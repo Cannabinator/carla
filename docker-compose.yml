@@ -26,6 +26,7 @@ services:
     environment:
       - CARLA_HOST=192.168.1.101
       - CARLA_PORT=2000
+      - ADMIN_TOKEN=201295  # ← change this before deploying!
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/')"]

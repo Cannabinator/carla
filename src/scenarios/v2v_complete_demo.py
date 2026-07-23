@@ -656,6 +656,14 @@ def run_complete_v2v_demo(config: ScenarioConfig, status_callback=None, server_m
                     # Track frame time for performance analysis
                     frame_time: float = time.perf_counter() - frame_start
                     frame_times.append(frame_time)
+
+                    # Real-time pacing: sleep the unused portion of the target
+                    # frame period so the simulation runs at ≈ 1× real-time speed.
+                    # Without this, synchronous mode ticks as fast as the CPU/GPU
+                    # allows (often 5–20× faster than real time).
+                    sleep_for = config.fixed_delta_seconds - frame_time
+                    if sleep_for > 0.001:
+                        time.sleep(sleep_for)
                     
             except KeyboardInterrupt:
                 print(f"\n⚠️  Simulation interrupted by user")

@@ -54,6 +54,36 @@ _run_simulation_headless = None
 
 app = FastAPI(title="V2V LiDAR Visualizer")
 
+# ── Persistent-world routers (live-server mode) ───────────────────────────────
+try:
+    from src.server.admin_routes import router as _admin_router
+    from src.server.client_routes import router as _client_router
+    import src.server.admin_routes as _admin_mod
+    import src.server.client_routes as _client_mod
+    app.include_router(_admin_router)
+    app.include_router(_client_router)
+    _persistent_world_routers_loaded = True
+except ImportError:
+    _persistent_world_routers_loaded = False
+    _admin_mod = None  # type: ignore
+    _client_mod = None  # type: ignore
+
+
+def set_persistent_world(world) -> None:
+    """Register the PersistentCARLAServer with the admin and client routes."""
+    if _admin_mod is not None:
+        _admin_mod.set_persistent_world(world)
+    if _client_mod is not None:
+        _client_mod.set_persistent_world(world)
+
+
+# Give admin_routes a back-reference to this module so /admin/connect can
+# propagate a newly created world to all routes after startup.
+import sys as _sys
+if _admin_mod is not None:
+    _admin_mod.set_server_module(_sys.modules[__name__])
+
+
 # Mount static files for assets (logos, images, etc.)
 web_dir = Path(__file__).parent.parent / 'web'
 assets_dir = web_dir / 'assets'
@@ -336,6 +366,33 @@ async def vehicles_overview():
     if vehicles_path.exists():
         return HTMLResponse(content=vehicles_path.read_text())
     return HTMLResponse(content="<h1>Vehicles overview not found</h1>", status_code=404)
+
+
+@app.get("/admin")
+async def admin_panel():
+    """Serve admin control panel (requires admin token in the UI)."""
+    page = Path(__file__).parent.parent / 'web' / 'admin_panel.html'
+    if page.exists():
+        return HTMLResponse(content=page.read_text())
+    return HTMLResponse(content="<h1>Admin panel not found</h1>", status_code=404)
+
+
+@app.get("/client")
+async def client_join():
+    """Serve client join page for connected devices."""
+    page = Path(__file__).parent.parent / 'web' / 'client_join.html'
+    if page.exists():
+        return HTMLResponse(content=page.read_text())
+    return HTMLResponse(content="<h1>Client join page not found</h1>", status_code=404)
+
+
+@app.get("/view")
+async def live_viewer():
+    """Serve read-only live viewer for observers."""
+    page = Path(__file__).parent.parent / 'web' / 'live_viewer.html'
+    if page.exists():
+        return HTMLResponse(content=page.read_text())
+    return HTMLResponse(content="<h1>Live viewer not found</h1>", status_code=404)
 
 
 @app.on_event("startup")

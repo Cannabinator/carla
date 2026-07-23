@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CARLA — Join Server</title>
+<style>
+  :root {
+    --bg: #0f1117; --surface: #1a1d27; --border: #2d3148;
+    --accent: #4f8ef7; --danger: #e05252; --success: #4caf77;
+    --warn: #f0a830; --text: #e0e4f0; --muted: #6b7280;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif;
+         font-size: 14px; min-height: 100vh; display: flex; flex-direction: column; align-items: center;
+         padding: 40px 16px; }
+  h1 { font-size: 22px; font-weight: 700; margin-bottom: 8px; }
+  .subtitle { color: var(--muted); margin-bottom: 32px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+          padding: 28px; width: 100%; max-width: 480px; }
+  .card + .card { margin-top: 20px; }
+  .card h2 { font-size: 13px; font-weight: 600; text-transform: uppercase;
+             letter-spacing: .06em; color: var(--muted); margin-bottom: 18px; }
+  label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 5px; margin-top: 14px; }
+  label:first-of-type { margin-top: 0; }
+  input, select {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    color: var(--text); padding: 9px 12px; font-size: 13px; width: 100%; outline: none;
+  }
+  input:focus, select:focus { border-color: var(--accent); }
+  button {
+    background: var(--accent); border: none; border-radius: 8px; color: #fff;
+    cursor: pointer; font-size: 14px; font-weight: 600; padding: 11px 20px; width: 100%;
+    margin-top: 20px; transition: opacity .15s;
+  }
+  button:hover { opacity: .85; }
+  button.danger { background: var(--danger); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .stat { background: var(--bg); border-radius: 8px; padding: 12px 14px; }
+  .stat .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing:.06em; }
+  .stat .value { font-size: 20px; font-weight: 700; margin-top: 4px; }
+  #statusBar { padding: 10px 14px; border-radius: 8px; font-size: 13px; margin-top: 16px; display: none; }
+  #statusBar.ok  { background:#1a3d2a; color:var(--success); }
+  #statusBar.err { background:#3d1a1a; color:var(--danger); }
+  #statusBar.info{ background:#1a2540; color:var(--accent); }
+  .ws-dot { display: inline-block; width:8px; height:8px; border-radius:50%;
+            background:var(--muted); margin-right:6px; vertical-align: middle; }
+  .ws-dot.live { background: var(--success); animation: pulse 1.5s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  small { color: var(--muted); font-size: 11px; margin-top: 5px; display: block; }
+</style>
+</head>
+<body>
+
+<h1>CARLA Live Server</h1>
+<p class="subtitle">Connect your device and spawn a leading vehicle</p>
+
+<!-- Join form (shown before joining) -->
+<div class="card" id="joinCard">
+  <h2>Register Device</h2>
+
+  <label>Device Name <small>e.g. raspi-1, laptop-alice</small></label>
+  <input type="text" id="clientName" placeholder="my-device" maxlength="64">
+
+  <label>Vehicle</label>
+  <select id="blueprint"></select>
+
+  <label>Session Duration (seconds) <small>Leave blank to run until you close this page</small></label>
+  <input type="number" id="duration" placeholder="e.g. 3600 (leave empty = until disconnect)" min="10">
+
+  <button id="joinBtn" onclick="joinServer()">Join &amp; Spawn Vehicle</button>
+</div>
+
+<!-- Telemetry card (shown after joining) -->
+<div class="card" id="telemetryCard" style="display:none">
+  <h2>
+    <span class="ws-dot" id="wsDot"></span>
+    Live Telemetry
+  </h2>
+  <div class="stat-grid">
+    <div class="stat"><div class="label">Speed</div><div class="value" id="tSpeed">—</div></div>
+    <div class="stat"><div class="label">Position X / Y</div><div class="value" id="tPos">—</div></div>
+    <div class="stat"><div class="label">Yaw</div><div class="value" id="tYaw">—</div></div>
+    <div class="stat"><div class="label">Time Left</div><div class="value" id="tRemain">—</div></div>
+  </div>
+  <div id="statusBar"></div>
+  <button class="danger" onclick="leaveServer()" style="margin-top:18px">Leave &amp; Despawn Vehicle</button>
+</div>
+
+<script>
+const HOST = window.location.origin;
+let _sessionId = null;
+let _ws = null;
+
+// ---------- load blueprints ----------
+async function loadBlueprints() {
+  try {
+    const r = await fetch(`${HOST}/client/blueprints`);
+    const d = await r.json();
+    const sel = document.getElementById('blueprint');
+    d.blueprints.forEach(bp => {
+      const opt = document.createElement('option');
+      opt.value = bp;
+      opt.textContent = bp.split('.').slice(1).join(' · '); // prettier display
+      if (bp === d.default) opt.selected = true;
+      sel.appendChild(opt);
+    });
+  } catch { /* server not live yet, silently ignore */ }
+}
+
+// ---------- join ----------
+async function joinServer() {
+  const name = document.getElementById('clientName').value.trim();
+  if (!name) { showStatus('Please enter a device name', 'err'); return; }
+
+  const blueprint = document.getElementById('blueprint').value;
+  const durationVal = document.getElementById('duration').value;
+  const duration = durationVal ? parseFloat(durationVal) : null;
+
+  document.getElementById('joinBtn').disabled = true;
+  showStatus('Joining…', 'info');
+
+  try {
+    const r = await fetch(`${HOST}/client/join`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ client_name: name, vehicle_blueprint: blueprint, duration_seconds: duration }),
+    });
+    const d = await r.json();
+    if (!r.ok) { showStatus(d.detail || 'Join failed', 'err'); document.getElementById('joinBtn').disabled = false; return; }
+
+    _sessionId = d.session_id;
+    document.getElementById('joinCard').style.display = 'none';
+    document.getElementById('telemetryCard').style.display = 'block';
+    showStatus(d.message, 'ok');
+    openWS(d.ws_url);
+  } catch (e) {
+    showStatus('Network error: ' + e.message, 'err');
+    document.getElementById('joinBtn').disabled = false;
+  }
+}
+
+// ---------- WS ----------
+function openWS(path) {
+  const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const url = `${wsProto}://${location.host}${path}`;
+  _ws = new WebSocket(url);
+
+  _ws.onopen = () => {
+    setDot(true);
+    // Keep-alive ping every 10 s
+    _ws._ping = setInterval(() => _ws.readyState === WebSocket.OPEN && _ws.send('ping'), 10000);
+  };
+
+  _ws.onmessage = (ev) => {
+    const msg = JSON.parse(ev.data);
+    if (msg.type === 'telemetry') {
+      const d = msg.data;
+      document.getElementById('tSpeed').textContent   = `${d.speed_kmh} km/h`;
+      document.getElementById('tPos').textContent     = `${d.x} / ${d.y}`;
+      document.getElementById('tYaw').textContent     = `${d.yaw}°`;
+      const rem = msg.remaining_seconds;
+      document.getElementById('tRemain').textContent  = rem != null ? `${Math.ceil(rem)}s` : '∞';
+    } else if (msg.type === 'session_expired') {
+      showStatus('Your session has expired. Vehicle despawned.', 'err');
+      closeWS();
+      document.getElementById('joinCard').style.display = 'block';
+      document.getElementById('telemetryCard').style.display = 'none';
+    } else if (msg.type === 'pong') {
+      // heartbeat confirmed
+    }
+  };
+
+  _ws.onerror = () => setDot(false);
+  _ws.onclose = () => { setDot(false); clearInterval(_ws._ping); };
+}
+
+function closeWS() {
+  if (_ws) { _ws.close(); _ws = null; }
+  setDot(false);
+}
+
+// ---------- leave ----------
+async function leaveServer() {
+  if (!_sessionId) return;
+  closeWS();
+  try {
+    await fetch(`${HOST}/client/leave/${_sessionId}`, { method: 'DELETE' });
+  } catch { /* ignore */ }
+  _sessionId = null;
+  document.getElementById('joinCard').style.display = 'block';
+  document.getElementById('joinBtn').disabled = false;
+  document.getElementById('telemetryCard').style.display = 'none';
+  showStatus('Left the server. Vehicle despawned.', 'info');
+}
+
+// ---------- helpers ----------
+function setDot(live) {
+  const dot = document.getElementById('wsDot');
+  dot.className = 'ws-dot' + (live ? ' live' : '');
+}
+
+function showStatus(msg, type) {
+  const el = document.getElementById('statusBar');
+  el.textContent = msg;
+  el.className = type;
+  el.style.display = 'block';
+}
+
+// Despawn on page close
+window.addEventListener('beforeunload', () => {
+  if (_sessionId) {
+    navigator.sendBeacon(`${HOST}/client/leave/${_sessionId}`, '');
+  }
+});
+
+// ---------- init ----------
+loadBlueprints();
+</script>
+</body>
+</html>

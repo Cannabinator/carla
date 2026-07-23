@@ -1,58 +1,147 @@
 #!/usr/bin/env python3
 """
-Standalone V2V Visualization Server
+CARLA Live Server — persistent multi-client simulation host.
 
-Starts the unified web server on port 8000 without running a simulation.
-Control simulations from the web interface at http://localhost:8000
+Usage (demo / frontend-only mode):
+    python start_server.py
+
+Usage (live server mode — requires a running CARLA instance):
+    python start_server.py \\
+        --carla-host 192.168.1.110 \\
+        --admin-token mysecret \\
+        --live
+
+Options
+-------
+--live              Start the persistent CARLA world immediately.
+--carla-host HOST   IP of the CARLA server  (default: 192.168.1.110)
+--carla-port PORT   CARLA server port        (default: 2000)
+--admin-token TOKEN Admin API token          (default: read from ADMIN_TOKEN env)
+--port PORT         Web server port          (default: 8000)
+--no-v2v            Disable V2V network
+--v2v-range M       V2V cooperative range in metres (default: 75)
 """
 
-import sys
+import argparse
 import logging
+import os
+import sys
 from pathlib import Path
 
-# Add project root to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# ---------------------------------------------------------------------------
+# Ensure project root is on sys.path so 'src' imports work from anywhere
+# ---------------------------------------------------------------------------
+_project_root = Path(__file__).resolve().parent
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
 
-from src.lidar.server import run_server
+from src.lidar.server import run_server, set_persistent_world  # noqa: E402
 
-# Setup logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s",
 )
 logger = logging.getLogger(__name__)
 
 
-def main():
-    """Start the visualization server."""
-    host = '0.0.0.0'
-    port = 8000
-    
-    print("=" * 80)
-    print("🌐 CARLA V2V Visualization Server")
-    print("=" * 80)
-    print(f"Starting server on {host}:{port}")
-    print()
-    print(f"📊 Control Panel:   http://localhost:{port}/")
-    print(f"🎯 LiDAR Viewer:    http://localhost:{port}/lidar")
-    print(f"📡 V2V Dashboard:   http://localhost:{port}/v2v")
-    print()
-    print("💡 Use keyboard shortcuts:")
-    print("   1 = Control Panel  |  2 = LiDAR Viewer  |  3 = V2V Dashboard")
-    print()
-    print("🎮 Control simulations from the web interface!")
-    print("   Configure parameters and click 'Start Simulation'")
-    print()
-    print("Press Ctrl+C to stop the server")
-    print("=" * 80)
-    print()
-    
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def _parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        description="CARLA Live Server",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    p.add_argument("--live", action="store_true",
+                   help="Start persistent CARLA world on launch")
+    p.add_argument("--carla-host", default="192.168.1.110",
+                   help="CARLA server IP address")
+    p.add_argument("--carla-port", type=int, default=2000,
+                   help="CARLA server port")
+    p.add_argument("--admin-token", default=None,
+                   help="Secret token for the /admin API (overrides ADMIN_TOKEN env var)")
+    p.add_argument("--port", type=int, default=8000,
+                   help="Web server listen port")
+    p.add_argument("--host", default="0.0.0.0",
+                   help="Web server bind address")
+    p.add_argument("--no-v2v", action="store_true",
+                   help="Disable V2V network")
+    p.add_argument("--v2v-range", type=float, default=75.0,
+                   help="V2V cooperative range in metres")
+    p.add_argument("--tm-port", type=int, default=8001,
+                   help="CARLA Traffic Manager port")
+    return p.parse_args()
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    args = _parse_args()
+
+    # --- Admin token --------------------------------------------------------
+    token = args.admin_token or os.environ.get("ADMIN_TOKEN", "")
+    if token:
+        os.environ["ADMIN_TOKEN"] = token
+    else:
+        # Generate a random token so the server isn't accidentally open
+        import secrets
+        token = secrets.token_urlsafe(16)
+        os.environ["ADMIN_TOKEN"] = token
+        logger.warning("No --admin-token provided; generated: %s", token)
+
+    # --- Banner -------------------------------------------------------------
+    sep = "=" * 72
+    print(sep)
+    print("  CARLA Live Server")
+    print(sep)
+    print(f"  Web server   : http://{args.host}:{args.port}")
+    print(f"  Admin panel  : http://localhost:{args.port}/admin   (token required)")
+    print(f"  Client join  : http://localhost:{args.port}/client  (open)")
+    print(f"  Live viewer  : http://localhost:{args.port}/view    (read-only)")
+    print(f"  V2V dashboard: http://localhost:{args.port}/v2v")
+    print(f"  Admin token  : {token}")
+    if args.live:
+        print(f"  CARLA host   : {args.carla_host}:{args.carla_port}")
+        print(f"  V2V          : {'disabled' if args.no_v2v else f'enabled, range={args.v2v_range:.0f} m'}")
+    else:
+        print("  Mode         : frontend-only (use --live to start simulation)")
+    print(sep)
+    print("  Press Ctrl+C to stop")
+    print(sep)
+
+    # --- Persistent world ---------------------------------------------------
+    world = None
+    if args.live:
+        try:
+            from src.server.persistent_world import PersistentCARLAServer
+            world = PersistentCARLAServer(
+                host=args.carla_host,
+                port=args.carla_port,
+                v2v_enabled=not args.no_v2v,
+                v2v_range=args.v2v_range,
+                tm_port=args.tm_port,
+            )
+            world.start()
+            set_persistent_world(world)
+            logger.info("Persistent CARLA world started")
+        except Exception as exc:
+            logger.error("Failed to start persistent world: %s", exc)
+            logger.error("Falling back to frontend-only mode")
+
+    # --- Web server ---------------------------------------------------------
     try:
-        run_server(host=host, port=port)
+        run_server(host=args.host, port=args.port)
     except KeyboardInterrupt:
-        print("\n\n✓ Server stopped")
-        logger.info("Server shutdown")
+        print("\nShutting down…")
+    finally:
+        if world is not None:
+            world.stop()
+        logger.info("Server stopped")
 
 
 if __name__ == "__main__":
     main()
+

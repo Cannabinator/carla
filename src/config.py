@@ -24,6 +24,13 @@ class SimulationConfig:
     # Physics settings
     use_hybrid_physics: bool = False  # False to avoid zero velocity issue
     hybrid_physics_radius: float = 70.0
+
+    # Physics substepping (CARLA docs: for accurate vehicle physics)
+    # Constraint: fixed_delta_seconds <= max_substep_delta_time * max_substeps
+    # 0.05 <= 0.01 * 10 = 0.10 ✓  (substep dt < 0.01666 is optimal per CARLA docs)
+    substepping: bool = True
+    max_substep_delta_time: float = 0.01   # optimal: keep below 0.01666 s
+    max_substeps: int = 10                  # 10 × 0.01 s covers the 0.05 s frame
     
     # Traffic behavior
     global_speed_difference: float = 30.0  # % slower than speed limit

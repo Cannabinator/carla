@@ -66,12 +66,15 @@ class CARLASession:
         
         logger.info(f"Connected to map: {self.world.get_map().name}")
         
-        # Setup synchronous mode
+        # Setup synchronous mode with physics substepping
         self.original_settings = setup_synchronous_mode(
-            self.world, 
-            self.config.fixed_delta_seconds
+            self.world,
+            self.config.fixed_delta_seconds,
+            substepping=getattr(self.config, 'substepping', True),
+            max_substep_delta_time=getattr(self.config, 'max_substep_delta_time', 0.01),
+            max_substeps=getattr(self.config, 'max_substeps', 10),
         )
-        logger.info(f"Synchronous mode enabled: delta={self.config.fixed_delta_seconds}s")
+        logger.info(f"Synchronous mode enabled: delta={self.config.fixed_delta_seconds}s, substepping=True")
         
         # Prepare common resources
         self.bp_lib = self.world.get_blueprint_library()

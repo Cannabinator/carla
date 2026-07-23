@@ -53,13 +53,27 @@ def calculate_distance_3d(loc1: tuple, loc2: tuple) -> float:
                            loc1[2] - loc2[2]])
 
 
-def setup_synchronous_mode(world: carla.World, delta_seconds: float = 0.05) -> carla.WorldSettings:
-    """Configure synchronous mode for deterministic simulation.
-    
+def setup_synchronous_mode(
+    world: carla.World,
+    delta_seconds: float = 0.05,
+    substepping: bool = True,
+    max_substep_delta_time: float = 0.01,
+    max_substeps: int = 10,
+) -> carla.WorldSettings:
+    """Configure synchronous mode with physics substepping for deterministic simulation.
+
+    Per CARLA docs, physics substepping should be enabled with
+    max_substep_delta_time <= 0.01 for accurate vehicle dynamics.
+    The constraint  fixed_delta_seconds <= max_substep_delta_time * max_substeps
+    must hold (e.g. 0.05 <= 0.01 * 10 ✓).
+
     Args:
         world: CARLA world instance
         delta_seconds: Fixed time step (default 0.05 = 20 FPS)
-        
+        substepping: Enable physics sub-stepping (recommended True)
+        max_substep_delta_time: Physics sub-step size (must be <= 0.01666 s)
+        max_substeps: Maximum sub-steps per frame
+
     Returns:
         Original world settings (for restoration later)
     """
@@ -68,6 +82,9 @@ def setup_synchronous_mode(world: carla.World, delta_seconds: float = 0.05) -> c
     settings.synchronous_mode = True
     settings.fixed_delta_seconds = delta_seconds
     settings.no_rendering_mode = False
+    settings.substepping = substepping
+    settings.max_substep_delta_time = max_substep_delta_time
+    settings.max_substeps = max_substeps
     world.apply_settings(settings)
     return original_settings
 

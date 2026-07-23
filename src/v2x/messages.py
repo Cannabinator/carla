@@ -2,7 +2,7 @@
 V2X Protocol Messages — Infrastructure and VRU Communication
 
 Extends the V2V BSM/CAM/DENM stack with:
-  - SAE J2735 / ETSI TS 103 301  MAP + SPAT  (V2I — signal phase data)
+  - SAE J2735 / ETSI TS 103 301  MAP + SPAT   (V2I — signal phase data)
   - ETSI TS 103 324               CPM         (Collective Perception)
   - ETSI TS 103 300-3             VRUAM       (Vulnerable Road User Awareness)
 
@@ -18,6 +18,18 @@ Standards:
 
 Note: All position fields carry CARLA world (x, y, z) coordinates, not
 geodetic degrees — consistent with BSMCore.latitude/longitude convention.
+
+Vocabs : 
+    - Intelligent Transport System Station (ITS-S) — any device capable of V2X communication, including vehicles, roadside units, and vulnerable road users (pedestrians, cyclists).
+    - Road Side Unit (RSU) — a fixed ITS-S installed at an intersection or along the road, broadcasting MAP and SPAT messages.
+    - Vulnerable Road User (VRU) — a pedestrian, cyclist, or motorcyclist equipped with a VRU Awareness Message (VRUAM) capable device.
+    - MAP Message — a message describing the geometry of an intersection, including lanes and their attributes.
+    - SPAT Message — a message conveying the current signal phase and timing at an intersection.
+    - IVIM Message — Intersection Vehicle Information Message, providing additional information about the intersection.
+    - CPM Message — Collective Perception Message, sharing perceived objects detected by sensors.
+    - VRUAM Message — Vulnerable Road User Awareness Message, broadcasting the position and motion state
+    - CPS — Collective Perception Service, enabling ITS stations to share sensor-detected objects.
+    - SPAT — Signal Phase and Timing, providing information about traffic signal states.
 """
 
 from __future__ import annotations
