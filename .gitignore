@@ -56,6 +56,10 @@ temp/
 *.pdf
 docs/_build/
 
+# Runtime / transient files
+=*
+.last_carla_ip
+
 # User notes
 LaurinNotes.md
 V2V_DATA_ACCURACY_AUDIT.md
