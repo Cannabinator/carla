@@ -67,11 +67,16 @@ class JoinRequest(BaseModel):
         default=None, ge=10, le=86400,
         description="Session lifetime in seconds. Omit or set null to run until disconnect.",
     )
+    enable_lidar: bool = Field(
+        default=False,
+        description="Attach a LiDAR sensor and open /ws/lidar/{session_id} for binary streaming.",
+    )
 
 class JoinResponse(BaseModel):
     session_id: str
     actor_id: int
     ws_url: str
+    lidar_ws_url: Optional[str] = None
     message: str
 
 
@@ -121,10 +126,21 @@ async def join_server(req: JoinRequest, request: Request):
     duration_msg = (
         f"{int(req.duration_seconds)}s" if req.duration_seconds else "until you disconnect"
     )
+
+    lidar_ws_url: Optional[str] = None
+    if req.enable_lidar:
+        lidar_ok = _world.enable_client_lidar(session.session_id)
+        if lidar_ok:
+            session.lidar_enabled = True
+            lidar_ws_url = f"/ws/lidar/{session.session_id}"
+        else:
+            logger.warning("LiDAR enable failed for session %s", session.session_id)
+
     return JoinResponse(
         session_id=session.session_id,
         actor_id=actor_id,
         ws_url=f"/ws/client/{session.session_id}",
+        lidar_ws_url=lidar_ws_url,
         message=f"Welcome {req.client_name}! Vehicle actor={actor_id} spawned. Session runs {duration_msg}.",
     )
 
@@ -205,9 +221,10 @@ async def client_websocket(websocket: WebSocket, session_id: str):
 
             telemetry = _world.get_vehicle_telemetry(session_id)
             if telemetry:
+                v2x_data = _world.get_vehicle_v2x_data(session_id)
                 await websocket.send_json({
                     "type": "telemetry",
-                    "data": telemetry,
+                    "data": {**telemetry, "v2x": v2x_data},
                     "remaining_seconds": session.remaining_seconds,
                 })
 
@@ -232,6 +249,64 @@ async def client_websocket(websocket: WebSocket, session_id: str):
             _world.despawn_client_vehicle(session_id)
             _world.sessions.end_session(session_id)
         logger.info("Auto-cleaned session %s after WS close", session_id)
+
+
+# ------------------------------------------------------------------ #
+# WebSocket — per-client LiDAR binary stream                         #
+# ------------------------------------------------------------------ #
+
+@router.websocket("/ws/lidar/{session_id}")
+async def lidar_websocket(websocket: WebSocket, session_id: str):
+    """
+    Stream binary LiDAR point-cloud frames to a specific client at ~10 Hz.
+
+    Uses the same BinaryProtocol V2 format as the global ``/ws`` endpoint.
+    Only available when the client joined with ``enable_lidar: true``.
+    Accepts ``"ping"`` text frames for keep-alive.
+    """
+    await websocket.accept()
+
+    if _world is None:
+        await websocket.send_json({"type": "error", "message": "Server not initialised"})
+        await websocket.close()
+        return
+
+    session = _world.sessions.get_session(session_id)
+    if session is None or not session.is_active:
+        await websocket.send_json({"type": "error", "message": "Invalid or expired session"})
+        await websocket.close()
+        return
+
+    if not session.lidar_enabled:
+        await websocket.send_json({"type": "error", "message": "LiDAR not enabled for this session"})
+        await websocket.close()
+        return
+
+    logger.info("LiDAR WS connected: session=%s (%s)", session_id, session.client_name)
+
+    try:
+        while True:
+            if not session.is_active or session.is_expired:
+                await websocket.send_json({"type": "session_expired"})
+                break
+
+            payload = _world.get_client_lidar_binary(session_id)
+            if payload is not None:
+                await websocket.send_bytes(payload)
+
+            try:
+                msg = await asyncio.wait_for(websocket.receive_text(), timeout=0.1)
+                if msg == "ping":
+                    await websocket.send_json({"type": "pong"})
+            except asyncio.TimeoutError:
+                pass
+
+            await asyncio.sleep(0.1)  # ~10 Hz
+
+    except WebSocketDisconnect:
+        logger.info("LiDAR WS disconnected: session=%s", session_id)
+    except Exception as exc:
+        logger.error("LiDAR WS error for session %s: %s", session_id, exc)
 
 
 # ------------------------------------------------------------------ #

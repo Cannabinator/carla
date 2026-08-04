@@ -26,6 +26,7 @@ class ClientSession:
     expires_at: Optional[datetime]         # None = run until the client disconnects
     vehicle_actor_id: Optional[int] = None # CARLA actor ID (set after spawn)
     is_active: bool = True
+    lidar_enabled: bool = False
     last_seen: datetime = field(default_factory=datetime.utcnow)
 
     # ------------------------------------------------------------------ #
@@ -54,6 +55,7 @@ class ClientSession:
             "expires_at": self.expires_at.isoformat() if self.expires_at else None,
             "vehicle_actor_id": self.vehicle_actor_id,
             "is_active": self.is_active,
+            "lidar_enabled": self.lidar_enabled,
             "remaining_seconds": self.remaining_seconds,
             "last_seen": self.last_seen.isoformat(),
         }

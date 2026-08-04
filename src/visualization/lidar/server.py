@@ -75,6 +75,8 @@ def set_persistent_world(world) -> None:
         _admin_mod.set_persistent_world(world)
     if _client_mod is not None:
         _client_mod.set_persistent_world(world)
+    if world is not None and getattr(world, "pothole_manager", None) is not None:
+        set_pothole_manager(world.pothole_manager)
 
 
 # Give admin_routes a back-reference to this module so /admin/connect can

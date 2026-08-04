@@ -65,10 +65,10 @@ def _parse_args() -> argparse.Namespace:
                    help="Web server listen port")
     p.add_argument("--host", default="0.0.0.0",
                    help="Web server bind address")
-    p.add_argument("--no-v2v", action="store_true",
-                   help="Disable V2V network")
-    p.add_argument("--v2v-range", type=float, default=75.0,
-                   help="V2V cooperative range in metres")
+    p.add_argument("--no-v2x", action="store_true",
+                   help="Disable V2X network")
+    p.add_argument("--v2x-range", type=float, default=75.0,
+                   help="V2X cooperative range in metres")
     p.add_argument("--tm-port", type=int, default=8001,
                    help="CARLA Traffic Manager port")
     return p.parse_args()
@@ -105,7 +105,7 @@ def main() -> None:
     print(f"  Admin token  : {token}")
     if args.live:
         print(f"  CARLA host   : {args.carla_host}:{args.carla_port}")
-        print(f"  V2V          : {'disabled' if args.no_v2v else f'enabled, range={args.v2v_range:.0f} m'}")
+        print(f"  V2X          : {'disabled' if args.no_v2x else f'enabled, range={args.v2x_range:.0f} m'}")
     else:
         print("  Mode         : frontend-only (use --live to start simulation)")
     print(sep)
@@ -120,8 +120,8 @@ def main() -> None:
             world = PersistentCARLAServer(
                 host=args.carla_host,
                 port=args.carla_port,
-                v2v_enabled=not args.no_v2v,
-                v2v_range=args.v2v_range,
+                v2x_enabled=not args.no_v2x,
+                v2x_range=args.v2x_range,
                 tm_port=args.tm_port,
             )
             world.start()

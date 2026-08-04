@@ -24,10 +24,10 @@ RUN if [ -n "$HTTP_PROXY" ]; then \
         printf 'Acquire::http::Proxy "%s";\nAcquire::https::Proxy "%s";\n' \
                "$HTTP_PROXY" "${HTTPS_PROXY:-$HTTP_PROXY}" \
         > /etc/apt/apt.conf.d/01proxy; \
-    fi
+            fi
 
 # Install system dependencies for CARLA client and numpy
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN http_proxy="" https_proxy="" apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libjpeg-dev \
     libpng-dev \

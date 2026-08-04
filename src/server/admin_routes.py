@@ -63,8 +63,8 @@ class PedestrianRequest(BaseModel):
 class ConnectRequest(BaseModel):
     carla_host: str = Field(default="192.168.1.110")
     carla_port: int = Field(default=2000, ge=1, le=65535)
-    v2v_enabled: bool = True
-    v2v_range: float = Field(default=75.0, ge=10.0, le=500.0)
+    v2x_enabled: bool = True
+    v2x_range: float = Field(default=75.0, ge=10.0, le=500.0)
     tm_port: int = Field(default=8001, ge=1024, le=65535)
 
 
@@ -85,7 +85,9 @@ async def admin_status():
             "pedestrians": 0,
             "active_sessions": 0,
             "client_vehicles": 0,
-            "v2v_enabled": False,
+            "v2x_enabled": False,
+            "rsu_count": 0,
+            "vru_count": 0,
             "map": None,
         }
     return {**_world.get_status(), "connected": True}
@@ -114,8 +116,8 @@ async def connect_world(req: ConnectRequest):
         world = PersistentCARLAServer(
             host=req.carla_host,
             port=req.carla_port,
-            v2v_enabled=req.v2v_enabled,
-            v2v_range=req.v2v_range,
+            v2x_enabled=req.v2x_enabled,
+            v2x_range=req.v2x_range,
             tm_port=req.tm_port,
         )
         world.start()
@@ -198,6 +200,82 @@ async def stop_world():
         return {"ok": False, "message": "World not running"}
     threading.Thread(target=_world.stop, daemon=True, name="admin-stop").start()
     return {"ok": True, "message": "Shutdown initiated"}
+
+
+# ------------------------------------------------------------------ #
+# V2X read-only endpoints                                             #
+# ------------------------------------------------------------------ #
+
+@router.get("/v2x/rsus", summary="List registered RSUs", dependencies=[Depends(_require_admin)])
+async def list_rsus():
+    """Return all RSUs registered in the V2X network."""
+    if _world is None or getattr(_world, "v2x_network", None) is None:
+        return []
+    rsus = getattr(_world.v2x_network, "_rsus", {})
+    return [
+        {
+            "intersection_id": rsu.config.intersection_id,
+            "position": {
+                "x": rsu.config.position[0],
+                "y": rsu.config.position[1],
+                "z": rsu.config.position[2],
+            },
+            "broadcast_range_m": rsu.config.broadcast_range_m,
+            "tx_power_dbm": rsu.config.tx_power_dbm,
+        }
+        for rsu in rsus.values()
+    ]
+
+
+@router.get("/v2x/vrus", summary="List active VRUs", dependencies=[Depends(_require_admin)])
+async def list_vrus():
+    """Return all active VRU VRUAM messages from the V2X network."""
+    if _world is None or getattr(_world, "v2x_network", None) is None:
+        return []
+    vru_messages = getattr(_world.v2x_network, "vru_messages", {})
+    return [
+        {
+            "station_id": vruam.station_id,
+            "profile": vruam.vru_profile.name,
+            "position": {
+                "x": round(vruam.position[0], 2),
+                "y": round(vruam.position[1], 2),
+                "z": round(vruam.position[2], 2),
+            },
+            "speed": round(vruam.speed, 2),
+            "heading": round(vruam.heading, 1),
+            "motion_state": vruam.motion_state,
+            "timestamp": vruam.timestamp,
+        }
+        for vruam in vru_messages.values()
+    ]
+
+
+@router.get("/v2x/spat", summary="Current SPAT messages", dependencies=[Depends(_require_admin)])
+async def list_spat():
+    """Return current Signal Phase and Timing (SPAT) messages from all RSUs."""
+    if _world is None or getattr(_world, "v2x_network", None) is None:
+        return []
+    spat_messages = getattr(_world.v2x_network, "spat_messages", {})
+    return [
+        {
+            "intersection_id": spat.intersection_id,
+            "intersection_name": spat.intersection_name,
+            "status": spat.status,
+            "timestamp": round(spat.timestamp, 2),
+            "states": [
+                {
+                    "signal_group_id": s.signal_group_id,
+                    "movement_event": s.movement_event,
+                    "likely_time_s": round(s.likely_time_s, 1) if s.likely_time_s is not None else None,
+                    "min_end_time_s": round(s.min_end_time_s, 1),
+                    "max_end_time_s": round(s.max_end_time_s, 1),
+                }
+                for s in spat.states
+            ],
+        }
+        for spat in spat_messages.values()
+    ]
 
 
 # ------------------------------------------------------------------ #

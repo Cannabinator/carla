@@ -48,6 +48,20 @@
             background:var(--muted); margin-right:6px; vertical-align: middle; }
   .ws-dot.live { background: var(--success); animation: pulse 1.5s infinite; }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  .checkbox-row { display:flex; align-items:center; gap:8px; margin-top:14px; }
+  .checkbox-row input[type=checkbox] { width:auto; }
+  .checkbox-row label { margin:0; font-size:13px; color:var(--text); }
+  .section-divider { border-top: 1px solid var(--border); margin-top: 14px; padding-top: 12px; }
+  .section-title { font-size:11px; font-weight:600; text-transform:uppercase;
+                   letter-spacing:.06em; color:var(--muted); margin-bottom:8px; }
+  .lidar-badge { display:inline-flex; align-items:center; gap:4px;
+                 background:#2a1e0a; border:1px solid var(--warn); color:var(--warn);
+                 font-size:11px; font-weight:600; border-radius:4px; padding:2px 8px;
+                 margin-left:6px; }
+  .lidar-badge.active { animation: pulse 1.5s infinite; }
+  .threat-none,.threat-0,.threat-1 { color:var(--success); }
+  .threat-2 { color:var(--warn); }
+  .threat-3,.threat-4 { color:var(--danger); }
   small { color: var(--muted); font-size: 11px; margin-top: 5px; display: block; }
 </style>
 </head>
@@ -69,6 +83,11 @@
   <label>Session Duration (seconds) <small>Leave blank to run until you close this page</small></label>
   <input type="number" id="duration" placeholder="e.g. 3600 (leave empty = until disconnect)" min="10">
 
+  <div class="checkbox-row">
+    <input type="checkbox" id="enableLidar">
+    <label for="enableLidar">Enable LiDAR stream <small style="display:inline">— opens /ws/lidar/{session}</small></label>
+  </div>
+
   <button id="joinBtn" onclick="joinServer()">Join &amp; Spawn Vehicle</button>
 </div>
 
@@ -77,6 +96,7 @@
   <h2>
     <span class="ws-dot" id="wsDot"></span>
     Live Telemetry
+    <span class="lidar-badge" id="lidarBadge" style="display:none">&#x25cf; LiDAR</span>
   </h2>
   <div class="stat-grid">
     <div class="stat"><div class="label">Speed</div><div class="value" id="tSpeed">—</div></div>
@@ -84,6 +104,28 @@
     <div class="stat"><div class="label">Yaw</div><div class="value" id="tYaw">—</div></div>
     <div class="stat"><div class="label">Time Left</div><div class="value" id="tRemain">—</div></div>
   </div>
+
+  <!-- V2X section — shown when server has V2X data -->
+  <div class="section-divider" id="v2xSection" style="display:none">
+    <div class="section-title">V2X Network</div>
+    <div class="stat-grid">
+      <div class="stat"><div class="label">Neighbors</div><div class="value" id="v2xNeighbors">—</div></div>
+      <div class="stat"><div class="label">Nearest (m)</div><div class="value" id="v2xNearest">—</div></div>
+      <div class="stat"><div class="label">Top Threat</div><div class="value" id="v2xThreat">—</div></div>
+      <div class="stat"><div class="label">BSM Speed</div><div class="value" id="v2xSpeed">—</div></div>
+    </div>
+    <!-- SPAT row -->
+    <div style="margin-top:10px">
+      <div class="section-title" style="margin-bottom:5px">Nearby Intersections (SPAT)</div>
+      <div id="v2xSpat" style="font-size:12px; color:var(--muted)">—</div>
+    </div>
+    <!-- VRU row -->
+    <div style="margin-top:10px">
+      <div class="section-title" style="margin-bottom:5px">Nearby VRUs</div>
+      <div id="v2xVru" style="font-size:12px; color:var(--muted)">—</div>
+    </div>
+  </div>
+
   <div id="statusBar"></div>
   <button class="danger" onclick="leaveServer()" style="margin-top:18px">Leave &amp; Despawn Vehicle</button>
 </div>
@@ -92,6 +134,7 @@
 const HOST = window.location.origin;
 let _sessionId = null;
 let _ws = null;
+let _lidarWs = null;
 
 // ---------- load blueprints ----------
 async function loadBlueprints() {
@@ -117,6 +160,7 @@ async function joinServer() {
   const blueprint = document.getElementById('blueprint').value;
   const durationVal = document.getElementById('duration').value;
   const duration = durationVal ? parseFloat(durationVal) : null;
+  const enableLidar = document.getElementById('enableLidar').checked;
 
   document.getElementById('joinBtn').disabled = true;
   showStatus('Joining…', 'info');
@@ -125,7 +169,7 @@ async function joinServer() {
     const r = await fetch(`${HOST}/client/join`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ client_name: name, vehicle_blueprint: blueprint, duration_seconds: duration }),
+      body: JSON.stringify({ client_name: name, vehicle_blueprint: blueprint, duration_seconds: duration, enable_lidar: enableLidar }),
     });
     const d = await r.json();
     if (!r.ok) { showStatus(d.detail || 'Join failed', 'err'); document.getElementById('joinBtn').disabled = false; return; }
@@ -135,13 +179,14 @@ async function joinServer() {
     document.getElementById('telemetryCard').style.display = 'block';
     showStatus(d.message, 'ok');
     openWS(d.ws_url);
+    if (d.lidar_ws_url) openLidarWS(d.lidar_ws_url);
   } catch (e) {
     showStatus('Network error: ' + e.message, 'err');
     document.getElementById('joinBtn').disabled = false;
   }
 }
 
-// ---------- WS ----------
+// ---------- telemetry WS ----------
 function openWS(path) {
   const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
   const url = `${wsProto}://${location.host}${path}`;
@@ -149,7 +194,6 @@ function openWS(path) {
 
   _ws.onopen = () => {
     setDot(true);
-    // Keep-alive ping every 10 s
     _ws._ping = setInterval(() => _ws.readyState === WebSocket.OPEN && _ws.send('ping'), 10000);
   };
 
@@ -162,9 +206,10 @@ function openWS(path) {
       document.getElementById('tYaw').textContent     = `${d.yaw}°`;
       const rem = msg.remaining_seconds;
       document.getElementById('tRemain').textContent  = rem != null ? `${Math.ceil(rem)}s` : '∞';
+      if (d.v2x) updateV2X(d.v2x);
     } else if (msg.type === 'session_expired') {
       showStatus('Your session has expired. Vehicle despawned.', 'err');
-      closeWS();
+      closeAllWS();
       document.getElementById('joinCard').style.display = 'block';
       document.getElementById('telemetryCard').style.display = 'none';
     } else if (msg.type === 'pong') {
@@ -176,15 +221,88 @@ function openWS(path) {
   _ws.onclose = () => { setDot(false); clearInterval(_ws._ping); };
 }
 
-function closeWS() {
+// ---------- V2X display ----------
+function updateV2X(v2x) {
+  const sec = document.getElementById('v2xSection');
+  sec.style.display = 'block';
+  document.getElementById('v2xNeighbors').textContent = v2x.neighbors.length;
+  const nearest = v2x.neighbors.length
+    ? Math.min(...v2x.neighbors.map(n => n.distance)).toFixed(0) + ' m'
+    : '—';
+  document.getElementById('v2xNearest').textContent = nearest;
+  const topThreat = v2x.threats.length
+    ? Math.max(...v2x.threats.map(t => t.threat_level))
+    : 0;
+  const threatEl = document.getElementById('v2xThreat');
+  const labels = ['None', 'Low', 'Med', 'High', 'Crit'];
+  threatEl.textContent = labels[topThreat] || topThreat;
+  threatEl.className = `value threat-${topThreat}`;
+  document.getElementById('v2xSpeed').textContent = v2x.bsm
+    ? `${(v2x.bsm.speed * 3.6).toFixed(1)} km/h` : '—';
+
+  // SPAT
+  const spatEl = document.getElementById('v2xSpat');
+  if (v2x.spat_nearby && v2x.spat_nearby.length) {
+    const _phaseColor = e => ({'protectedMovementAllowed':'#4caf77','stop-And-Remain':'#e05252','protectedClearance':'#f0a830'}[e] || '#6b7280');
+    spatEl.innerHTML = v2x.spat_nearby.map(s => {
+      const states = s.states.map(m =>
+        `<span style="color:${_phaseColor(m.movement_event)}">${m.movement_event.replace('protected','').replace('Movement','')}</span>`
+      ).join(', ');
+      return `Intersection ${s.intersection_id} (${s.distance}m): ${states || '—'}`;
+    }).join('<br>');
+  } else {
+    spatEl.textContent = 'No intersections in range';
+  }
+
+  // VRU
+  const vruEl = document.getElementById('v2xVru');
+  if (v2x.vru_nearby && v2x.vru_nearby.length) {
+    vruEl.textContent = v2x.vru_nearby
+      .map(v => `${v.profile} #${v.station_id} — ${v.distance}m (${v.motion_state})`)
+      .join(', ');
+  } else {
+    vruEl.textContent = 'No VRUs in range';
+  }
+}
+
+// ---------- LiDAR WS ----------
+function openLidarWS(path) {
+  const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const url = `${wsProto}://${location.host}${path}`;
+  _lidarWs = new WebSocket(url);
+  _lidarWs.binaryType = 'arraybuffer';
+
+  _lidarWs.onopen = () => {
+    const badge = document.getElementById('lidarBadge');
+    badge.style.display = 'inline-flex';
+    badge.classList.add('active');
+    _lidarWs._ping = setInterval(() => _lidarWs.readyState === WebSocket.OPEN && _lidarWs.send('ping'), 10000);
+  };
+
+  // Binary frames are point-cloud data; text frames are control messages
+  _lidarWs.onmessage = (ev) => {
+    if (typeof ev.data === 'string') return; // pong / status
+    // Binary frame received — LiDAR is streaming
+  };
+
+  _lidarWs.onclose = () => {
+    const badge = document.getElementById('lidarBadge');
+    badge.classList.remove('active');
+    badge.style.display = 'none';
+    clearInterval(_lidarWs && _lidarWs._ping);
+  };
+}
+
+function closeAllWS() {
   if (_ws) { _ws.close(); _ws = null; }
+  if (_lidarWs) { _lidarWs.close(); _lidarWs = null; }
   setDot(false);
 }
 
 // ---------- leave ----------
 async function leaveServer() {
   if (!_sessionId) return;
-  closeWS();
+  closeAllWS();
   try {
     await fetch(`${HOST}/client/leave/${_sessionId}`, { method: 'DELETE' });
   } catch { /* ignore */ }
@@ -192,6 +310,7 @@ async function leaveServer() {
   document.getElementById('joinCard').style.display = 'block';
   document.getElementById('joinBtn').disabled = false;
   document.getElementById('telemetryCard').style.display = 'none';
+  document.getElementById('v2xSection').style.display = 'none';
   showStatus('Left the server. Vehicle despawned.', 'info');
 }
 

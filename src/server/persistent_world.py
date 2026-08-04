@@ -24,9 +24,10 @@ import threading
 import logging
 import random
 import time
-from typing import Optional, Dict, List, Callable
+from typing import Any, Callable, Dict, List, Optional
 
 from src.server.session_manager import SessionManager, ClientSession
+from src.utils.potholes import PotholeManager
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,14 @@ _FALLBACK_BLUEPRINTS = [
     "vehicle.audi.a2",
     "vehicle.lincoln.mkz_2020",
 ]
+
+
+def _cleanup_lidar_collector(collector, session_id: str) -> None:
+    """Background cleanup target — runs in a daemon thread after session ends."""
+    try:
+        collector.cleanup()
+    except Exception as exc:
+        logger.warning("LiDAR cleanup for session %s: %s", session_id, exc)
 
 
 class PersistentCARLAServer:
@@ -57,8 +66,8 @@ class PersistentCARLAServer:
         tm_seed: int = 42,
         global_speed_pct: float = -20.0,
         safety_distance: float = 2.5,
-        v2v_enabled: bool = True,
-        v2v_range: float = 75.0,
+        v2x_enabled: bool = True,
+        v2x_range: float = 75.0,
     ):
         self.host = host
         self.port = port
@@ -68,8 +77,8 @@ class PersistentCARLAServer:
         self.tm_seed = tm_seed
         self.global_speed_pct = global_speed_pct
         self.safety_distance = safety_distance
-        self.v2v_enabled = v2v_enabled
-        self.v2v_range = v2v_range
+        self.v2x_enabled = v2x_enabled
+        self.v2x_range = v2x_range
 
         # CARLA handles
         self.client: Optional[carla.Client] = None
@@ -88,9 +97,8 @@ class PersistentCARLAServer:
         # Session manager (shared with HTTP routes)
         self.sessions = SessionManager()
 
-        # V2V / LiDAR references (set externally or created here)
-        self.v2v_network = None
-        self.lidar_collector = None
+        # V2X / LiDAR references (set externally or created here)
+        self.v2x_network = None
 
         # State
         self._running = False
@@ -101,6 +109,12 @@ class PersistentCARLAServer:
 
         # Callback fired when a session expires (so WS can notify the client)
         self.on_session_expired: Optional[Callable[[str], None]] = None
+
+        # Per-client LiDAR collectors (session_id → LiDARDataCollector)
+        self._client_lidar_collectors: Dict[str, Any] = {}
+
+        # Pothole manager — deterministic static potholes (initialized in start())
+        self.pothole_manager: Optional[PotholeManager] = None
 
     # ------------------------------------------------------------------ #
     # Lifecycle                                                            #
@@ -142,9 +156,11 @@ class PersistentCARLAServer:
         self.spawn_points = self.world.get_map().get_spawn_points()
         logger.info("Map has %d spawn points", len(self.spawn_points))
 
-        # Optional V2V network
-        if self.v2v_enabled:
-            self._init_v2v()
+        # Optional V2X network (V2V + V2I RSU + V2P VRU)
+        if self.v2x_enabled:
+            self._init_v2x()
+
+        self._init_potholes()
 
         self._running = True
         self._start_time = time.monotonic()
@@ -173,18 +189,44 @@ class PersistentCARLAServer:
 
         logger.info("Persistent CARLA server stopped")
 
-    def _init_v2v(self) -> None:
+    def _init_v2x(self) -> None:
         try:
-            from src.v2v.network_enhanced import V2VNetworkEnhanced
-            self.v2v_network = V2VNetworkEnhanced(
-                max_range=self.v2v_range,
+            from src.v2x.network import V2XNetworkEnhanced
+            from src.v2x.rsu import RoadSideUnit
+            self.v2x_network = V2XNetworkEnhanced(
+                max_range=self.v2x_range,
                 update_rate_hz=2.0,
                 world=self.world,
             )
-            logger.info("V2V network initialised (range=%.0f m)", self.v2v_range)
+            # Auto-create RSUs from CARLA traffic lights (up to 10 intersections)
+            all_tl = list(self.world.get_actors().filter("traffic.traffic_light"))
+            junctions_seen: dict = {}
+            for tl in all_tl:
+                jid = id(tl) % 10000  # stable pseudo-ID per actor
+                if jid not in junctions_seen:
+                    junctions_seen[jid] = tl
+            for rsu_idx, (_jid, tl) in enumerate(list(junctions_seen.items())[:10]):
+                rsu = RoadSideUnit.from_traffic_light(tl, intersection_id=rsu_idx + 1)
+                self.v2x_network.register_rsu(rsu)
+            logger.info(
+                "V2X network initialised: range=%.0f m, %d RSUs",
+                self.v2x_range, len(self.v2x_network._rsus),
+            )
         except ImportError:
-            logger.warning("V2V module not available — V2V disabled")
-            self.v2v_network = None
+            logger.warning("V2X module not available — V2X disabled")
+            self.v2x_network = None
+
+    def _init_potholes(self) -> None:
+        try:
+            mgr = PotholeManager()
+            mgr.initialize(self.world)
+            self.pothole_manager = mgr
+            logger.info(
+                "PotholeManager: %d potholes (seed=%d)", len(mgr), mgr.POTHOLE_SEED
+            )
+        except Exception as exc:
+            logger.warning("Pothole init failed: %s", exc)
+            self.pothole_manager = None
 
     # ------------------------------------------------------------------ #
     # Tick loop                                                            #
@@ -201,10 +243,13 @@ class PersistentCARLAServer:
                 self.world.tick()
                 self._frame += 1
 
-                # V2V update at 2 Hz (every 10 frames @ 20 FPS)
-                if self._frame % 10 == 0 and self.v2v_network is not None:
-                    snapshot = self.world.get_snapshot()
-                    self.v2v_network.update(snapshot)
+                # V2X update at 2 Hz (every 10 frames @ 20 FPS)
+                if self._frame % 10 == 0:
+                    if self.v2x_network is not None:
+                        snapshot = self.world.get_snapshot()
+                        self.v2x_network.update(snapshot)
+                    if self.pothole_manager is not None:
+                        self.pothole_manager.draw_debug()
 
                 # Session expiry check every ~5 s (100 frames @ 20 FPS)
                 if self._frame % 100 == 0:
@@ -227,10 +272,17 @@ class PersistentCARLAServer:
     def _check_expired_sessions(self) -> None:
         for session in self.sessions.get_expired_sessions():
             logger.info("Session %s expired — removing vehicle", session.session_id)
+            collector = self._client_lidar_collectors.pop(session.session_id, None)
             self._despawn_client_vehicle_locked(session.session_id)
             self.sessions.end_session(session.session_id)
             if self.on_session_expired:
                 self.on_session_expired(session.session_id)
+            if collector is not None:
+                threading.Thread(
+                    target=_cleanup_lidar_collector,
+                    args=(collector, session.session_id),
+                    daemon=True,
+                ).start()
 
     # ------------------------------------------------------------------ #
     # Admin — background traffic                                           #
@@ -356,6 +408,11 @@ class PersistentCARLAServer:
                     ctrl.set_max_speed(1.4)
 
             spawned = len(ped_actors)
+            # Register spawned pedestrians as V2P VRUs in the V2X network
+            if self.v2x_network is not None:
+                from src.v2x.messages import VRUProfile
+                for ped in ped_actors:
+                    self.v2x_network.register_vru(ped.id, ped, VRUProfile.PEDESTRIAN)
             logger.info("Spawned %d / %d pedestrians", spawned, count)
             return spawned
 
@@ -367,6 +424,13 @@ class PersistentCARLAServer:
                     ctrl.stop()
                 except Exception:
                     pass
+            # Unregister VRUs from V2X network before destroying actors
+            if self.v2x_network is not None:
+                for ped in self._pedestrians:
+                    try:
+                        self.v2x_network.unregister_vru(ped.id)
+                    except Exception:
+                        pass
             count = len(self._pedestrians)
             batch = (
                 [carla.command.DestroyActor(c) for c in self._pedestrian_controllers]
@@ -420,8 +484,8 @@ class PersistentCARLAServer:
             self._client_vehicles[session_id] = actor
             session.vehicle_actor_id = actor.id
 
-            if self.v2v_network is not None:
-                self.v2v_network.register(actor.id, actor)
+            if self.v2x_network is not None:
+                self.v2x_network.register(actor.id, actor)
 
             logger.info(
                 "Spawned client vehicle actor=%d for session %s (%s)",
@@ -432,7 +496,14 @@ class PersistentCARLAServer:
     def despawn_client_vehicle(self, session_id: str) -> None:
         """Public: despawn a client vehicle (called on leave or kick)."""
         with self._lock:
+            collector = self._client_lidar_collectors.pop(session_id, None)
             self._despawn_client_vehicle_locked(session_id)
+        if collector is not None:
+            threading.Thread(
+                target=_cleanup_lidar_collector,
+                args=(collector, session_id),
+                daemon=True,
+            ).start()
 
     def _despawn_client_vehicle_locked(self, session_id: str) -> None:
         """Must be called with ``_lock`` held (or from tick thread)."""
@@ -440,8 +511,8 @@ class PersistentCARLAServer:
         if actor is None:
             return
         try:
-            if self.v2v_network is not None:
-                self.v2v_network.unregister(actor.id)
+            if self.v2x_network is not None:
+                self.v2x_network.unregister(actor.id)
         except Exception:
             pass
         try:
@@ -456,6 +527,7 @@ class PersistentCARLAServer:
 
     def get_status(self) -> dict:
         elapsed = time.monotonic() - self._start_time if self._start_time else 0
+        v2x = self.v2x_network
         return {
             "running": self._running,
             "frame": self._frame,
@@ -465,7 +537,11 @@ class PersistentCARLAServer:
             "pedestrians": len(self._pedestrians),
             "active_sessions": len(self.sessions.get_active_sessions()),
             "client_vehicles": len(self._client_vehicles),
-            "v2v_enabled": self.v2v_network is not None,
+            "v2x_enabled": v2x is not None,
+            "v2x_range": self.v2x_range if v2x else 0,
+            "rsu_count": len(getattr(v2x, "_rsus", {})),
+            "vru_count": len(getattr(v2x, "_vrus", {})),
+            "potholes": len(self.pothole_manager) if self.pothole_manager else 0,
         }
 
     def get_vehicle_telemetry(self, session_id: str) -> Optional[dict]:
@@ -489,6 +565,138 @@ class PersistentCARLAServer:
         except Exception as exc:
             logger.debug("Telemetry read error for %s: %s", session_id, exc)
             return None
+
+    def get_vehicle_v2x_data(self, session_id: str) -> Optional[dict]:
+        """Return full V2X payload: BSM, neighbors, threats, nearby SPAT and VRUAMs."""
+        if self.v2x_network is None:
+            return None
+        actor = self._client_vehicles.get(session_id)
+        if actor is None:
+            return None
+        vid = actor.id
+        bsm = self.v2x_network.get_bsm(vid)
+        if bsm is None:
+            return None  # first few frames before first V2X update
+
+        import math
+
+        def _safe_ttc(ttc: float) -> Optional[float]:
+            return None if not math.isfinite(ttc) else round(ttc, 2)
+
+        vx, vy = bsm.latitude, bsm.longitude  # CARLA x/y stored in lat/lon fields
+        neighbors = self.v2x_network.get_neighbors(vid)
+        threats = self.v2x_network.get_threats(vid)
+
+        # Nearby SPAT — RSUs whose broadcast range covers the vehicle
+        spat_nearby = []
+        for iid, rsu in getattr(self.v2x_network, "_rsus", {}).items():
+            rx, ry = rsu.config.position[0], rsu.config.position[1]
+            dist = math.sqrt((vx - rx) ** 2 + (vy - ry) ** 2)
+            if dist <= rsu.config.broadcast_range_m:
+                spat = self.v2x_network.spat_messages.get(iid)
+                if spat is not None:
+                    spat_nearby.append({
+                        "intersection_id": spat.intersection_id,
+                        "distance": round(dist, 1),
+                        "states": [
+                            {
+                                "signal_group_id": s.signal_group_id,
+                                "movement_event": s.movement_event,
+                                "likely_time_s": round(s.likely_time_s, 1)
+                                if s.likely_time_s is not None else None,
+                            }
+                            for s in spat.states
+                        ],
+                    })
+
+        # Nearby VRUAMs — pedestrians / cyclists within 100 m
+        vru_nearby = []
+        for vruam in getattr(self.v2x_network, "vru_messages", {}).values():
+            px, py = vruam.position[0], vruam.position[1]
+            dist = math.sqrt((vx - px) ** 2 + (vy - py) ** 2)
+            if dist <= 100.0:
+                vru_nearby.append({
+                    "station_id": vruam.station_id,
+                    "profile": vruam.vru_profile.name,
+                    "distance": round(dist, 1),
+                    "speed": round(vruam.speed, 2),
+                    "motion_state": vruam.motion_state,
+                })
+
+        return {
+            "bsm": {
+                "vehicle_id": bsm.vehicle_id,
+                "speed": round(bsm.speed, 2),
+                "heading": round(bsm.heading, 1),
+                "position": {
+                    "x": round(bsm.latitude, 2),
+                    "y": round(bsm.longitude, 2),
+                    "z": round(bsm.elevation, 2),
+                },
+            },
+            "neighbors": [
+                {
+                    "vehicle_id": n.vehicle_id,
+                    "distance": round(
+                        self.v2x_network.get_distance(vid, n.vehicle_id) or 0.0, 1
+                    ),
+                    "speed": round(n.speed, 2),
+                    "heading": round(n.heading, 1),
+                }
+                for n in neighbors
+            ],
+            "threats": [
+                {
+                    "other_vehicle_id": t["other_vehicle_id"],
+                    "threat_level": t["level"],
+                    "time_to_collision": _safe_ttc(t["ttc"]),
+                    "distance": round(t["distance"], 1),
+                }
+                for t in threats
+            ],
+            "spat_nearby": spat_nearby,
+            "vru_nearby": vru_nearby,
+        }
+
+    def enable_client_lidar(self, session_id: str) -> bool:
+        """Attach a LiDAR sensor to the client's vehicle for per-session streaming."""
+        try:
+            from src.visualization.lidar.collector import LiDARDataCollector
+        except ImportError:
+            logger.warning("LiDAR not available (CARLA not installed)")
+            return False
+
+        actor = self._client_vehicles.get(session_id)
+        if actor is None:
+            logger.warning("enable_client_lidar: no vehicle for session %s", session_id)
+            return False
+        if session_id in self._client_lidar_collectors:
+            return True
+
+        collector = LiDARDataCollector(
+            self.world,
+            downsample_factor=2,
+            channels="32",
+            points_per_second="500000",
+        )
+        try:
+            collector.register_vehicle(0, actor)
+        except Exception as exc:
+            logger.error(
+                "LiDAR sensor attach failed for session %s: %s", session_id, exc
+            )
+            return False
+
+        self._client_lidar_collectors[session_id] = collector
+        logger.info("LiDAR enabled for session %s (actor=%d)", session_id, actor.id)
+        return True
+
+    def get_client_lidar_binary(self, session_id: str) -> Optional[bytes]:
+        """Return the latest binary point-cloud frame for the session's LiDAR."""
+        collector = self._client_lidar_collectors.get(session_id)
+        if collector is None or not collector.is_active():
+            return None
+        return collector.get_combined_pointcloud_binary()
 
     # ------------------------------------------------------------------ #
     # Helpers                                                              #
@@ -534,6 +742,14 @@ class PersistentCARLAServer:
 
     def _cleanup_all(self) -> None:
         with self._lock:
+            # Stop LiDAR sensor callbacks before batch-destroying vehicles
+            for sid, collector in list(self._client_lidar_collectors.items()):
+                try:
+                    collector.cleanup()
+                except Exception as exc:
+                    logger.warning("LiDAR cleanup for session %s: %s", sid, exc)
+            self._client_lidar_collectors.clear()
+
             all_actors = (
                 list(self._client_vehicles.values())
                 + self._background_vehicles
