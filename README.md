@@ -35,3 +35,9 @@ I recommend to use the Dockerfile to set everything up!
 3. after accessing the frontend dashboard you can set the Server adress of the computer that will run the actual carla server for you
 
 4. You can now start the scenario from the frontend Dashboard.
+
+---
+
+## ER Database Model
+
+![ER Database Model](docs/ER_DATABASE_MODEL.png)
