@@ -117,17 +117,16 @@ def run_complete_v2v_demo(config: ScenarioConfig, status_callback=None, server_m
             np.random.seed(config.random_seed)
 
             # ========================================================================
-            # POTHOLE INITIALIZATION (static, deterministic — seed 12345)
+            # POTHOLE MANAGER INITIALIZATION (for BSM communication)
             # ========================================================================
+            # NOTE: Potholes are no longer generated automatically.
+            # They should be pre-placed in your custom CARLA map.
+            # Use pothole_mgr.add_pothole() to register them manually if needed.
             from src.utils.potholes import PotholeManager
             pothole_mgr = PotholeManager()
             pothole_mgr.initialize(session.world)
-            n_minor    = sum(1 for p in pothole_mgr.potholes if p.severity == 1)
-            n_moderate = sum(1 for p in pothole_mgr.potholes if p.severity == 2)
-            n_severe   = sum(1 for p in pothole_mgr.potholes if p.severity == 3)
-            print(f"🕳️  Potholes: {len(pothole_mgr)} static potholes "
-                  f"(seed={PotholeManager.POTHOLE_SEED}) — "
-                  f"{n_minor} minor / {n_moderate} moderate / {n_severe} severe")
+            print(f"🕳️  Pothole Manager: Ready for BSM pothole communication "
+                  f"({len(pothole_mgr)} potholes registered)")
 
             # ========================================================================
             # STEP 2: Initialize V2V Network (Enhanced BSM Protocol)
@@ -751,14 +750,17 @@ def run_complete_v2v_demo(config: ScenarioConfig, status_callback=None, server_m
                 print(f"   Web server port:       {config.lidar_web_port}")
 
             # Pothole statistics
-            print(f"\n🕳️  Potholes (seed={PotholeManager.POTHOLE_SEED}):")
-            print(f"   Total:           {len(pothole_mgr)}")
-            sev_counts = {1: 0, 2: 0, 3: 0}
-            for ph in pothole_mgr.potholes:
-                sev_counts[ph.severity] += 1
-            print(f"   Minor  (sev 1):  {sev_counts[1]}")
-            print(f"   Moderate (sev 2):{sev_counts[2]}")
-            print(f"   Severe (sev 3):  {sev_counts[3]}")
+            print(f"\n🕳️  Potholes (BSM communication):")
+            print(f"   Total registered:  {len(pothole_mgr)}")
+            if pothole_mgr.potholes:
+                sev_counts = {1: 0, 2: 0, 3: 0}
+                for ph in pothole_mgr.potholes:
+                    sev_counts[ph.severity] += 1
+                print(f"   Minor  (sev 1):  {sev_counts[1]}")
+                print(f"   Moderate (sev 2):{sev_counts[2]}")
+                print(f"   Severe (sev 3):  {sev_counts[3]}")
+            else:
+                print(f"   (No potholes registered — add them to your custom map)")
             print(f"   REST API:        /api/potholes")
 
             # Notify observers of completion
@@ -782,12 +784,12 @@ def run_complete_v2v_demo(config: ScenarioConfig, status_callback=None, server_m
                     'random_seed': config.random_seed,
                 },
                 'potholes': {
-                    'seed': PotholeManager.POTHOLE_SEED,
                     'count': len(pothole_mgr),
                     'severity_1_minor':    sum(1 for p in pothole_mgr.potholes if p.severity == 1),
                     'severity_2_moderate': sum(1 for p in pothole_mgr.potholes if p.severity == 2),
                     'severity_3_severe':   sum(1 for p in pothole_mgr.potholes if p.severity == 3),
                     'locations': pothole_mgr.to_dict_list(),
+                    'note': 'Potholes are now manually registered from custom maps (no auto-generation)'
                 },
                 'results': {
                     'total_frames': frame,

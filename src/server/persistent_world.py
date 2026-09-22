@@ -217,12 +217,20 @@ class PersistentCARLAServer:
             self.v2x_network = None
 
     def _init_potholes(self) -> None:
+        """
+        Initialize pothole manager for BSM communication.
+        
+        NOTE: This no longer generates potholes automatically.
+        Potholes should be pre-placed in your custom CARLA map.
+        Use add_pothole() to register them manually if needed.
+        """
         try:
             mgr = PotholeManager()
             mgr.initialize(self.world)
             self.pothole_manager = mgr
             logger.info(
-                "PotholeManager: %d potholes (seed=%d)", len(mgr), mgr.POTHOLE_SEED
+                "PotholeManager: Ready for BSM pothole communication (%d potholes registered)",
+                len(mgr)
             )
         except Exception as exc:
             logger.warning("Pothole init failed: %s", exc)

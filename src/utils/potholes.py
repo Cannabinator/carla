@@ -30,10 +30,6 @@ from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
-# ── Fixed severity distribution for 15 potholes ──────────────────────────────
-# 5 minor | 5 moderate | 5 severe — balanced for research data collection
-_SEVERITY_PROFILE: List[int] = [1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3]
-
 # ── RGBA colors per severity for CARLA debug drawing ─────────────────────────
 _SEVERITY_COLORS_CARLA: Dict[int, tuple] = {
     1: (255, 255,   0, 255),   # Yellow  — minor
@@ -82,105 +78,98 @@ class PotholeInfo:
 
 class PotholeManager:
     """
-    Manages 15 static, deterministic road potholes for CARLA V2V research.
+    Manages static potholes for CARLA V2V research — BSM communication only.
 
-    A dedicated seed (``POTHOLE_SEED = 12345``) is used so pothole positions
-    are always identical regardless of the main simulation seed.  The manager
-    does **not** spawn physical actors — potholes are purely logical objects
-    visualised via CARLA debug boxes and a web-viewer REST overlay.
+    This manager provides data structures and utilities for pothole detection
+    and V2V communication via BSM messages. It does NOT generate potholes —
+    potholes should be pre-placed in your custom CARLA map.
 
-    Example::
+    The manager supports:
+      - Visualization via CARLA debug drawing
+      - Spatial queries for nearby potholes (for BSM inclusion)
+      - REST API serialization for web viewer overlays
+      - Pothole proximity event logging
+
+    Usage::
 
         mgr = PotholeManager()
-        mgr.initialize(world)
-
+        # Manually add potholes from your custom map
+        mgr.add_pothole(x=100.0, y=50.0, z=0.1, severity=2, radius=0.35)
+        
         # main simulation loop
         if frame % 10 == 0:
-            mgr.draw_debug()
+            mgr.draw_debug(world)
 
         # expose via FastAPI
         app.get("/api/potholes")(lambda: mgr.to_dict_list())
     """
-
-    NUM_POTHOLES: int = 15
-    POTHOLE_SEED: int = 12345  # independent of main simulation seed
 
     def __init__(self) -> None:
         self.potholes: List[PotholeInfo] = []
         self._world = None
         self._initialized: bool = False
 
-    # ── Initialization ────────────────────────────────────────────────────────
+    # ── Manual Pothole Registration ───────────────────────────────────────────
+
+    def add_pothole(
+        self,
+        x: float,
+        y: float,
+        z: float,
+        severity: int = 1,
+        radius: Optional[float] = None,
+        road_id: int = 0,
+        lane_id: int = 0,
+        s: float = 0.0,
+    ) -> PotholeInfo:
+        """
+        Register a pothole at the specified location.
+
+        Use this to add potholes that are pre-placed in your custom CARLA map.
+        The pothole will be visualized and included in BSM proximity reports.
+
+        Args:
+            x, y, z: CARLA world coordinates (metres)
+            severity: 1=minor, 2=moderate, 3=severe (default: 1)
+            radius: Visual/query radius in metres (auto-set by severity if None)
+            road_id, lane_id, s: Map reference (optional, for documentation)
+
+        Returns:
+            The created PotholeInfo object
+        """
+        if radius is None:
+            radius = float(_SEVERITY_EXTENTS[severity][0])
+        
+        pothole = PotholeInfo(
+            id=len(self.potholes),
+            x=float(x),
+            y=float(y),
+            z=float(z),
+            radius=float(radius),
+            severity=severity,
+            road_id=road_id,
+            lane_id=lane_id,
+            s=float(s),
+        )
+        self.potholes.append(pothole)
+        return pothole
 
     def initialize(self, world) -> None:
         """
-        Compute 15 static pothole positions from map waypoints using a fixed seed.
+        Set the CARLA world reference for debug visualization.
 
-        Selects non-junction, drivable-lane waypoints deterministically.
-        Call once after the CARLA world is available.
+        Call this once after the CARLA world is available if you want
+        potholes to be visualized in the CARLA client/spectator.
 
         Args:
             world: ``carla.World`` instance
         """
-        import carla  # lazy import — carla may not be installed in all envs
-
         self._world = world
-        map_ = world.get_map()
-
-        rng = random.Random(self.POTHOLE_SEED)
-        all_waypoints = map_.generate_waypoints(4.0)  # one waypoint every 4 m
-
-        # Prefer straight, drivable, non-junction sections
-        road_wps = [
-            wp for wp in all_waypoints
-            if not wp.is_junction
-            and wp.lane_type == carla.LaneType.Driving
-        ]
-
-        # Fallback: any non-junction waypoint if filter yields too few
-        if len(road_wps) < self.NUM_POTHOLES:
-            logger.warning(
-                "LaneType.Driving filter returned %d waypoints (need %d) — "
-                "falling back to all non-junction waypoints.",
-                len(road_wps), self.NUM_POTHOLES
-            )
-            road_wps = [wp for wp in all_waypoints if not wp.is_junction]
-
-        if len(road_wps) < self.NUM_POTHOLES:
-            logger.warning(
-                "Only %d valid waypoints found; will generate %d potholes.",
-                len(road_wps), len(road_wps)
-            )
-
-        rng.shuffle(road_wps)
-        selected = road_wps[:self.NUM_POTHOLES]
-        severities = _SEVERITY_PROFILE[:len(selected)]
-
-        for i, (wp, sev) in enumerate(zip(selected, severities)):
-            loc = wp.transform.location
-            ext = _SEVERITY_EXTENTS[sev]
-            self.potholes.append(PotholeInfo(
-                id=i,
-                x=float(loc.x),
-                y=float(loc.y),
-                z=float(loc.z) + 0.05,   # 5 cm above road surface
-                radius=float(ext[0]),
-                severity=sev,
-                road_id=wp.road_id,
-                lane_id=wp.lane_id,
-                s=float(wp.s),
-            ))
-
-        n_minor    = sum(1 for p in self.potholes if p.severity == 1)
-        n_moderate = sum(1 for p in self.potholes if p.severity == 2)
-        n_severe   = sum(1 for p in self.potholes if p.severity == 3)
         self._initialized = True
-
+        
         logger.info(
-            "PotholeManager: %d potholes initialized (seed=%d) — "
-            "%d minor / %d moderate / %d severe",
-            len(self.potholes), self.POTHOLE_SEED,
-            n_minor, n_moderate, n_severe,
+            "PotholeManager: %d potholes registered for BSM communication",
+            len(self.potholes),
         )
 
     # ── CARLA debug visualization ─────────────────────────────────────────────
@@ -266,5 +255,5 @@ class PotholeManager:
     def __repr__(self) -> str:
         return (
             f"PotholeManager(n={len(self.potholes)}, "
-            f"initialized={self._initialized}, seed={self.POTHOLE_SEED})"
+            f"initialized={self._initialized})"
         )

@@ -171,7 +171,7 @@ def set_pothole_manager(manager: Optional[Any]) -> None:
     global _pothole_manager
     _pothole_manager = manager
     if manager is not None:
-        logger.info(f"PotholeManager registered: {len(manager)} potholes (seed={manager.POTHOLE_SEED})")
+        logger.info(f"PotholeManager registered: {len(manager)} potholes for BSM communication")
 
 
 class ConnectionManager:
