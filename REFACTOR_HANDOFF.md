@@ -3,8 +3,20 @@
 > **Audience:** the coding agent doing the refactor.
 > **Author context:** this document comes from a full read of the `developer` branch at
 > commit `29bca10` (2026-10-08). Every defect below cites `file:line` at that commit.
+> **Revision 2** (2026-10-09): scope narrowed to the V2X server structure only; frontend spec added (§5.7).
 > **Purpose of the codebase:** a *research* platform. Numbers it produces may end up in
 > publications. Precision and traceability beat features and beat speed.
+
+> **Revision 2 — scope decision by the researcher (overrides anything below that conflicts):**
+> **Remove the V2V/monolithic structure entirely. Keep only the V2X server structure.**
+> - The legacy monolithic demo (plane A in §2), and everything that exists only to serve it, is
+>   **deleted, not ported**. Nothing from it stays at runtime. Its code may be read as reference
+>   while you write the new modules, and that's all.
+> - "V2V" stops being a package, module, API path, class name or UI label. Vehicle-to-vehicle
+>   messaging (BSM/CAM/DENM between OBUs) **stays**, as one *link type* inside the single V2X
+>   stack. **Do not delete the BSM, DSRC channel or threat code.** It moves into `v2x/` (§2.1).
+> - The frontend is redesigned around the V2X server: §5.7 is the binding spec (LiDAR on request,
+>   V2X views, data transport).
 
 ---
 
@@ -44,15 +56,17 @@ Concretely, the end state is:
 - **Server-side V2X simulation:** every V2X-equipped station (vehicle OBUs, RSUs, VRUs) exchanges
   messages through **one** configurable channel model. Each delivery decision is computed and
   logged per link.
-- **Server-side LiDAR:** per-session LiDAR sensors that the frontend can **enable, disable and
-  reconfigure at runtime** (sensor type, channels, range, points/s, FoV, mount pose,
-  stream decimation). Point clouds are **frame-synchronised** with the simulation and V2X state.
-- **Frontend control:**
-  - *Admin/experiment page:* connect to CARLA, start/stop runs, traffic/pedestrians, V2X
-    parameters, recording.
-  - *Client/vehicle page:* join → own vehicle → live 3D LiDAR view + the V2X view **as received by
-    that vehicle's radio** (not ground truth) + LiDAR controls.
-  - *Observer page:* map with all stations, links (delivered/dropped), and ground truth.
+- **Server-side LiDAR, on request:** a LiDAR sensor exists only while someone requested it
+  (or a run records it). The frontend can **attach, view, reconfigure and detach** it at runtime
+  (sensor type, channels, range, points/s, FoV, mount pose). Each viewer picks its own stream
+  decimation. Point clouds are **frame-synchronised** with the simulation and V2X state.
+- **Frontend control** (full spec in §5.7):
+  - *Admin page:* connect to CARLA, start/stop runs, traffic/pedestrians, V2X parameters,
+    recording, LiDAR on any vehicle.
+  - *Vehicle page:* join → own vehicle → the V2X view **as received by that vehicle's radio**
+    (not ground truth) + LiDAR on request for the own vehicle.
+  - *Observer page:* map with all stations, links (delivered/dropped and why), station inspector,
+    channel analytics, and a view of any LiDAR stream that is already active.
 - **Recording and reproducibility:** every run produces a run directory with a manifest (config,
   seeds, git SHA, CARLA map, start time) and per-frame data (V2X per-link results, station states,
   LiDAR frame metadata, optional raw point clouds), plus an event log of every admin/client action
@@ -78,14 +92,27 @@ The repo grew two independent architectures that share one FastAPI app
 Both planes can be started at the same time against the same CARLA server, and they will fight
 over synchronous mode and ticking.
 
-**Target:** keep **B** as the skeleton. Port the *research-relevant* parts of **A** (seeding,
-per-run directory, CSV/structured logging, all-vehicle V2X registration, Three.js point-cloud
-renderer). Delete the rest of A.
+**Target (Revision 2):** **B is the only structure.** **A is deleted outright**: the route
+handlers, the demo scenario, observers, utils, the standalone V2V API app and all A pages. A few
+*capabilities* that A had and B lacks get **re-implemented fresh inside B's V2X server**, not
+ported:
+
+| Capability A had | Where it lives in the new V2X server |
+|---|---|
+| Seeded RNG | `config.seed` → per-subsystem `numpy.random.Generator` (§3.1-C8) |
+| Run directory + CSV logs | `recording/` (§5.6), with a new schema. A's CSV columns are only a checklist |
+| All vehicles transmit | `v2x.penetration_rate` (🟨 D2) |
+| Three.js point-cloud renderer | Rewritten as `web/static/js/lidar-view.js` (§5.7.5). `viewer.html` is reference only: it allocates a new `BufferGeometry` every frame (`viewer.html:~600`) and its semantic palette likely uses pre-0.9.14 tag ids (§3.4-F8, verify) |
+| Canvas top-down map | Rewritten as `web/static/js/map-view.js` (§5.7.4). The projection in `v2v_map.html:372-391` is correct and worth keeping (see §5.7.4) |
+
+Naming rule: after Phase 3 step 1 (the move), `git grep -in "v2v"` matches only `docs/science/CHANGELOG.md`
+history, the archive tag, and the string `"V2V"` as a link-type label (`link_type: "V2V" | "V2I" | "I2V" | "V2P" | "P2V"`).
 
 ### 2.1 File inventory and verdicts
 
-Legend: **KEEP** (refactor in place) · **PORT** (take the ideas/code into the new structure,
-then delete) · **DELETE** · 🟨 (needs a human decision, §7)
+Legend: **KEEP** (refactor in place) · **MOVE/MERGE** (same code, new location, golden-tested) ·
+**SPLIT** (keep the plane-B part, delete the rest) · **DELETE** · 🟨 (needs a human decision, §7).
+Revision 2: there is no "port" category. Plane-A code is deleted, never carried over.
 
 | Path | Lines | Verdict | Notes |
 |---|---:|---|---|
@@ -95,30 +122,26 @@ then delete) · **DELETE** · 🟨 (needs a human decision, §7)
 | `src/server/session_manager.py` | 134 | KEEP | Add a lock. Docstring claims thread safety but there is no lock (`:64-74`) |
 | `src/server/admin_routes.py` | 292 | KEEP→rewrite | Module-global `_world`, all `async def` doing blocking RPC |
 | `src/server/client_routes.py` | 320 | KEEP→rewrite | Same problems. Wrong stream rates (§3.1-C6) |
-| `src/v2v/messages.py` | 524 | KEEP→split | BSM/DENM/CAM dataclasses and the CARLA extractor (bugs §3.2) |
-| `src/v2v/dsrc_channel.py` | 418 | KEEP | Physics core. Must expose per-link results (§5.3) |
-| `src/v2v/network_enhanced.py` | 526 | KEEP→merge | Merge with `v2x/network.py` into one `V2XNetwork` |
-| `src/v2x/messages.py` | 233 | KEEP | SPAT/MAP/VRUAM/CPM dataclasses |
-| `src/v2x/network.py` | 238 | KEEP→merge | |
+| `src/v2v/messages.py` | 524 | **MOVE**→`v2x/messages/{bsm,cam,denm}.py` + `v2x/extract.py` | BSM/DENM/CAM dataclasses and the CARLA extractor (bugs §3.2). Pure move first (golden tests), then fixes |
+| `src/v2v/dsrc_channel.py` | 418 | **MOVE**→`v2x/channel/dsrc_logdistance.py` | Physics core. Must expose per-link results (§5.3). Delete the duplicate `DSRCConfig` |
+| `src/v2v/network_enhanced.py` | 526 | **MERGE**→`v2x/network.py` | Merged with `v2x/network.py` into one `V2XNetwork`. The V2V/V2X class hierarchy disappears |
+| `src/v2v/__init__.py` | 20 | DELETE | Package `v2v` ceases to exist after the moves |
+| `src/v2x/messages.py` | 233 | KEEP→split | SPAT/MAP/VRUAM/CPM → `v2x/messages/*.py` |
+| `src/v2x/network.py` | 238 | KEEP→merge | Target of the merge above |
 | `src/v2x/rsu.py` | 211 | KEEP | RSU grouping is wrong (§3.2-S7) |
-| `src/visualization/lidar/collector.py` | 345 | KEEP→rewrite | Becomes `lidar/sensor.py`. Transform bug (§3.3-L1) |
+| `src/visualization/lidar/collector.py` | 345 | KEEP→rewrite | Becomes `lidar/sensor.py`. Transform bug (§3.3-L1). It's used by plane B (`persistent_world.py:672`), so it's not a plane-A file |
 | `src/utils/binary_protocol.py` | 237 | KEEP→v3 | Add frame number and sim time (§5.4) |
-| `src/visualization/lidar/server.py` | 952 | PORT then DELETE | Split into `api/` routers. Delete the legacy `/api/simulation/*`, `/ws` global, `/v2v` HTML patching (`:278-361`) |
-| `src/visualization/web/viewer.html` | 1025 | PORT | Three.js r128 renderer and binary decoder → reuse in the new client page |
-| `src/visualization/web/client_join.html` | 341 | PORT | Join flow and V2X panel → new client page |
-| `src/visualization/web/admin_panel.html` | 383 | PORT | → new admin page |
-| `src/visualization/web/v2v_map.html` | 676 | PORT | Canvas map → observer page. Hardcodes `EGO_VEHICLE_ID = 0` (`:206`), which doesn't exist in persistent mode |
-| `src/visualization/web/control_panel.html`, `unified_viewer.html`, `live_viewer.html`, `vehicles_overview.html` | — | DELETE | Legacy plane A UIs |
+| `src/visualization/lidar/server.py` | 952 | SPLIT then DELETE | Only the plane-B wiring (router mounting, static assets) moves to `api/app.py`. **Delete outright:** `/api/simulation/*`, `/api/system/info`, `/ws` global stream + `stream_lidar_data`, every `/api/v2v/*`, `/v2v` HTML patching (`:278-361`), `set_collector`, `set_v2v_network`, the Pydantic `SimulationConfig` |
+| `src/visualization/web/*.html` (all 8 pages) | ~3750 | DELETE (after Phase 6) | Replaced by the §5.7 frontend. Until Phase 6 lands, keep **only** `admin_panel.html` and `client_join.html` so the server stays usable. `viewer.html` and `v2v_map.html` are reference only (see §2) |
+| `src/visualization/web/assets/*` | — | KEEP one logo | Five logo variants exist. Keep the one the pages use and move it to `web/static/img/` |
 | `src/v2v/dashboard.html` | 549 | DELETE | Hardcodes port 8001 (= Traffic Manager port!), gets string-patched at runtime |
-| `src/v2v/api.py` | 576 | DELETE | A second, standalone FastAPI app for port 8001. Port its Pydantic schemas if useful |
-| `src/visualization/lidar/api.py` | 240 | DELETE | `LiDARStreamingAPI` starts its own uvicorn. Legacy |
+| `src/v2v/api.py` | 576 | DELETE | A second, standalone FastAPI app for port 8001. Nothing is ported |
+| `src/visualization/lidar/api.py` | 240 | DELETE | `LiDARStreamingAPI` starts its own uvicorn. Plane A only |
 | `src/lidar/*.py` | 31 | DELETE | `import *` shims around `src/visualization/lidar` |
 | `src/visualization/__init__.py`, `src/web/__init__.py` | 31 | DELETE | Re-export shims, unused |
-| `src/scenarios/v2v_complete_demo.py` | 1075 | PORT then DELETE | Seeding, run dir, spawn logic → headless runner (Phase 7) |
-| `src/utils/observers.py` | 793 | PORT then DELETE | CSV loggers → `recording/`. Rest is demo-only |
-| `src/utils/{builder,lazy,octree,enums,session,actor_manager,carla_utils,data_collector}.py` | ~1700 | DELETE | Only used by the legacy demo. `octree.py` is unused everywhere |
-| `src/utils/__init__.py` | 95 | DELETE | Eagerly imports everything, including `carla` |
-| `src/agents/**` (vendored CARLA agents) | ~2000 | 🟨 D3 | Only needed if BehaviorAgent driving is kept. If kept, move to `third_party/carla_agents/` with the CARLA MIT license header |
+| `src/scenarios/` (incl. `v2v_complete_demo.py`, 1075 lines) | 1076 | DELETE | Monolithic demo. The headless runner (Phase 7) is new code on top of the V2X server, not a port |
+| `src/utils/` (all 12 files, incl. `observers.py`, `__init__.py`) | ~3000 | DELETE | Plane A only, except `binary_protocol.py` (moves to `lidar/protocol.py`) and `potholes.py` (🟨 D1). `octree.py` is unused everywhere. `utils/__init__.py` eagerly imports `carla` |
+| `src/agents/**` (vendored CARLA agents) | ~2000 | DELETE | Only the monolithic demo used them (`v2v_complete_demo.py:49`). The V2X server drives with TM autopilot. **D3 is resolved by Revision 2** |
 | `src/utils/potholes.py`, `/api/potholes*`, `scripts/lidar_pothole_detection_check.py`, README pothole section, pothole drawing in tick loop | ~550 | 🟨 D1 | Use case **cancelled** in HEAD commit `29bca10`. Default: delete (it's in the archive tag) |
 | `tests/**` | ~5300 | KEEP→reorganise | See §3.5 |
 | `test_scientific_fixes.py` (root) | 164 | DELETE | Prints warnings but **asserts nothing**, so it always "passes". Turn the checks into real pytest asserts |
@@ -217,6 +240,9 @@ so "reconfigure" means destroying and respawning at a tick boundary.
 | F5 | 🟡 | `client_routes.py:9` | "No authentication": anyone on the LAN can spawn vehicles. Acceptable for a lab, but rate-limit joins and cap sessions (config) |
 | F6 | ⚪ | `viewer.html:233-235` | Three.js r128 from CDN. Pin with SRI hashes or vendor locally (labs often run offline) |
 | F7 | ⚪ | All responses | Untyped `dict` responses. No OpenAPI schema for most endpoints |
+| F8 | 🟡 | `viewer.html:256-…` | Semantic colour table uses the **pre-0.9.14 tag ids** (`1 = Building`, `2 = Fence`). CARLA 0.9.14+ switched to Cityscapes-aligned ids (`1 = Roads`, `2 = SideWalks`, `3 = Building`, …, up to 28). `binary_protocol.py:367` already assumes "max tag = 28". **Verify** against the 0.9.16 sensor reference and generate the palette from one table shared by server and client (`GET /api/lidar/schema`) |
+| F9 | 🟡 | `viewer.html:~600` | A new `THREE.BufferGeometry` is allocated for every frame at 10–20 Hz, which causes GC stalls. Allocate once at max size, then update attributes and `setDrawRange` |
+| F10 | 🟡 | Plane B | No way to inject a DENM. DENM/CAM endpoints exist only in the deleted standalone V2V app (`src/v2v/api.py`). If hazard warnings are part of the research, the admin needs an "inject DENM at map position" action (§5.7.6) |
 
 ### 3.5 Tests and tooling (baseline at `29bca10`)
 
@@ -234,6 +260,20 @@ so "reconfigure" means destroying and respawning at a tick boundary.
   - `tests/test_v2v_lidar.py` (5 tests): may be stub artefacts. Re-run with real `carla==0.9.16`
     (Python ≤ 3.12 wheels, **verify**) before judging.
 - `test_scientific_fixes.py` asserts nothing (see §2.1).
+
+**Test verdicts under Revision 2:**
+
+| Test module | Verdict | Reason |
+|---|---|---|
+| `tests/test_complete_system.py`, `tests/test_frontend_integration.py` | DELETE | Drive `/api/simulation/*` (plane A) against a live `localhost:8000` |
+| `tests/test_frontend.py`, `tests/test_frontend_visual.py` | DELETE | Selenium tests of the plane-A `viewer.html`. Replaced by Playwright tests in Phase 6 |
+| `tests/test_reproducibility.py` | DELETE | Standalone CARLA script with its own scenario, not a pytest suite. Replaced by the Phase 7 reproducibility test |
+| `tests/test_lidar_api.py` | DELETE | Tests `LiDARStreamingAPI` (plane A). Keep its `BinaryProtocol` cases → `tests/unit/test_lidar_protocol.py` |
+| `tests/v2v/test_api.py` | DELETE | Tests the standalone `V2VAPI` app |
+| `tests/v2v/test_denm_cam.py` | SPLIT | Keep `TestDENMDataclass`, `TestDENMNetworkStore`, `TestCreateCamFromBsm` → `tests/unit/v2x/`. Delete `TestCAMEndpoints`, `TestDENMEndpoints` (V2VAPI) |
+| `tests/v2v/test_dsrc_channel.py`, `test_scientific_integrity.py`, `test_v2v_basic.py`, `tests/test_v2v_neighbor_discovery.py` | MOVE→`tests/unit/v2x/` | Valuable model tests. Fix the stale ones (above) as part of Phase 0 |
+| `tests/test_v2v_lidar.py` | SPLIT | Collector/transform cases → `tests/unit/lidar/`. Drop the `ConnectionManager` cases (plane-A `/ws`) |
+| `tests/v2x/test_v2x_messages.py` | MOVE→`tests/unit/v2x/` | |
 
 ---
 
@@ -275,6 +315,7 @@ carla_v2x/
     commands.py                # Command dataclasses + queue; each returns a concurrent.futures.Future
     actors.py                  # traffic, pedestrians, client vehicles (seeded Generator)
     sessions.py                # SessionManager (lock-protected; no CARLA)
+    map_geometry.py            # road polylines + junctions for the map view, cached per map name
   v2x/
     messages/                  # bsm.py cam.py denm.py spat.py map.py vruam.py cpm.py (pure)
     extract.py                 # WorldSnapshot → StationState (the ONLY carla import in v2x)
@@ -282,10 +323,12 @@ carla_v2x/
     channel/
       base.py                  # ChannelModel protocol → LinkResult
       dsrc_logdistance.py      # current model, refactored, every term explicit
-    network.py                 # V2XNetwork (merged V2V+V2X), produces V2XFrame
+    network.py                 # V2XNetwork (single class; V2V is a link type), produces V2XFrame
     threat.py                  # TTC / threat level
+    stats.py                   # aggregations (PRR vs distance bins, margins…) shared by UI and offline analysis
   lidar/
-    sensor.py                  # LidarManager: per-session spawn/reconfigure/destroy, frame sync
+    sensor.py                  # LidarManager: sensor lifecycle state machine, viewer refcount, budget, frame sync
+    stream.py                  # per-sensor stream profiles, encode-once fan-out, display subsampling
     config.py                  # LidarConfig + per-sensor-type attribute validation
     protocol.py                # binary protocol v3
     transforms.py              # thin wrappers over carla.Transform.get_matrix / get_inverse_matrix
@@ -297,11 +340,12 @@ carla_v2x/
     app.py                     # create_app(controller) — app factory, lifespan, NO module globals
     deps.py                    # auth, controller dependency
     schemas.py                 # all Pydantic request/response models
-    routes/{admin,client,v2x,lidar,runs}.py
-    ws.py                      # WS hub: sim thread → loop.call_soon_threadsafe → per-client asyncio.Queue(maxsize=1)
-  web/
-    static/js/{lidar-decoder.js, ws.js, api.js}
-    admin.html  client.html  observer.html
+    routes/{admin,sessions,world,map,v2x,lidar,runs,config}.py
+    ws.py                      # topic hub (§5.7.3): sim thread → loop.call_soon_threadsafe → latest-wins per (client, topic)
+    roles.py                   # admin / vehicle / observer permissions per endpoint and per WS topic
+  testing/
+    fake.py                    # FakeController: deterministic synthetic world + synthetic LiDAR (`carla-v2x serve --fake`)
+  web/                         # layout in §5.7.8
 tests/
   unit/        # no carla, no network
   contract/    # API tests against a FakeController
@@ -360,6 +404,7 @@ class LinkResult:            # one per (tx, rx, message) attempt
     p_channel: float; p_mac: float; p_total: float
     delivered: bool
     drop_cause: str | None   # "channel" | "mac" | "out_of_awareness_range" | None
+    link_type: str           # "V2V" | "V2I" | "I2V" | "V2P" | "P2V"  (V2V lives on only as this label)
 
 @dataclass(frozen=True)
 class V2XFrame:
@@ -393,22 +438,59 @@ Decide one stream frame (recommended: **sensor frame**, raw as CARLA delivers it
 the header). The browser applies the pose. That is exact, cheaper on the server, and keeps
 recorded data raw.
 
-### 5.5 Runtime LiDAR control (frontend)
+### 5.5 LiDAR on request (server side)
+
+A LiDAR sensor is a **costly, explicitly requested resource**. *Sensors* and *viewers* are
+separate things: a sensor is a CARLA actor attached to a vehicle, and a viewer is a WebSocket
+subscribed to that sensor's stream. Many viewers can share one sensor.
+
+**Lifecycle (one state machine per sensor, owned by the sim thread; every transition is an event
+stamped with `frame`):**
 
 ```
-GET    /api/sessions/{sid}/lidar            → {enabled, config, effective_points_per_frame, warnings}
-PUT    /api/sessions/{sid}/lidar            body: LidarConfig  → reconfigure (respawn at next tick boundary)
-DELETE /api/sessions/{sid}/lidar            → disable
-PATCH  /api/sessions/{sid}/lidar/stream     body: {decimation, max_points, rate_hz, compress}  (no respawn)
-WS     /ws/sessions/{sid}/lidar             binary v3 frames
-GET    /api/lidar/schema                    → JSON schema + per-sensor-type valid attributes/ranges
+requested ──(next tick boundary)──► spawning ──► warming_up ──(first measurement for frame F)──► active
+active ──PUT config──► reconfiguring (destroy + respawn at a tick boundary) ──► warming_up ──► active
+active ──DELETE / owner session ended / auto-release──► stopping ──► destroyed
+any ──(spawn failure, actor gone, budget revoked)──► error {reason}
+```
+
+- **Auto-release:** a sensor with `viewers == 0` for `keep_alive_s` (config, default 10 s,
+  measured in wall time because it's a UI resource policy, not model data) is destroyed, unless
+  `record_raw = true` or `pinned = true` (admin only). The destroy frame is logged.
+- **Ownership:** a vehicle session may create sensors only on its own actor. The admin can create
+  them on any vehicle. Observers can't create sensors, only view active ones (🟨 D9). When a
+  session ends, its sensors are destroyed.
+- **Budget:** `lidar.max_sensors` and `lidar.max_total_points_per_second` (config). A request
+  over budget returns `409 {"error": "lidar_budget_exceeded", "requested_pps": …, "available_pps": …}`.
+  The UI shows the budget meter from `GET /api/lidar/sensors`.
+- **Points per frame** shown to the user = `points_per_second × fixed_delta_seconds`, computed on
+  the server. With `rotation_frequency_hz == 1/Δt` (validated, §5.2) each frame is one full sweep.
+- **Recording is raw:** recorded frames are never subsampled (§4.8). Subsampling exists only in
+  stream profiles.
+- **Stream profiles (display only):** a viewer asks for `{max_points, max_hz, compress}`. The
+  server quantises `max_points` to a fixed set (e.g. 10k / 25k / 50k / all) and `max_hz` to
+  divisors of the sim rate, so **each frame is encoded once per profile** and the same bytes fan
+  out to every viewer on that profile. Subsampling uses a fixed, seeded random permutation per
+  sensor, not a stride: CARLA orders points by channel, so a stride makes ring artefacts.
+- **Sensor type:** `sensor.lidar.ray_cast_semantic` (tags + `object_idx` = hit actor id, no
+  intensity/noise) or `sensor.lidar.ray_cast` (intensity, noise, dropoff, no tags). The schema
+  endpoint returns only the attributes valid for each type (**verify** lists against 0.9.16).
+
+```
+GET    /api/lidar/schema                  → JSON schema per sensor type, valid ranges, semantic tag table (id → name, colour)
+GET    /api/lidar/sensors                 → [{sensor_id, actor_id, owner, state, config, viewers, pinned, record_raw,
+                                              points_per_frame, created_frame, last_frame}], budget {used_pps, max_pps}
+POST   /api/lidar/sensors                 body {actor_id, config, record_raw?, pinned?}  → 202 {sensor_id, state: "requested"}
+PUT    /api/lidar/sensors/{sensor_id}     body LidarConfig → 202 (reconfigure)
+DELETE /api/lidar/sensors/{sensor_id}     → 202
+POST   /api/sessions/{sid}/lidar          convenience for vehicles: create on own actor
+WS     /ws/lidar/{sensor_id}              see §5.7.3 (auth message first, then stream profile; binary v3 frames;
+                                          JSON text frames {type: "state", state, frame} on lifecycle changes)
 ```
 
 `LidarConfig`: `sensor_type`, `channels`, `range_m`, `points_per_second`, `rotation_frequency_hz`,
-`upper_fov_deg`, `lower_fov_deg`, `horizontal_fov_deg`, `mount: {x,y,z,pitch,yaw,roll}`,
-`record_raw: bool`, plus type-specific noise and dropoff fields. Server-side limits (for example
-max points/s per session, max sessions with LiDAR) come from config to protect the tick rate.
-Every change is an event in the run log with its frame.
+`upper_fov_deg`, `lower_fov_deg`, `horizontal_fov_deg`, `mount: {x_m, y_m, z_m, pitch_deg, yaw_deg, roll_deg}`,
+plus type-specific noise/dropoff fields.
 
 ### 5.6 Recording
 
@@ -420,17 +502,204 @@ and TM). Endpoints: `POST /api/runs` (start with name + config overrides), `POST
 `GET /api/runs`, `GET /api/runs/{id}/manifest`. If 🟨 D6 says to keep the ER model, this run
 layout **is** its physical schema. Update the ER doc to match the real fields.
 
-### 5.7 Frontend (no build step; plain ES modules)
+### 5.7 Frontend specification (V2X server only)
 
-- `admin.html`: CARLA connect state machine, run start/stop and recording, traffic/pedestrian
-  counts, V2X config form (rendered from `GET /api/config/schema`), live stats (PRR by distance
-  bin, update Hz, real-time factor, tick p95), sessions table with kick.
-- `client.html`: join form, Three.js point cloud (reuse `viewer.html` renderer, new decoder),
-  LiDAR control panel (form generated from `/api/lidar/schema`), "my radio" panel (inbox:
-  neighbours, SPAT, VRUAM, DENM; per-link RSSI/margin), threat list.
-- `observer.html`: 2-D map (reuse `v2v_map.html` canvas): all stations, delivered vs dropped
-  links coloured by `drop_cause`, RSU ranges, ground-truth toggle.
-- One shared `ws.js` with reconnect and backoff, and one `api.js`.
+Binding spec for Phase 6. The frontend is a **research instrument**, not a dashboard. It must
+show exactly what the server computed, labelled with frame and units, and never invent or
+smooth data.
+
+#### 5.7.1 Roles, pages, permissions
+
+| Page | Who | Purpose |
+|---|---|---|
+| `/` | anyone | Server status (CARLA connected, map, run active, frame, sim time, real-time factor) and links to the three role pages |
+| `/observer` | anyone (if `server.observer_public`, default true) | **Main V2X research view:** map + station inspector + link log + channel analytics. Can open any *active* LiDAR stream |
+| `/vehicle` | anyone who joins (gets a session token) | Own vehicle: "my radio" (received view only), LiDAR on request for the own vehicle, mini-map from the own perspective |
+| `/admin` | admin token | Everything on `/observer`, plus world/run/population/V2X config/RSU/DENM/sessions/LiDAR management |
+
+Permission rules (enforced in `api/roles.py`, on REST **and** per WS topic, with contract tests):
+
+- Ground truth (`world.state`, unfiltered `v2x.links`, other stations' inboxes) → observer and
+  admin only. A vehicle sees its own ground-truth telemetry and its own inbox, and nothing else
+  (§4.7, 🟨 D10).
+- Creating/reconfiguring LiDAR → vehicle: own actor. Admin: any actor. Observer: never (🟨 D9).
+- Browsers can't set headers on WebSockets, so WS auth is the **first message**
+  `{"op": "auth", "admin_token" | "session_token": …}`. Tokens never go in URLs (they leak into logs).
+  The session token is a separate secret, not the session id the admin list shows.
+
+#### 5.7.2 Data the frontend needs and where it comes from
+
+| Need | Source | Rate |
+|---|---|---|
+| Road network for the map | `GET /api/map/geometry` → `{map_name, version, lanes: [[x,y]…], junctions: [{id, bbox}]}` from `world.get_map().get_topology()` + waypoints every 2 m (**verify** cost; cache per map name) | once per map |
+| All station states (ground truth) | WS topic `world.state` | ≤ 10 Hz, per client `max_hz` |
+| Own telemetry | WS topic `session.self` | ≤ 10 Hz |
+| V2X update summary | WS topic `v2x.frame` (per-station sent/received counts, threats count, stats) | per V2X update (2 Hz default) |
+| Link results | WS topic `v2x.links` with a **required filter** (station ids, msg types, delivered/dropped). The server caps rows per message (config, e.g. 2000) and reports `truncated: true` | per V2X update |
+| One station's received messages (full fields) | WS topic `v2x.inbox` `{station_id}` | per V2X update |
+| Channel analytics | WS topic `v2x.stats` → pre-binned aggregates from `v2x/stats.py` | 1 Hz |
+| SPAT/MAP, VRUAM, DENM | inside `v2x.inbox` (received view) and `v2x.frame` (ground truth: active DENMs, RSU states) | per V2X update |
+| LiDAR sensors list and budget | WS topic `lidar.sensors` (push on change) + `GET /api/lidar/sensors` | on change |
+| Point clouds | `WS /ws/lidar/{sensor_id}` binary v3 | ≤ sim rate, per viewer `max_hz` |
+| Events (admin actions, config changes, run start/stop, errors) | WS topic `events` | on change |
+| Run/recording status | WS topic `run.status` (frames written, writer queue fill, disk usage) | 1 Hz |
+| Config + JSON schema (form generation) | `GET /api/config`, `GET /api/config/schema` | on load / on change event |
+
+Why links are filtered: with 100 equipped vehicles at 2 Hz there are 9,900 BSM links per update,
+before V2I/V2P. That's far too much to broadcast to every browser. Complete link data belongs to
+the recording (§5.6). Live views show a filtered slice and the server-side aggregates.
+
+#### 5.7.3 Transport
+
+- **One multiplexed JSON WebSocket `/ws`** per browser tab for all topics, plus **one binary
+  WebSocket per LiDAR stream** (`/ws/lidar/{sensor_id}`). Big binary frames must not delay JSON
+  updates (head-of-line blocking).
+- Client → server: `{"op": "auth", …}`, `{"op": "subscribe", "topic": "v2x.links", "max_hz": 2, "filter": {…}}`,
+  `{"op": "unsubscribe", "topic": …}`, `{"op": "ping"}`.
+- Server → client envelope: `{"topic", "frame", "sim_time", "seq", "data"}`, or
+  `{"topic": "error", "code", "message"}` for permission or validation errors.
+- Server side: **latest-wins per (client, topic)**. A slow browser skips updates and never
+  slows the sim thread (Phase 5 acceptance). `seq` gaps let the client display "skipped N updates".
+- Client side (`ws.js`): reconnect with exponential backoff + jitter, then re-auth and
+  re-subscribe automatically. Show the connection state in the UI permanently.
+
+#### 5.7.4 Map view (`map-view.js`) — observer, admin, vehicle (perspective mode only)
+
+- **Projection:** `screen_x = (x − cx)·s + W/2`, `screen_y = (y − cy)·s + H/2`, heading drawn
+  with `ctx.rotate(yaw_deg·π/180)`. CARLA's top-down view (z up, left-handed) and the canvas
+  (y down) have the same handedness, so this is **not mirrored**. This is what `v2v_map.html:372-391,480`
+  already does. Put it in `coords.js` with tests: a station moving +y moves *down* the screen,
+  and yaw 90° points *down*.
+- **Layers (each toggleable):** roads/junctions; stations by kind (V2X-equipped vehicle,
+  non-equipped vehicle, RSU, VRU), each with its own glyph; labels (id, session name); trails
+  (last N s of sim time); awareness-range ring and RSU coverage; traffic-light state per junction;
+  **links** of the selected station (incoming and/or outgoing), coloured by outcome (delivered /
+  `channel` / `mac` / `out_of_awareness_range`, distinct colour *and* dash pattern so it isn't
+  colour-only), line opacity ∝ `p_total`; DENM event markers with relevance radius; LiDAR-active
+  marker with range ring and horizontal FoV wedge.
+- **Two modes:** *Ground truth* (observer/admin) and *Perspective of station X*. The second shows
+  only what X received, drawn at the positions **from the received messages**, with message age.
+  A station X hasn't heard from in this update is drawn as a ghost at its last received position
+  with its age.
+- **Interaction:** click a station → inspector (§5.7.6). Click a link → every `LinkResult` field.
+  Pan/zoom, follow the selected station, north-up. **"Show LiDAR"** on a selected vehicle: opens
+  the viewer if a sensor exists, creates one if the role allows, otherwise is disabled with the reason.
+- **No interpolation or extrapolation** of positions between updates: it would display states
+  that never existed. Draw the latest state and show its frame.
+
+#### 5.7.5 LiDAR view (`lidar-view.js` + `lidar-worker.js`)
+
+- **Decoding in a Web Worker** (`lidar-decoder.js`, protocol v3), with the `ArrayBuffer`
+  transferred, not copied. The worker returns positions in the Three.js frame plus a colour array.
+  Latest-wins: if the worker is busy, keep only the newest frame and count drops.
+- **Renderer:** one preallocated `BufferGeometry` sized from the schema's max points. Update
+  attributes in place and use `setDrawRange` (fixes F9). Three.js is vendored at a pinned version
+  under `static/vendor/three/` (module build + matching `OrbitControls`). Record the version in
+  `static/vendor/VERSIONS.md`.
+- **Coordinates:** points arrive in the sensor frame (§5.4). Apply the header pose with the same
+  matrix CARLA uses (`Transform.get_matrix()` semantics, ported to `coords.js`), then convert
+  CARLA → Three.js by mirroring y (`(x, y, z) → (x, −y, z)`, `camera.up = (0, 0, 1)`). A Node
+  test compares `coords.js` against a fixture produced in Python by the verified transform (L1),
+  for a pitched + rolled pose.
+- **Colour modes:** semantic (palette from `/api/lidar/schema`, fixes F8), range from sensor,
+  height relative to sensor, intensity (ray_cast only), **highlight actor**: points whose
+  `object_idx` equals the selected station's actor id (semantic only).
+- **Ego self-hits:** filter `object_idx == ego_actor_id` (toggle, default on). Show how many
+  points were filtered.
+- **Overlays (each toggleable):** own bounding box; **V2X-received stations** as wireframe boxes
+  built from the latest *received* message (position, heading, length/width), coloured by message
+  age; ground-truth boxes (observer/admin only); RSUs, VRUs, DENM markers; LiDAR range ring and
+  awareness ring. This shows "what the LiDAR sees vs what V2X reports", the core research
+  picture (🟨 D13 for turning it into a logged metric).
+- **Synchronisation display:** the HUD shows LiDAR frame `F_l`, V2X frame `F_v` and their gap in
+  seconds, `(F_l − F_v)·Δt`. Overlays use the newest V2X frame with `F_v ≤ F_l` from a client-side
+  ring buffer (≈ 2 s). They never use a V2X frame newer than the point cloud.
+- **HUD:** sensor state, points received/displayed/filtered, stream profile, received fps vs
+  requested, dropped frames, kB/s.
+- **Camera:** orbit, follow (heading-locked or north-up), top-down, free-fly. Keyboard shortcuts.
+- **Freeze & export:** pause rendering while the stream keeps running. "Export frame"
+  downloads the raw v3 bytes as received plus `frame_<F>_v2x.json` (the V2X frame used for the
+  overlays). The JSON states whether the cloud was subsampled (`stream_profile`). Full-resolution
+  data comes only from recordings.
+- An observer may open at most `ui.max_lidar_views` (default 2) streams at once.
+
+#### 5.7.6 Panels
+
+- **Station inspector:** identity (id, kind, blueprint, equipped, owner session, LiDAR status).
+  Ground-truth kinematics next to the **last transmitted message** fields, full precision, with
+  units and age. Sent counts and rate per message type. **Inbox table:** `tx_id, link_type,
+  msg_type, age_s, distance_m, los, rx_power_dbm, rx_margin_db, p_total`, delivery ratio over
+  the last N updates. Threats computed from the inbox (`other_id, ttc_s, level, distance_m`).
+  SPAT per intersection in coverage with countdown `likely_time − sim_time`, or "unknown" when
+  null (never a fallback number, S17). VRUAM and DENM lists. A raw-JSON toggle for every message.
+- **Link log:** live table from `v2x.links` with the current filter. Pause; client ring buffer
+  (e.g. 5000 rows); "download CSV of this view" (labelled *live view, filtered*). If a run is
+  recording, a link to the run id.
+- **Channel analytics** (from `v2x.stats`, computed by `v2x/stats.py`, the **same code** offline
+  analysis uses): PRR vs distance in 10 m bins, LOS and NLOS as separate series, with *n* per bin
+  and a Wilson 95 % interval. Rx-margin histogram. Neighbours per station over time. Achieved V2X
+  update rate vs target. Real-time factor and tick p95. Window switch: "this run" or "last 60 s of
+  sim time". Charts: vendored uPlot (**verify** licence) or hand-rolled canvas, no build step.
+- **Admin-only cards:**
+  - *Connection:* state machine display, CARLA host/port/TM port, connect/disconnect.
+  - *Run:* name, seed, duration in frames or open-ended, `realtime` toggle, what to record
+    (links, stations, messages, raw LiDAR); start/stop; writer status.
+  - *Population:* background vehicles, pedestrians, `penetration_rate` (D2), clear all.
+  - *V2X config:* generated from the JSON schema. Each field is marked *hot* (applied at the next
+    V2X update, confirmed with the applying frame) or *restart* (needs a new run). Every change
+    becomes an event and goes into the manifest's `config_changes`.
+  - *RSUs:* list (auto-created per junction, S7), enable/disable, TX power, coverage.
+  - *DENM injection* (🟨 D11): click a map position, then pick cause code (enum), relevance
+    radius, validity and originating station (RSU or vehicle). The DENM goes through the channel
+    like any other message (fixes F10).
+  - *Sessions:* table, kick, their LiDAR sensors.
+  - *LiDAR:* all sensors, budget meter, attach to any vehicle, pin, detach.
+  - *Health:* tick p50/p95, real-time factor, WS clients, outbound kB/s.
+- **Vehicle page:** join (name, blueprint from the server list, duration, "request LiDAR on
+  join"). Layout: LiDAR view (with a **Request LiDAR** button and config form when off; state
+  badge `requested / spawning / warming_up / active / …` when on), "my radio" (inbox summary,
+  threats, SPAT, VRUs, DENMs), mini-map in *own perspective* mode. Reconnect behaviour per 🟨 D4,
+  with the grace-period countdown visible.
+
+#### 5.7.7 Display rules
+
+- Every live panel shows the **frame and sim time** of its data. Data older than 2 V2X update
+  periods is visibly marked stale.
+- Rounding happens only in display (`units.js`). Hover or raw view shows the full value. Units
+  are always shown. Distances in m, speeds in m/s with km/h as secondary, power in dBm, angles in
+  degrees.
+- Colour is never the only carrier of meaning (dash patterns and glyphs too). Both light and dark
+  themes are readable.
+- No silent fallbacks: if a value is missing, show "—" with a tooltip giving the reason.
+
+#### 5.7.8 Web layout (no build step, plain ES modules)
+
+```
+carla_v2x/web/
+  index.html  observer.html  vehicle.html  admin.html
+  static/
+    vendor/three/…  vendor/uplot/…  vendor/VERSIONS.md
+    css/app.css
+    img/logo.png                    # the one kept logo
+    js/
+      api.js          fetch wrapper (auth header, typed errors → toasts)
+      ws.js           multiplexed topic socket: auth, subscribe, backoff + jitter reconnect, resubscribe
+      store.js        latest value per topic + V2X frame ring buffer
+      coords.js       CARLA ↔ canvas, CARLA ↔ Three.js, CARLA Transform matrix (tested)
+      units.js        display formatting only
+      schema-form.js  forms from JSON schema (V2X config, LiDAR config)
+      map-view.js  lidar-view.js  lidar-worker.js  lidar-decoder.js
+      inspector.js  link-log.js  charts.js  toasts.js
+      tests/          node --test: decoder vs Python-encoded fixture, coords vs Python fixture
+```
+
+#### 5.7.9 Developing without CARLA
+
+`carla-v2x serve --fake` runs `testing/fake.py`: a deterministic synthetic world (stations on
+fixed loops, one RSU with a cycling signal, VRUs) through the **real** V2X network and channel
+code, plus a synthetic LiDAR (ground plane + boxes for stations with correct `object_idx`). All
+frontend work and all Playwright tests run against it. Node 22 and Chromium are available in the
+dev container.
 
 ---
 
@@ -454,24 +723,37 @@ Run `pytest -m "not carla"` green at the end of **every** phase.
   either fixed-as-stale (with a note) or `xfail(strict=True, reason=…)` with an issue reference.
 
 ### Phase 1 — Repo cleanup
-- Delete everything marked DELETE in §2.1 (after the archive tag). 🟨 D1/D3/D6 per human answers.
+- **Remove the monolithic/V2V plane completely** (Revision 2): every DELETE row in §2.1 and every
+  DELETE row in the §3.5 test table, after the archive tag. Keep `admin_panel.html` and
+  `client_join.html` (and the plane-B routes they call) as the only UI until Phase 6.
+  🟨 D1/D6 per human answers.
+- Strip from `src/visualization/lidar/server.py` everything listed in its §2.1 row. What remains
+  is just the app wiring for plane B. `/` currently serves the deleted `unified_viewer.html`. Until
+  Phase 6, make it a tiny page linking `/admin` and `/client`. The Docker healthcheck
+  (`Dockerfile`, `docker-compose.yml`) requests `/`, so it must keep returning 200.
 - `pyproject.toml`, `ruff` (lint + format), `pyright` basic on the new package, `pre-commit`.
 - `.env.example`. Remove the hardcoded admin token from compose.
-- **Accept:** `ruff check`, `pyright`, `pytest -m "not carla"` clean. `git grep -n "8001/" -- '*.html'` is empty.
-  No file outside `third_party/` is unused (check with `vulture` or a manual import graph).
+- **Accept:** `ruff check`, `pyright`, `pytest -m "not carla"` clean. These greps are empty:
+  `git grep -nE "api/simulation|api/v2v|v2v_complete_demo|V2VAPI|LiDARStreamingAPI|set_v2v_network|set_collector|8001/"`.
+  `src/scenarios/`, `src/utils/` (except the two kept files), `src/agents/`, `src/lidar/` are gone.
+  No remaining file is unused (check with `vulture` or an import graph). A live smoke test still
+  passes: admin connect → client join → telemetry.
 
 ### Phase 2 — Core skeleton (behaviour-preserving)
 - `config.py` (§5.2), `sim/controller.py` + `commands.py` (§5.1), `sim/sessions.py`, `api/app.py`
   factory with lifespan, routers ported from `admin_routes.py`/`client_routes.py` (same URLs for now).
 - Fix C1–C6, C8–C10, C12–C13 as part of this phase (they are architecture, not model changes).
-- `FakeController` for contract tests. Every endpoint has a request/response schema.
+- `testing/fake.py` `FakeController` for contract tests (extended with synthetic LiDAR in Phase 6).
+  Every endpoint has a request/response schema.
 - **Accept:** contract tests cover every endpoint. A live smoke test (`@carla`) joins 3 clients,
   spawns 50 vehicles and 20 pedestrians, runs 2 min: `frames_ticked == world frame delta`
   (no foreign ticks), WS telemetry measured at the configured rate ±5%, no exceptions in the log.
 
 ### Phase 3 — V2X: unify, make honest, make observable
-1. *Pure refactor commits:* merge V2V+V2X into `V2XNetwork`. Split messages, extractor and channel.
-   Rename BSM position fields (S8). Golden tests must stay identical.
+1. *Pure refactor commits:* move `src/v2v/*` into `v2x/` (§2.1) and merge into one `V2XNetwork`.
+   Delete the `v2v` package. Split messages, extractor and channel. Rename BSM position fields (S8).
+   Golden tests must stay identical. After this step the §2 naming rule holds (`git grep -in v2v`
+   finds only the allowed matches).
 2. *Model-change commits, one per item, each with a CHANGELOG entry and before/after numbers:*
    S2 (yaw rate), S7 (RSU grouping), S9/S10/S11 (kinematics from snapshot), S4 (all messages via
    channel), S3 (penetration rate, per D2), S13 (one range semantics), S14 (TTC from velocity
@@ -489,30 +771,51 @@ Run `pytest -m "not carla"` green at the end of **every** phase.
 ### Phase 4 — LiDAR
 - `LidarManager` with frame-synced collection (L3), `get_matrix()` transforms (L1) with the
   pitched/rolled test, protocol v3 (L2/L8) plus the JS decoder and cross-language fixture test,
-  runtime control API (§5.5), stream-only decimation (L5), validation (L7).
-- **Accept:** `@carla` test: enable → reconfigure (32→64 channels) → disable on a live session,
-  with no leaked sensor actors (`world.get_actors().filter('sensor.*')` count back to baseline).
+  sensor lifecycle state machine, auto-release, ownership and budget (§5.5), stream profiles with
+  encode-once fan-out, stream-only subsampling (L5), validation (L7).
+- **Accept:** unit tests (FakeController) for every lifecycle transition, auto-release after
+  `keep_alive_s`, the over-budget 409, and the ownership rules. `@carla` test: request → active →
+  reconfigure (32→64 channels) → viewer disconnect → auto-release, on a live session, with no
+  leaked sensor actors (`world.get_actors().filter('sensor.*')` count back to baseline).
+  Two viewers on the same profile get byte-identical frames (encoded once).
   Every streamed frame's `frame` equals a ticked frame. At 20 FPS with 3 LiDAR sessions at default
   config, tick p95 ≤ 50 ms on the lab machine. Record the measured number in the CHANGELOG
   either way.
 
 ### Phase 5 — API and WebSocket hub
-- WS hub (§5.0 `ws.py`): latest-value per client (`Queue(maxsize=1)`, drop the stale item, never
-  block the sim thread). Ping/pong in a separate task. Decide C11 per D4.
-- Versioned REST under `/api/…`, OpenAPI export committed to `docs/api.md`.
-- **Accept:** a slow WS client (artificially throttled) never slows `tick_duration_ms`. OpenAPI
-  schema diff is reviewed.
+- Topic hub (§5.7.3): multiplexed `/ws` with auth-first-message, subscribe/unsubscribe, per-topic
+  `max_hz` and filters, latest-wins per (client, topic), `seq` numbering. Separate binary
+  `/ws/lidar/{sensor_id}`. Decide C11 per D4.
+- `api/roles.py`: admin / vehicle / observer permissions on every endpoint and topic (§5.7.1).
+- REST from §5.5 and §5.7.2 (`/api/map/geometry`, `/api/config/schema`, `/api/lidar/*`, …).
+  OpenAPI export committed to `docs/api.md`.
+- **Accept:** a slow WS client (artificially throttled) never slows `tick_duration_ms`. Contract
+  tests prove every ground-truth topic is refused for a vehicle token, and that `v2x.links` without
+  a filter is refused. OpenAPI schema diff is reviewed.
 
-### Phase 6 — Frontend
-- `admin.html`, `client.html`, `observer.html` per §5.7. Delete the old pages.
-  Vendor Three.js (or pin with SRI).
-- **Accept:** a manual test script in `docs/running.md` (join, toggle LiDAR, change channels,
-  observe links) passes. A Playwright smoke test (Chromium is available) loads each page against
-  `FakeController` and checks there are no console errors.
+### Phase 6 — Frontend (§5.7 is the spec)
+- **6a Foundations:** `serve --fake` with synthetic LiDAR (§5.7.9). Vendored Three.js/uPlot.
+  `api.js`, `ws.js`, `store.js`, `coords.js`, `units.js`, `schema-form.js`, `lidar-decoder.js`
+  + Node tests (decoder fixture, coords fixture incl. pitched/rolled pose, map projection
+  handedness).
+- **6b Observer:** map view (both modes), inspector, link log, channel analytics, LiDAR viewer for
+  active sensors.
+- **6c Vehicle:** join, "my radio", own-perspective mini-map, LiDAR request/config/view with the
+  state badge.
+- **6d Admin:** all admin cards (§5.7.6). Then delete `admin_panel.html`, `client_join.html` and
+  the remaining `src/visualization/`.
+- **Accept:** Playwright against `serve --fake`: every page loads with no console errors;
+  vehicle requests LiDAR → badge goes `requested → … → active` → points render (count > 0) →
+  reconfigure → still renders → leave → sensor destroyed; an observer clicks a station → inspector
+  shows its inbox; a link click shows every `LinkResult` field; the vehicle page has no ground-truth
+  topic subscriptions (checked on the server). With 3 LiDAR views at 50k points/frame and 20 Hz,
+  the browser sustains ≥ 15 rendered fps on the lab machine (report the measured number). The
+  manual script in `docs/running.md` passes against live CARLA.
 
 ### Phase 7 — Recording and headless runs
 - `recording/` (§5.6), `carla-v2x run scenario.yaml` (seeded, `realtime=false`, scripted commands
-  at frames, fixed duration in frames). This replaces `v2v_complete_demo.py`.
+  at frames, fixed duration in frames). This is new code on the V2X server. The deleted monolithic
+  demo is not resurrected.
 - **Accept:** `@carla` reproducibility test: the same scenario twice gives byte-identical
   `v2x_links.jsonl` and `stations.jsonl` (if CARLA/TM physics prove non-deterministic, document the
   exact divergence frame and cause in `limitations.md`, and don't paper over it).
@@ -532,12 +835,17 @@ Run `pytest -m "not carla"` green at the end of **every** phase.
 |---|---|---|
 | D1 | Potholes: the use case was cancelled in `29bca10`. Delete all pothole code, endpoints, map instructions? | Delete (preserved by the archive tag) |
 | D2 | Should background traffic be V2X-equipped? If yes, with what **penetration rate**? This dominates channel load and neighbour statistics | Configurable, default `1.0` (all equipped, matches legacy plane A) |
-| D3 | Keep BehaviorAgent driving (vendored `src/agents/`) or TM autopilot only? Is **manual driving** of the client vehicle from the frontend in scope? | TM autopilot only; move agents to the archive. No manual driving |
+| D3 | ~~Keep BehaviorAgent driving?~~ **Resolved by Revision 2:** the monolithic demo is removed, so TM autopilot only and `src/agents/` is deleted. Still open: is **manual driving** of the own vehicle from the vehicle page in scope? | No manual driving |
 | D4 | WebSocket disconnect semantics: end the session immediately (current) or after a grace period? | Grace period 30 s (config), then despawn |
 | D5 | Channel model calibration: which reference dataset/paper should P_rx(d), shadowing σ and the MAC model be calibrated against? Keep "DSRC 802.11p" framing or also model C-V2X (PC5)? | Keep current parameters, fix the documentation to match the code, label CSMA experimental. No C-V2X |
 | D6 | ER database model: implement it (SQLite/Parquet recording schema) or delete it? | Treat the run directory (§5.6) as the schema and update the ER doc to match |
 | D7 | Git remotes: docs say team work lives on `gitlab` and `origin` is a GitHub fork. Which remote/branch receives the refactor? | Feature branches on `origin`, human merges |
 | D8 | Default V2X rate: 2 Hz (current) vs 10 Hz (J2945/1-style) vs ETSI CAM triggering? | 2 Hz configurable, the others as options |
+| D9 | Who may **create** LiDAR sensors? Can LiDAR go on non-client (background) vehicles? | Vehicle → own vehicle only; admin → any vehicle incl. background; observer → view active streams only |
+| D10 | May vehicle clients see ground truth (other stations' true positions), or strictly what their radio received? | Strictly received view (§4.7) |
+| D11 | Is admin **DENM injection** (hazard at a map position, through the channel) in scope? | Yes, admin only |
+| D12 | Is the observer page public on the LAN, or does it need a token too? | Public (`server.observer_public: true`), read-only |
+| D13 | Should "LiDAR sees vs V2X reports" become a **logged metric** (per pair and frame: LiDAR-visible = ≥ k points with `object_idx` = that actor, vs V2X-received), or stay a visual overlay? | Overlay now. Metric as an optional Phase 7 item after the human defines k and the semantics |
 
 ---
 
