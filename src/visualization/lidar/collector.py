@@ -4,12 +4,16 @@ LiDAR Data Collector for V2V Communication
 Collects and processes semantic LiDAR data from multiple vehicles.
 """
 
+from __future__ import annotations
+
 import numpy as np
-import carla
 import logging
 import threading
 import time as _time
-from typing import Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, Optional, Tuple
+
+if TYPE_CHECKING:
+    import carla
 
 try:
     try:
@@ -79,6 +83,7 @@ class LiDARDataCollector:
             lidar_bp.set_attribute(key, value)
         
         # Attach LiDAR to vehicle roof
+        import carla  # lazy: keeps this module importable without CARLA
         lidar_transform = carla.Transform(carla.Location(x=0.0, z=2.4))
         lidar_sensor = self.world.spawn_actor(lidar_bp, lidar_transform, attach_to=vehicle)
         

@@ -4,14 +4,17 @@ Flexible LiDAR Streaming API
 Provides reusable interface for V2V LiDAR visualization across different scenarios.
 """
 
+from __future__ import annotations
+
 import asyncio
 import logging
 import threading
 import time
-from typing import Optional, Callable
+from typing import TYPE_CHECKING, Optional, Callable
 from pathlib import Path
 
-import carla
+if TYPE_CHECKING:
+    import carla
 
 from .collector import LiDARDataCollector
 from .server import app, set_collector

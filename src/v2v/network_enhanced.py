@@ -7,11 +7,15 @@ update rate aligned with CARLA world.tick(), with no external broker or
 external processes.
 """
 
-import carla
-from typing import Dict, List, Optional, Tuple
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 import time
 import logging
 import math
+
+if TYPE_CHECKING:
+    import carla
 
 from .messages import (
     BSMCore, BSMPartII, V2VEnhancedMessage, DENM, DENMCauseCode,
