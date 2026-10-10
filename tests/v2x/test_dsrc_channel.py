@@ -528,7 +528,7 @@ class MockSnapshot:
         return self._snaps.get(actor_id)
 
 
-class TestV2VNetworkWithDSRC(unittest.TestCase):
+class TestV2XNetworkWithDSRC(unittest.TestCase):
     """
     Level 2 component test: V2XNetwork with the DSRC channel active.
     Uses zero-shadowing, zero-contention config so outcomes are

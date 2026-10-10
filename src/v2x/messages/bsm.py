@@ -29,7 +29,7 @@ class BrakingStatus(IntEnum):
 class BSMCore:
     """
     Basic Safety Message (BSM) - Core Data
-    Based on SAE J2735 standard for V2V communication.
+    Based on SAE J2735 standard for vehicle-to-vehicle communication.
     
     This is the essential data transmitted at high frequency (2-10 Hz)
     for cooperative awareness and collision avoidance.
@@ -98,14 +98,14 @@ class BSMPartII:
     exterior_lights: str = "off"  # off, low_beam, high_beam, fog
     wiper_status: str = "off"  # off, intermittent, low, high
     
-    # V2V specific
+    # Vehicle-to-vehicle specific
     cooperative_status: str = "available"  # available, busy, unavailable
 
 
 @dataclass
 class EnhancedBSMMessage:
     """
-    Enhanced V2V message combining BSM with sensor data sharing
+    Enhanced BSM combining BSM with sensor data sharing
     For cooperative perception and sensor fusion scenarios.
     """
     # Core BSM data

@@ -1,5 +1,5 @@
 """
-DSRC/WAVE (IEEE 802.11p) Channel Model for V2X/V2V Simulation
+DSRC/WAVE (IEEE 802.11p) Channel Model for V2X Simulation
 
 Models the physical medium characteristics of IEEE 802.11p (DSRC/WAVE) as used
 in SAE J2735 BSM broadcasts. Implements:
@@ -13,7 +13,7 @@ in SAE J2735 BSM broadcasts. Implements:
 
 All computation is in-process and deterministic (seeded RNG). No threads,
 no external broker, no connections to open or close. Call broadcast_all()
-once per V2V update tick, then query get_received() per vehicle.
+once per V2X update tick, then query get_received() per vehicle.
 
 Reference parameters follow ETSI EN 302 663 §4 for ITS-G5 Class A OBU:
   TX power: 23 dBm ERP, carrier: 5.9 GHz, bandwidth: 10 MHz.
@@ -79,7 +79,7 @@ class DSRCConfig:
     rx_sensitivity_dbm: float = -85.0 # 802.11p typical receiver sensitivity floor
 
     # ── Path loss model (log-distance + log-normal shadowing) ────────────────
-    # Calibrated for realistic PRR variation within 10-150m V2V ranges.
+    # Calibrated for realistic PRR variation within 10-150m vehicle-to-vehicle ranges.
     # Higher exponents and shadowing create meaningful differentiation:
     #   - At 50m LOS: P_rx ≈ -71 dBm → SNR margin ≈ +14 dB → PRR ≈ 0.98
     #   - At 100m LOS: P_rx ≈ -77 dBm → SNR margin ≈ +8 dB → PRR ≈ 0.92
@@ -179,7 +179,7 @@ class DSRCChannel:
                        Typically derived from bsm.x_m / bsm.y_m,
                        which store CARLA world coordinates (not geodetic).
 
-        Call once per V2V update tick. Results are stable until the next call.
+        Call once per V2X update tick. Results are stable until the next call.
         """
         self._received = {vid: {} for vid in bsm_messages}
         vehicle_ids = list(bsm_messages.keys())
@@ -307,7 +307,7 @@ class DSRCChannel:
         
         Based on empirical 802.11p measurements from:
           - Campolo et al. (2011): "IEEE 802.11p performance in vehicular networks"
-          - ETSI TR 102 863: "V2V channel congestion analysis"
+          - ETSI TR 102 863: "vehicle-to-vehicle channel congestion analysis"
         """
         if n_contenders <= 1:
             return 1.0

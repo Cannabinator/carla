@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Scientific integrity tests for V2V timing and threat calculations."""
+"""Scientific integrity tests for V2X timing and threat calculations."""
 
 import unittest
 import pytest
@@ -269,7 +269,7 @@ if __name__ == '__main__':
     unittest.main()
 
 
-class TestV2VStatsScientificValidity(unittest.TestCase):
+class TestV2XStatsScientificValidity(unittest.TestCase):
     """Verify that network statistics are scientifically sound."""
 
     def _make_net_with_neighbors(self, n_vehicles: int = 3, range_m: float = 200.0):

@@ -5,7 +5,7 @@ Implements a stationary ITS station that:
   - Generates MAP messages describing intersection geometry.
   - Reads CARLA TrafficLight state and produces live SPAT messages.
 
-The RSU transmits at the same 2 Hz cadence as V2V BSM beacons.
+The RSU transmits at the same 2 Hz cadence as the vehicles' BSM beacons.
 Per ETSI TR 101 607, RSUs use 33 dBm TX power (vs. 23 dBm for OBUs)
 and cover a 300 m intersection radius.
 

@@ -1,6 +1,6 @@
 # Docker Deployment Guide
 
-This guide explains how to run the CARLA V2V Research Platform frontend using Docker.
+This guide explains how to run the CARLA V2X Research Platform frontend using Docker.
 
 ## Quick Start
 

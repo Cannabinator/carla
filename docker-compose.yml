@@ -1,4 +1,4 @@
-# CARLA V2V Research Platform - Docker Compose
+# CARLA V2X Research Platform - Docker Compose
 #
 # Usage:
 #   docker-compose up -d        # Start in background

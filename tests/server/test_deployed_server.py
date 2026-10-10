@@ -31,7 +31,7 @@ def test_openapi_lists_expected_routes(server):
 
 
 def test_removed_monolith_endpoints_are_gone(server):
-    for path in ("/api/simulation/status", "/api/v2v/vehicles", "/v2v"):
+    for path in ("/api/simulation/status", "/api/v2x/vehicles", "/v2x"):
         assert server.request("GET", path)[0] == 404
 
 

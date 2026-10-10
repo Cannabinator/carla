@@ -18,8 +18,8 @@ Options
 --carla-port PORT   CARLA server port        (default: 2000)
 --admin-token TOKEN Admin API token          (default: read from ADMIN_TOKEN env)
 --port PORT         Web server port          (default: 8000)
---no-v2v            Disable V2V network
---v2v-range M       V2V cooperative range in metres (default: 75)
+--no-v2x            Disable the V2X network
+--v2x-range M       V2X cooperative range in metres (default: 75)
 """
 
 import argparse

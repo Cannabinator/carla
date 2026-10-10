@@ -1,5 +1,5 @@
 """
-V2X Network Manager — BSM (V2V) + RSU MAP/SPAT (V2I) + VRUAM (V2P) in one class.
+V2X Network Manager — BSM (vehicle-to-vehicle) + RSU MAP/SPAT (V2I) + VRUAM (V2P) in one class.
 
 Implements SAE J2735 BSM-based vehicle-to-vehicle communication over a physics-based
 DSRC/WAVE (IEEE 802.11p) channel model, plus RSU broadcasts (MAP, SPAT) and VRU
@@ -42,7 +42,7 @@ class V2XNetwork:
     Enhanced V2X network Manager with SAE J2735 BSM protocol support.
 
     Features:
-    - 2 Hz tick rate for V2V updates, gated on CARLA simulation time
+    - 2 Hz tick rate for BSM updates, gated on CARLA simulation time
     - SAE J2735 Basic Safety Message (BSM) protocol
     - IEEE 802.11p DSRC/WAVE channel model (log-distance path loss +
       log-normal shadowing + CSMA/CA contention)
@@ -209,7 +209,7 @@ class V2XNetwork:
             snapshot = self.world.get_snapshot()
         
         if snapshot is None:
-            logger.warning("No snapshot available for V2V update")
+            logger.warning("No snapshot available for V2X update")
             return False
 
         sim_time = self._extract_snapshot_time(snapshot)
@@ -266,7 +266,7 @@ class V2XNetwork:
         self.stats['total_messages_sent'] += successful_sends
 
         logger.debug(
-            "V2V update: %d vehicles, avg %.1f neighbours, channel PRR=%.3f",
+            "V2X update: %d vehicles, avg %.1f neighbours, channel PRR=%.3f",
             len(self.vehicles),
             self.stats['average_neighbors'],
             self._dsrc_channel.stats.get('prr', 1.0),
@@ -487,13 +487,13 @@ class V2XNetwork:
         """
         ego_bsm = self.bsm_messages.get(ego_id)
         if not ego_bsm:
-            return "V2V: No data"
+            return "V2X: No data"
         
         neighbors = self.neighbors.get(ego_id, [])
         threats = self.get_threats(ego_id)
         high_threats = [t for t in threats if t['level'] >= 3]
         
-        return (f"V2V: {ego_bsm.speed:5.1f}m/s | "
+        return (f"V2X: {ego_bsm.speed:5.1f}m/s | "
                 f"Heading:{ego_bsm.heading:6.1f}° | "
                 f"Neighbors:{len(neighbors):2d} | "
                 f"Threats:{len(high_threats):2d} | "

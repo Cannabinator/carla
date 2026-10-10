@@ -105,3 +105,24 @@ No V2X/channel model change (golden tests unchanged). Fixes handoff defects:
 - NOT verified against a real CARLA server: that actors spawned by `apply_batch_sync(..., False)` are
   visible to `world.get_actor` before the next tick, and that destroy batches without a tick behave.
   TODO(verify) - run `tests/server` with CARLA_HOST/CARLA_PORT (traffic/pedestrian/join tests).
+
+## Phase 3, step 1 - structure (2026-10-10, PURE REFACTOR: outputs bit-identical)
+
+Proof: the golden tests (DSRCChannel seed 42, 7 scenarios x 5 ticks; BSM extraction x 2) pass unchanged.
+For the BSM field rename the golden files were compared after renaming the keys: values identical.
+- `src/v2v/` deleted. One `V2XNetwork` class (was `V2VNetworkEnhanced` + subclass `V2XNetworkEnhanced`):
+  the subclass's `update()` wrapped the base `update()`; the base is now `_update_bsm()` and the public
+  `update()` calls it, then the RSU/VRU parts. Same order of operations.
+- Messages split (verbatim copy by AST range) into `v2x/messages/{bsm,cam,denm,map,spat,cpm,vruam}.py`,
+  plus `v2x/extract.py` (the only CARLA-reading module), `v2x/threat.py`, `v2x/constants.py`.
+  `V2VEnhancedMessage` -> `EnhancedBSMMessage`; `V2V_RANGE_*` -> `RANGE_*_M`.
+- Channel moved to `v2x/channel/dsrc_logdistance.py`. Duplicate `DSRCConfig` (and the whole of
+  `src/config.py`, otherwise unused) deleted; fields and defaults were identical.
+- S8: BSM `latitude/longitude/elevation` -> `x_m/y_m/z_m` (they always held CARLA metres).
+- Tests consolidated into `tests/v2x/` (not `tests/unit/v2x/` as the handoff suggests, to keep the
+  relative paths used by several files); `v2v` removed from names.
+- Behaviour fix (not a model change): the admin page sent `v2v_range`/`v2v_enabled` while the server
+  reads `v2x_range`/`v2x_enabled`, so the range box was silently ignored (always 75 m, V2X on). The page
+  now sends the right keys.
+- Left as is: docker container/network names (`carla-v2v-*`) so existing deployments are unaffected;
+  stale `docs/agents/*` and `.instructions.md` (replaced in Phase 8); `.gitignore` entries.

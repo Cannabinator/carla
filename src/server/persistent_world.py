@@ -175,7 +175,7 @@ class PersistentCARLAServer:
         self.spawn_points = self.world.get_map().get_spawn_points()
         logger.info("Map has %d spawn points", len(self.spawn_points))
 
-        # Optional V2X network (V2V + V2I RSU + V2P VRU)
+        # Optional V2X network (BSM between vehicles + V2I RSU + V2P VRU)
         if self.v2x_enabled:
             self._init_v2x()
 

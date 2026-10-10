@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Comprehensive tests for V2V LiDAR Visualization System
+Comprehensive tests for V2X LiDAR Visualization System
 Tests backend, coordinate transformations, and data streaming.
 """
 

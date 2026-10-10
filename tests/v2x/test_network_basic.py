@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Simplified V2V Network Tests
-Tests core V2V functionality with mock objects.
+Simplified V2X Network Tests
+Tests core V2X functionality with mock objects.
 """
 
 import unittest
@@ -143,40 +143,40 @@ class MockWorld:
         self.elapsed_seconds = elapsed_seconds
 
 
-class TestV2VBasics(unittest.TestCase):
-    """Test basic V2V network functionality"""
+class TestV2XBasics(unittest.TestCase):
+    """Test basic V2X network functionality"""
     
     def test_network_creation(self):
-        """Test creating V2V network"""
-        v2v = V2XNetwork(max_range=100.0, update_rate_hz=2.0, dsrc_config=_transparent_dsrc())
-        self.assertIsNotNone(v2v)
-        self.assertEqual(v2v.max_range, 100.0)
-        self.assertEqual(v2v.update_rate_hz, 2.0)
+        """Test creating V2X network"""
+        v2x = V2XNetwork(max_range=100.0, update_rate_hz=2.0, dsrc_config=_transparent_dsrc())
+        self.assertIsNotNone(v2x)
+        self.assertEqual(v2x.max_range, 100.0)
+        self.assertEqual(v2x.update_rate_hz, 2.0)
     
     def test_vehicle_registration(self):
         """Test registering vehicles"""
         world = MockWorld()
-        v2v = V2XNetwork(max_range=100.0, world=world, dsrc_config=_transparent_dsrc())
+        v2x = V2XNetwork(max_range=100.0, world=world, dsrc_config=_transparent_dsrc())
         v1 = MockVehicle(1, 0, 0)
         world.add_vehicle(v1)
         
-        v2v.register(1, v1)
-        self.assertIn(1, v2v.vehicles)
+        v2x.register(1, v1)
+        self.assertIn(1, v2x.vehicles)
         
-        v2v.unregister(1)
-        self.assertNotIn(1, v2v.vehicles)
+        v2x.unregister(1)
+        self.assertNotIn(1, v2x.vehicles)
     
     def test_bsm_creation(self):
         """Test BSM message creation"""
         world = MockWorld()
-        v2v = V2XNetwork(max_range=100.0, world=world, dsrc_config=_transparent_dsrc())
+        v2x = V2XNetwork(max_range=100.0, world=world, dsrc_config=_transparent_dsrc())
         v1 = MockVehicle(1, 100, 50)
         world.add_vehicle(v1)
         
-        v2v.register(1, v1)
-        v2v.update(force=True)
+        v2x.register(1, v1)
+        v2x.update(force=True)
         
-        bsm = v2v.get_bsm(1)
+        bsm = v2x.get_bsm(1)
         self.assertIsNotNone(bsm)
         self.assertEqual(bsm.vehicle_id, 1)
         self.assertEqual(bsm.x_m, 100)
@@ -185,7 +185,7 @@ class TestV2VBasics(unittest.TestCase):
     def test_neighbor_discovery(self):
         """Test neighbor discovery within range"""
         world = MockWorld()
-        v2v = V2XNetwork(max_range=100.0, world=world, dsrc_config=_transparent_dsrc())
+        v2x = V2XNetwork(max_range=100.0, world=world, dsrc_config=_transparent_dsrc())
         
         v1 = MockVehicle(1, 0, 0)
         v2 = MockVehicle(2, 50, 0)  # 50m away
@@ -193,11 +193,11 @@ class TestV2VBasics(unittest.TestCase):
         
         for v in [v1, v2, v3]:
             world.add_vehicle(v)
-            v2v.register(v.id, v)
+            v2x.register(v.id, v)
         
-        v2v.update(force=True)
+        v2x.update(force=True)
         
-        neighbors = v2v.get_neighbors(1)
+        neighbors = v2x.get_neighbors(1)
         neighbor_ids = [n.vehicle_id for n in neighbors]
         
         self.assertIn(2, neighbor_ids)  # Should be in range
@@ -206,14 +206,14 @@ class TestV2VBasics(unittest.TestCase):
     def test_network_stats(self):
         """Test network statistics"""
         world = MockWorld()
-        v2v = V2XNetwork(max_range=100.0, world=world, dsrc_config=_transparent_dsrc())
+        v2x = V2XNetwork(max_range=100.0, world=world, dsrc_config=_transparent_dsrc())
         
         v1 = MockVehicle(1, 0, 0)
         world.add_vehicle(v1)
-        v2v.register(1, v1)
-        v2v.update(force=True)
+        v2x.register(1, v1)
+        v2x.update(force=True)
         
-        stats = v2v.get_network_stats()
+        stats = v2x.get_network_stats()
         
         self.assertIn('total_messages_sent', stats)
         self.assertIn('average_neighbors', stats)
@@ -223,80 +223,80 @@ class TestV2VBasics(unittest.TestCase):
     def test_message_counter_wraps_at_128(self):
         """Message counters should wrap from 127 back to 0."""
         world = MockWorld()
-        v2v = V2XNetwork(max_range=100.0, world=world, dsrc_config=_transparent_dsrc())
+        v2x = V2XNetwork(max_range=100.0, world=world, dsrc_config=_transparent_dsrc())
 
         v1 = MockVehicle(1, 0, 0)
         world.add_vehicle(v1)
-        v2v.register(1, v1)
-        v2v.msg_counters[1] = 127
+        v2x.register(1, v1)
+        v2x.msg_counters[1] = 127
 
-        v2v.update(force=True)
-        self.assertEqual(v2v.get_bsm(1).msg_count, 127)
-        self.assertEqual(v2v.msg_counters[1], 0)
+        v2x.update(force=True)
+        self.assertEqual(v2x.get_bsm(1).msg_count, 127)
+        self.assertEqual(v2x.msg_counters[1], 0)
 
     def test_neighbor_range_boundary_is_inclusive(self):
         """Vehicles exactly at max_range must still be treated as neighbors."""
         world = MockWorld()
-        v2v = V2XNetwork(max_range=50.0, world=world, dsrc_config=_transparent_dsrc())
+        v2x = V2XNetwork(max_range=50.0, world=world, dsrc_config=_transparent_dsrc())
 
         v1 = MockVehicle(1, 0, 0)
         v2 = MockVehicle(2, 50, 0)  # Exactly at boundary
         world.add_vehicle(v1)
         world.add_vehicle(v2)
-        v2v.register(1, v1)
-        v2v.register(2, v2)
+        v2x.register(1, v1)
+        v2x.register(2, v2)
 
-        v2v.update(force=True)
-        neighbors = [n.vehicle_id for n in v2v.get_neighbors(1)]
+        v2x.update(force=True)
+        neighbors = [n.vehicle_id for n in v2x.get_neighbors(1)]
         self.assertIn(2, neighbors)
 
     def test_distance_symmetry(self):
         """Distance lookup should be symmetric for vehicle pairs."""
         world = MockWorld()
-        v2v = V2XNetwork(max_range=200.0, world=world, dsrc_config=_transparent_dsrc())
+        v2x = V2XNetwork(max_range=200.0, world=world, dsrc_config=_transparent_dsrc())
 
         v1 = MockVehicle(1, 10, 20)
         v2 = MockVehicle(2, 40, 60)
         world.add_vehicle(v1)
         world.add_vehicle(v2)
-        v2v.register(1, v1)
-        v2v.register(2, v2)
+        v2x.register(1, v1)
+        v2x.register(2, v2)
 
-        v2v.update(force=True)
-        self.assertAlmostEqual(v2v.get_distance(1, 2), v2v.get_distance(2, 1), places=6)
+        v2x.update(force=True)
+        self.assertAlmostEqual(v2x.get_distance(1, 2), v2x.get_distance(2, 1), places=6)
 
     def test_unregister_removes_from_neighbors_on_next_update(self):
         """Removed vehicles must not remain discoverable as neighbors."""
         world = MockWorld()
-        v2v = V2XNetwork(max_range=200.0, world=world, dsrc_config=_transparent_dsrc())
+        v2x = V2XNetwork(max_range=200.0, world=world, dsrc_config=_transparent_dsrc())
 
         v1 = MockVehicle(1, 0, 0)
         v2 = MockVehicle(2, 20, 0)
         world.add_vehicle(v1)
         world.add_vehicle(v2)
-        v2v.register(1, v1)
-        v2v.register(2, v2)
-        v2v.update(force=True)
-        self.assertIn(2, [n.vehicle_id for n in v2v.get_neighbors(1)])
+        v2x.register(1, v1)
+        v2x.register(2, v2)
+        v2x.update(force=True)
+        self.assertIn(2, [n.vehicle_id for n in v2x.get_neighbors(1)])
 
-        v2v.unregister(2)
-        v2v.update(force=True)
-        self.assertNotIn(2, [n.vehicle_id for n in v2v.get_neighbors(1)])
+        v2x.unregister(2)
+        v2x.update(force=True)
+        self.assertNotIn(2, [n.vehicle_id for n in v2x.get_neighbors(1)])
 
     def test_bidirectional_sharing_honors_share_distance_threshold(self):
         """Cooperative sharing should only include neighbors within share distance."""
         world = MockWorld()
-        v2v = V2XNetwork(max_range=100.0, world=world, dsrc_config=_transparent_dsrc())
+        v2x = V2XNetwork(max_range=100.0, world=world, dsrc_config=_transparent_dsrc())
 
         src = MockVehicle(1, 0, 0)
         near = MockVehicle(2, 49.5, 0)
         far = MockVehicle(3, 70, 0)
         for v in [src, near, far]:
             world.add_vehicle(v)
-            v2v.register(v.id, v)
+            v2x.register(v.id, v)
 
-        v2v.update(force=True)
-        recipients = v2v.enable_bidirectional_sharing(1, {'dummy': True})
+        v2x.update(force=True)
+        recipients = v2x.enable_bidirectional_sharing(1, {'dummy': True})
         self.assertIn(2, recipients)
         self.assertNotIn(3, recipients)
 
@@ -304,23 +304,23 @@ class TestV2VBasics(unittest.TestCase):
     def test_scalability_100_vehicles_all_neighbors(self):
         """With large range, each vehicle should discover all other vehicles in a 100-vehicle run."""
         world = MockWorld()
-        v2v = V2XNetwork(max_range=10000.0, world=world, dsrc_config=_transparent_dsrc())
+        v2x = V2XNetwork(max_range=10000.0, world=world, dsrc_config=_transparent_dsrc())
 
         vehicle_count = 100
         for i in range(vehicle_count):
             # Spread along x-axis to keep deterministic positions.
             vehicle = MockVehicle(i, x=i * 2, y=0)
             world.add_vehicle(vehicle)
-            v2v.register(i, vehicle)
+            v2x.register(i, vehicle)
 
-        v2v.update(force=True)
+        v2x.update(force=True)
 
         # Every vehicle should have all others as neighbors when range is huge.
         for i in range(vehicle_count):
-            neighbors = v2v.get_neighbors(i)
+            neighbors = v2x.get_neighbors(i)
             self.assertEqual(len(neighbors), vehicle_count - 1)
 
-        stats = v2v.get_network_stats()
+        stats = v2x.get_network_stats()
         self.assertEqual(stats['max_neighbors'], vehicle_count - 1)
         self.assertEqual(stats['average_neighbors'], float(vehicle_count - 1))
         self.assertEqual(stats['total_messages_sent'], vehicle_count)
@@ -328,17 +328,17 @@ class TestV2VBasics(unittest.TestCase):
     def test_one_line_status(self):
         """Test one-line status output"""
         world = MockWorld()
-        v2v = V2XNetwork(max_range=100.0, world=world, dsrc_config=_transparent_dsrc())
+        v2x = V2XNetwork(max_range=100.0, world=world, dsrc_config=_transparent_dsrc())
         
         v1 = MockVehicle(1, 0, 0)
         v1._velocity = MockVector(15, 0, 0)
         world.add_vehicle(v1)
-        v2v.register(1, v1)
-        v2v.update(force=True)
+        v2x.register(1, v1)
+        v2x.update(force=True)
         
-        status = v2v.get_one_line_status(1)
+        status = v2x.get_one_line_status(1)
         
-        self.assertIn('V2V:', status)
+        self.assertIn('V2X:', status)
         self.assertIn('m/s', status)
         self.assertIn('Neighbors:', status)
 
@@ -346,7 +346,7 @@ class TestV2VBasics(unittest.TestCase):
 def run_tests():
     """Run all tests"""
     loader = unittest.TestLoader()
-    suite = loader.loadTestsFromTestCase(TestV2VBasics)
+    suite = loader.loadTestsFromTestCase(TestV2XBasics)
     
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)

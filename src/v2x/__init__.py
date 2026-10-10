@@ -1,4 +1,4 @@
-"""V2X communication: BSM/CAM/DENM between vehicles (V2V link), RSU MAP/SPAT (V2I), VRUAM (V2P)."""
+"""V2X communication: BSM/CAM/DENM between vehicles (vehicle-to-vehicle link), RSU MAP/SPAT (V2I), VRUAM (V2P)."""
 
 from .channel import DSRCChannel, DSRCConfig
 from .messages import (

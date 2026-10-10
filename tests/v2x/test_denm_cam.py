@@ -13,7 +13,7 @@ Level 1 (pure unit) — no CARLA runtime required.
 
 
 # Re-use mock infrastructure from the existing basic test suite
-from tests.v2v.test_v2v_basic import (
+from tests.v2x.test_network_basic import (
     _transparent_dsrc,
 )
 

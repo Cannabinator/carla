@@ -51,7 +51,7 @@ def test_pages_return_200_html(client, path):
 
 
 def test_unknown_page_is_404(client):
-    assert client.get("/v2v").status_code == 404
+    assert client.get("/v2x").status_code == 404
     assert client.get("/api/simulation/status").status_code == 404
 
 

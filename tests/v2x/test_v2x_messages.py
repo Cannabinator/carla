@@ -429,7 +429,7 @@ class TestV2XNetwork(unittest.TestCase):
 
     def test_update_populates_spat_and_map(self):
         net = self._make_network()
-        # Register a vehicle so V2V update proceeds
+        # Register a vehicle so V2X update proceeds
         veh = _MockVehicle(vid=0, x=0.0, y=0.0)
         net.register(0, veh)
         rsu = self._make_rsu(iid=3)
@@ -527,10 +527,10 @@ class TestV2XNetwork(unittest.TestCase):
         self.assertEqual(summary["active_spat"], 2)
         self.assertEqual(summary["active_vruam"], 1)
 
-    # ── backward compat: V2V interface still works ─────────────────────────
+    # ── backward compat: V2X interface still works ─────────────────────────
 
-    def test_v2v_register_and_get_neighbors_still_works(self):
-        """V2XNetwork must not break existing V2V behavior."""
+    def test_v2x_register_and_get_neighbors_still_works(self):
+        """V2XNetwork must not break existing V2X behavior."""
         net = self._make_network()
         veh0 = _MockVehicle(vid=0, x=0.0,  y=0.0)
         veh1 = _MockVehicle(vid=1, x=10.0, y=0.0)
