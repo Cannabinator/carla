@@ -127,7 +127,8 @@ def new_page(browser, fake_server):
     contexts = []
 
     def make(viewport=(1400, 900), dark=False):
-        ctx = browser.new_context(viewport={"width": viewport[0], "height": viewport[1]},
+        # locale: this container's LANG is "en-US@posix", which Chromium's Intl rejects ("Invalid language tag")
+        ctx = browser.new_context(viewport={"width": viewport[0], "height": viewport[1]}, locale="en-US",
                                   color_scheme="dark" if dark else "light")
         contexts.append(ctx)
         return Page(ctx.new_page())

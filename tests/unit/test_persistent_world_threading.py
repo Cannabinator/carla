@@ -463,7 +463,7 @@ def test_published_world_state_run_status_and_v2x_views(env):
 
     summary = srv.get_v2x_published()
     assert actor_id in {s["station_id"] for s in summary.data["stations"]} and summary.frame == srv.get_v2x_frame().frame
-    assert srv.get_v2x_stats().data["window_updates"] >= 1
+    assert srv.get_v2x_stats().data["window"]["updates"] >= 1
 
 
 def test_world_state_versions_increase_and_follow_the_configured_rate(env):

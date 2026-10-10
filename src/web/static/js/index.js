@@ -32,7 +32,7 @@ async function refresh() {
       row('Observer access', s.observer_public ? 'public' : 'disabled (token needed)');
       row('Recording', s.run_active ? 'running' : 'no run active');
     }
-    document.getElementById('stamp').textContent = new Date().toLocaleTimeString();
+    document.getElementById('stamp').textContent = new Date().toISOString().slice(11, 19) + ' UTC';
   } catch (e) {
     el.textContent = '';
     row('Server', `unreachable: ${e.message}`);

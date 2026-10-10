@@ -67,6 +67,11 @@ async def root():
     return _new_page("index.html")
 
 
+@app.get("/observer", include_in_schema=False)
+async def observer_page():
+    return _new_page("observer.html")
+
+
 @app.get("/admin", include_in_schema=False)
 async def admin_panel():
     return _page("admin_panel.html", "Admin panel")

@@ -206,8 +206,9 @@ def _inbox(ctx: ProviderContext) -> Optional[Published]:
         msgs = [{"tx_id": m.tx_id, "msg_type": m.msg_type, "message": message_to_dict(m.message),
                  "link": link_to_dict(m.link)} for m in frame.inbox.get(sid, ())]
         threats = [t._asdict() for t in frame.threats.get(sid, ())]
+        sent = [message_to_dict(m) for m in frame.sent.get(sid, ())]          # what this station transmitted
         data = {"station_id": sid, "known_station": sid in frame.stations, "messages": msgs,
-                "threats": to_jsonable(threats)}
+                "threats": to_jsonable(threats), "sent": sent}
         hit = ctx.cache[key] = Published(frame.frame, frame.frame, frame.sim_time, data)
     return hit
 

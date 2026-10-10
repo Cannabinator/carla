@@ -48,7 +48,12 @@ Notes on the data:
   "truncated": bool}`; `columns` are the fields of a link result (see docs/science/model.md). A filter with at
   least one of `station_ids`, `msg_types`, `link_types`, `outcome` is required, otherwise the subscription is
   refused (`filter_required`): one V2X update with 100 equipped vehicles has about 10,000 links.
-* `v2x.inbox` needs `{"station_id": n}`; a vehicle may only ask for its own station (the default).
+* `v2x.inbox` needs `{"station_id": n}`; a vehicle may only ask for its own station (the default). `messages` are
+  what the station received (with the link result that delivered each), `sent` what it transmitted in that update,
+  `threats` are computed from its inbox.
+* `v2x.stats` has two blocks, `window` (the last `window_s` = 60 s of simulation time) and `run` (everything since
+  the world started), both with PRR per 10 m distance bin (LOS and NLOS apart, Wilson 95 % interval), outcome counts
+  per link type and receive-margin histograms.
 * `world.state` takes an optional `{"kinds": ["vehicle", "pedestrian"]}`.
 * `events` starts with the last 50 events, then sends only new ones (`dropped: true` if the log overflowed).
 * Station ids: vehicles and pedestrians use the CARLA actor id, an RSU `-intersection_id`, a fixed DENM

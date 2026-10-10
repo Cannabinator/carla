@@ -24,7 +24,8 @@ def frame(links, n=1):
 def test_empty_window():
     s = V2XStats()
     snap = s.snapshot()
-    assert snap["window_updates"] == 0 and snap["prr_by_distance"] == {} and snap["sim_time_span"] is None
+    for part in (snap["window"], snap["run"]):
+        assert part["updates"] == 0 and part["prr_by_distance"] == {} and part["sim_time_span"] is None
 
 
 def test_prr_by_distance_bin_los_nlos_and_link_type():
@@ -36,7 +37,7 @@ def test_prr_by_distance_bin_los_nlos_and_link_type():
         link(500, True),                                                # overflow bin
         link(10, True, link_type="I2V"),
     ]))
-    p = s.snapshot()["prr_by_distance"]
+    p = s.snapshot()["window"]["prr_by_distance"]
     assert set(p) == {"V2V/LOS", "V2V/NLOS", "I2V/LOS"}
     assert p["V2V/LOS"]["counted"][:2] == [3, 2] and p["V2V/LOS"]["delivered"][:2] == [2, 1]
     assert p["V2V/LOS"]["prr"][0] == pytest.approx(2 / 3) and p["V2V/LOS"]["prr"][1] == 0.5
@@ -52,27 +53,42 @@ def test_awareness_drops_are_not_counted_in_prr_but_are_in_drops():
     s.add(frame([link(5, True), link(5, False, cause=DROP_AWARENESS), link(5, False, cause=DROP_MAC),
                  link(5, False, cause=DROP_CHANNEL)]))
     snap = s.snapshot()
-    assert snap["prr_by_distance"]["V2V/LOS"]["counted"][0] == 3             # delivered, mac, channel
-    assert snap["prr_by_distance"]["V2V/LOS"]["prr"][0] == pytest.approx(1 / 3)
-    assert snap["drops"]["V2V"] == {"delivered": 1, DROP_CHANNEL: 1, DROP_MAC: 1, DROP_AWARENESS: 1}
+    assert snap["window"]["prr_by_distance"]["V2V/LOS"]["counted"][0] == 3             # delivered, mac, channel
+    assert snap["window"]["prr_by_distance"]["V2V/LOS"]["prr"][0] == pytest.approx(1 / 3)
+    assert snap["window"]["drops"]["V2V"] == {"delivered": 1, DROP_CHANNEL: 1, DROP_MAC: 1, DROP_AWARENESS: 1}
 
 
-def test_window_slides():
-    s = V2XStats(window_updates=2)
-    s.add(frame([link(5, True)], n=1))
-    s.add(frame([link(5, False)], n=2))
-    s.add(frame([link(5, False)], n=3))
+def test_window_slides_in_simulated_seconds_while_the_run_keeps_everything():
+    s = V2XStats(window_s=1.0)
+    s.add(frame([link(5, True)], n=1))          # sim time 0.5 (frame(n) uses n * 0.5)
+    s.add(frame([link(5, False)], n=2))         # 1.0
+    s.add(frame([link(5, False)], n=3))         # 1.5
     snap = s.snapshot()
-    assert snap["window_updates"] == 2 and snap["first_frame"] == 2 and snap["last_frame"] == 3
-    assert snap["prr_by_distance"]["V2V/LOS"]["prr"][0] == 0.0                # the delivered link left the window
-    assert snap["sim_time_span"] == [1.0, 1.5]
+    w, r = snap["window"], snap["run"]
+    assert w["updates"] == 3 and w["first_frame"] == 1                 # 1.5 - 0.5 = 1.0 is still inside the window
+    s.add(frame([link(5, False)], n=4))         # 2.0: the first update (0.5) is now older than 1.0 s
+    w, r = s.snapshot()["window"], s.snapshot()["run"]
+    assert w["updates"] == 3 and w["first_frame"] == 2 and w["last_frame"] == 4
+    assert w["prr_by_distance"]["V2V/LOS"]["prr"][0] == 0.0            # the delivered link left the window
+    assert r["updates"] == 4 and r["first_frame"] == 1
+    assert r["prr_by_distance"]["V2V/LOS"]["prr"][0] == pytest.approx(0.25)
+    assert w["sim_time_span"] == [1.0, 2.0] and r["sim_time_span"] == [0.5, 2.0]
+
+
+def test_a_restarted_simulation_resets_window_and_run():
+    s = V2XStats(window_s=60.0)
+    s.add(frame([link(5, True)], n=10))
+    s.add(frame([link(5, False)], n=2))         # sim time went backwards
+    snap = s.snapshot()
+    assert snap["window"]["updates"] == 1 and snap["run"]["updates"] == 1
+    assert snap["run"]["prr_by_distance"]["V2V/LOS"]["prr"][0] == 0.0
 
 
 def test_margin_histogram_clips_and_separates_delivered():
     s = V2XStats()
     s.add(frame([link(10, True, margin=12.0), link(10, True, margin=100.0), link(10, False, margin=-80.0),
                  link(10, False, margin=-3.0, cause=DROP_AWARENESS)]))
-    h = s.snapshot()["rx_margin_hist"]
+    h = s.snapshot()["window"]["rx_margin_hist"]
     assert h["edges_db"] == MARGIN_EDGES_DB and sum(h["delivered"]) == 2 and sum(h["dropped"]) == 1
     assert h["delivered"][-1] == 1                                           # 100 dB clipped into the last bin
     assert h["delivered"][MARGIN_EDGES_DB.index(10)] == 1                    # 12 dB in [10, 15)
@@ -110,7 +126,7 @@ def test_wilson_interval_empty_and_bounds():
 def test_stats_carry_the_interval_per_bin():
     s = V2XStats(bin_m=10.0, max_distance_m=50.0)
     s.add(frame([link(5, True)] * 8 + [link(5, False)] * 2 + [link(25, True)]))
-    p = s.snapshot()["prr_by_distance"]["V2V/LOS"]
+    p = s.snapshot()["window"]["prr_by_distance"]["V2V/LOS"]
     assert p["prr"][0] == pytest.approx(0.8)
     assert p["ci95_low"][0] == pytest.approx(0.4902, abs=1e-3) and p["ci95_high"][0] == pytest.approx(0.9433, abs=1e-3)
     assert p["ci95_low"][2] == pytest.approx(0.2065, abs=1e-3)                       # 1 of 1, in the 20-30 m bin

@@ -342,6 +342,7 @@ def test_inbox_needs_a_station(client, world):
         send(ws, op="subscribe", topic="v2x.inbox", filter={"station_id": 102})
         m = recv(ws, "v2x.inbox")[0]
         assert [x["tx_id"] for x in m["data"]["messages"]] == [101] and m["data"]["threats"][0]["other_id"] == 101
+        assert [x["type"] for x in m["data"]["sent"]] == ["BSMCore"] and m["data"]["sent"][0]["vehicle_id"] == 102
 
 
 # ── other topics ──────────────────────────────────────────────────────────────────────────────────
@@ -353,7 +354,7 @@ def test_v2x_frame_and_stats_topics(client, world):
         assert {s["station_id"] for s in d["stations"]} == {101, 102, -1, 300} and d["denms"][0]["action_id"] == 7
         send(ws, op="subscribe", topic="v2x.stats")
         s = recv(ws, "v2x.stats")[0]["data"]
-        assert s["window_updates"] == 1 and "V2V/LOS" in s["prr_by_distance"]
+        assert s["window"]["updates"] == 1 and s["run"]["updates"] == 1 and "V2V/LOS" in s["window"]["prr_by_distance"]
         send(ws, op="subscribe", topic="run.status")
         assert recv(ws, "run.status")[0]["data"]["frame"] == 42
 

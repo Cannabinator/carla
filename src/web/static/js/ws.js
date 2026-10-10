@@ -12,8 +12,9 @@ export class HubSocket {
    * @param {(h: any) => void} [o.clearTimeoutImpl]
    * @param {() => number} [o.random]
    */
-  constructor(url, { credentials = () => null, WebSocketImpl = globalThis.WebSocket, setTimeoutImpl = setTimeout,
-    clearTimeoutImpl = clearTimeout, random = Math.random, baseDelayMs = 500, maxDelayMs = 15000, pingEveryMs = 15000 } = {}) {
+  constructor(url, { credentials = () => null, WebSocketImpl = globalThis.WebSocket,
+    // wrapped: calling window.setTimeout as a method of another object throws "Illegal invocation"
+    setTimeoutImpl = (fn, ms) => setTimeout(fn, ms), clearTimeoutImpl = (h) => clearTimeout(h), random = () => Math.random(), baseDelayMs = 500, maxDelayMs = 15000, pingEveryMs = 15000 } = {}) {
     this.url = url;
     this.credentials = credentials;
     this.WebSocketImpl = WebSocketImpl;

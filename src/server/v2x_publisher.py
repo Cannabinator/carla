@@ -14,8 +14,8 @@ from src.v2x.stats import V2XStats
 
 
 class V2XPublisher:
-    def __init__(self, window_updates: int = 20):
-        self._stats = V2XStats(window_updates=window_updates)
+    def __init__(self, window_s: float = 60.0):
+        self._stats = V2XStats(window_s=window_s)
         self.frame: Optional[V2XFrame] = None
         self.summary: Optional[Published] = None
         self.stats: Optional[Published] = None

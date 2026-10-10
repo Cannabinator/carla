@@ -1,4 +1,4 @@
-"""Pre-binned channel statistics over a sliding window of V2X updates (REFACTOR_HANDOFF 5.7.2, topic v2x.stats).
+"""Pre-binned channel statistics over a sliding window of simulation time and over the whole run (REFACTOR_HANDOFF 5.7.2, topic v2x.stats).
 
 The browser gets bins, never raw links: with 100 equipped vehicles one update has ~10,000 links. Everything here
 is computed from the same ``LinkResult`` rows the recorder writes, so a plot can be reproduced from a run.
@@ -40,14 +40,60 @@ def wilson_interval(k: int, n: int, z: float = 1.959963984540054) -> Tuple[Optio
     return lo, hi
 
 
+class _Agg:
+    """Counts of one V2X update (or the sum of several): per series (link type / LOS|NLOS) and distance bin the
+    number of counted and delivered links, outcome counts per link type, receive-margin histograms."""
+
+    def __init__(self, n_bins: int):
+        self.n_bins = n_bins
+        self.series: Dict[str, List[np.ndarray]] = {}
+        self.drops: Dict[str, Dict[str, int]] = {}
+        self.hist_deliv = np.zeros(len(MARGIN_EDGES_DB) - 1, dtype=np.int64)
+        self.hist_drop = np.zeros(len(MARGIN_EDGES_DB) - 1, dtype=np.int64)
+        self.updates = 0
+
+    def merge(self, other: "_Agg") -> None:
+        for k, (n, d) in other.series.items():
+            mine = self.series.setdefault(k, [np.zeros(self.n_bins, dtype=np.int64), np.zeros(self.n_bins, dtype=np.int64)])
+            mine[0] = mine[0] + n
+            mine[1] = mine[1] + d
+        for lt, c in other.drops.items():
+            acc = self.drops.setdefault(lt, {"delivered": 0, DROP_CHANNEL: 0, DROP_MAC: 0, DROP_AWARENESS: 0})
+            for kk, vv in c.items():
+                acc[kk] += vv
+        self.hist_deliv = self.hist_deliv + other.hist_deliv
+        self.hist_drop = self.hist_drop + other.hist_drop
+        self.updates += other.updates
+
+
 class V2XStats:
-    def __init__(self, window_updates: int = 20, bin_m: float = 10.0, max_distance_m: float = 400.0):
-        self.window = window_updates
+    """Aggregates over the last ``window_s`` seconds of SIMULATION time and over the whole run (since the first
+    update this object saw)."""
+
+    def __init__(self, window_s: float = 60.0, bin_m: float = 10.0, max_distance_m: float = 400.0):
+        self.window_s = float(window_s)
         self.bin_m = float(bin_m)
         self.n_bins = int(round(max_distance_m / bin_m)) + 1       # +1: overflow bin
-        self._updates: Deque[Dict[str, Any]] = deque(maxlen=window_updates)
+        self._window: Deque[Tuple[int, float, _Agg]] = deque()     # (frame, sim_time, aggregate)
+        self._run = _Agg(self.n_bins)
+        self._run_first: Optional[Tuple[int, float]] = None
+        self._run_last: Optional[Tuple[int, float]] = None
 
     def add(self, frame: V2XFrame) -> None:
+        agg = self._aggregate(frame)
+        if self._window and frame.sim_time < self._window[-1][1]:       # the simulation restarted
+            self._window.clear()
+            self._run = _Agg(self.n_bins)
+            self._run_first = None
+        self._window.append((frame.frame, frame.sim_time, agg))
+        while len(self._window) > 1 and self._window[0][1] < frame.sim_time - self.window_s:
+            self._window.popleft()
+        self._run.merge(agg)
+        if self._run_first is None:
+            self._run_first = (frame.frame, frame.sim_time)
+        self._run_last = (frame.frame, frame.sim_time)
+
+    def _aggregate(self, frame: V2XFrame) -> _Agg:
         links = frame.links
         n = len(links)
         dist = np.fromiter((l.distance_m for l in links), dtype=np.float64, count=n)
@@ -59,62 +105,58 @@ class V2XStats:
         counted = cause != DROP_AWARENESS
         bins = np.minimum((dist // self.bin_m).astype(np.int64), self.n_bins - 1)
 
-        series: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
-        drops: Dict[str, Dict[str, int]] = {}
+        agg = _Agg(self.n_bins)
+        agg.updates = 1
         for lt in sorted(set(ltype.tolist())):
             m_lt = ltype == lt
             for los_flag, name in ((True, "LOS"), (False, "NLOS")):
                 m = m_lt & counted & (los == los_flag)
                 if not m.any():
                     continue
-                series[f"{lt}/{name}"] = (np.bincount(bins[m], minlength=self.n_bins),
-                                          np.bincount(bins[m & deliv], minlength=self.n_bins))
-            drops[lt] = {
+                agg.series[f"{lt}/{name}"] = [np.bincount(bins[m], minlength=self.n_bins),
+                                              np.bincount(bins[m & deliv], minlength=self.n_bins)]
+            agg.drops[lt] = {
                 "delivered": int((m_lt & deliv).sum()),
                 DROP_CHANNEL: int((m_lt & (cause == DROP_CHANNEL)).sum()),
                 DROP_MAC: int((m_lt & (cause == DROP_MAC)).sum()),
                 DROP_AWARENESS: int((m_lt & (cause == DROP_AWARENESS)).sum()),
             }
         lo, hi = MARGIN_EDGES_DB[0], MARGIN_EDGES_DB[-1]
-        hist_deliv = np.histogram(np.clip(margin[counted & deliv], lo, hi), bins=MARGIN_EDGES_DB)[0]
-        hist_drop = np.histogram(np.clip(margin[counted & ~deliv], lo, hi), bins=MARGIN_EDGES_DB)[0]
-        self._updates.append({"frame": frame.frame, "sim_time": frame.sim_time, "series": series, "drops": drops,
-                              "hist_deliv": hist_deliv, "hist_drop": hist_drop})
+        agg.hist_deliv = np.histogram(np.clip(margin[counted & deliv], lo, hi), bins=MARGIN_EDGES_DB)[0]
+        agg.hist_drop = np.histogram(np.clip(margin[counted & ~deliv], lo, hi), bins=MARGIN_EDGES_DB)[0]
+        return agg
 
-    def snapshot(self) -> Dict[str, Any]:
-        ups = list(self._updates)
-        edges = [i * self.bin_m for i in range(self.n_bins)]
+    def _render(self, agg: _Agg, first: Optional[Tuple[int, float]], last: Optional[Tuple[int, float]]) -> Dict[str, Any]:
         out: Dict[str, Any] = {
-            "window_updates": len(ups), "window_max": self.window, "bin_m": self.bin_m,
-            "distance_bin_starts_m": edges, "last_bin_is_overflow": True,
-            "first_frame": ups[0]["frame"] if ups else None, "last_frame": ups[-1]["frame"] if ups else None,
-            "sim_time_span": [ups[0]["sim_time"], ups[-1]["sim_time"]] if ups else None,
-            "definition": "PRR = delivered / counted links (Wilson 95 % interval); links dropped by the awareness-range filter "
-                          "are not counted",
+            "updates": agg.updates,
+            "first_frame": first[0] if first else None, "last_frame": last[0] if last else None,
+            "sim_time_span": [first[1], last[1]] if first and last else None,
             "prr_by_distance": {}, "drops": {}, "rx_margin_hist": None,
         }
-        if not ups:
+        if not agg.updates:
             return out
-        keys = sorted({k for u in ups for k in u["series"]})
-        for k in keys:
-            n = sum((u["series"][k][0] for u in ups if k in u["series"]), np.zeros(self.n_bins, dtype=np.int64))
-            d = sum((u["series"][k][1] for u in ups if k in u["series"]), np.zeros(self.n_bins, dtype=np.int64))
-            with np.errstate(invalid="ignore", divide="ignore"):
-                prr: List[Optional[float]] = [None if c == 0 else float(x) / float(c) for x, c in zip(d, n)]
+        for k in sorted(agg.series):
+            n, d = agg.series[k]
+            prr: List[Optional[float]] = [None if c == 0 else float(x) / float(c) for x, c in zip(d, n)]
             ci = [wilson_interval(int(x), int(c)) for x, c in zip(d, n)]
             out["prr_by_distance"][k] = {"counted": n.tolist(), "delivered": d.tolist(), "prr": prr,
                                          "ci95_low": [lo for lo, _ in ci], "ci95_high": [hi for _, hi in ci]}
-        lts = sorted({lt for u in ups for lt in u["drops"]})
-        for lt in lts:
-            acc = {"delivered": 0, DROP_CHANNEL: 0, DROP_MAC: 0, DROP_AWARENESS: 0}
-            for u in ups:
-                for kk, vv in u["drops"].get(lt, {}).items():
-                    acc[kk] += vv
-            out["drops"][lt] = acc
-        out["rx_margin_hist"] = {
-            "edges_db": MARGIN_EDGES_DB,
-            "note": "values are clipped into the first/last bin",
-            "delivered": sum((u["hist_deliv"] for u in ups), np.zeros(len(MARGIN_EDGES_DB) - 1, dtype=np.int64)).tolist(),
-            "dropped": sum((u["hist_drop"] for u in ups), np.zeros(len(MARGIN_EDGES_DB) - 1, dtype=np.int64)).tolist(),
-        }
+        out["drops"] = {lt: dict(c) for lt, c in sorted(agg.drops.items())}
+        out["rx_margin_hist"] = {"edges_db": MARGIN_EDGES_DB, "note": "values are clipped into the first/last bin",
+                                 "delivered": agg.hist_deliv.tolist(), "dropped": agg.hist_drop.tolist()}
         return out
+
+    def snapshot(self) -> Dict[str, Any]:
+        win = _Agg(self.n_bins)
+        for _f, _t, a in self._window:
+            win.merge(a)
+        first = (self._window[0][0], self._window[0][1]) if self._window else None
+        last = (self._window[-1][0], self._window[-1][1]) if self._window else None
+        return {
+            "bin_m": self.bin_m, "distance_bin_starts_m": [i * self.bin_m for i in range(self.n_bins)],
+            "last_bin_is_overflow": True, "window_s": self.window_s,
+            "definition": "PRR = delivered / counted links (Wilson 95 % interval); links dropped by the "
+                          "awareness-range filter are not counted",
+            "window": self._render(win, first, last),
+            "run": self._render(self._run, self._run_first, self._run_last),
+        }

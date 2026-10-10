@@ -30,7 +30,7 @@ def test_world_has_the_initial_population_and_rsus(fake_server):
     summary = got["v2x.frame"]["data"]
     assert {s["kind"] for s in summary["stations"]} == {"OBU", "RSU", "VRU"}
     assert summary["rsu_states"], "RSUs must publish SPAT"
-    assert got["v2x.stats"]["data"]["window_updates"] >= 1
+    assert got["v2x.stats"]["data"]["window"]["updates"] >= 1
     assert got["run.status"]["data"]["tick_duration_ms"]["p50"] is not None
 
 
