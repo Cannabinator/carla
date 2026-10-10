@@ -47,3 +47,15 @@ Not yet run: modules slated for deletion (`test_complete_system`, `test_frontend
   `LiDARStreamingAPI` tests dropped with their code.
 - Test result without `carla`: 161 passed, 8 skipped, 5 xfailed.
 - Not done yet from the Phase 1 list: `pyproject.toml`, ruff, pyright, pre-commit.
+
+## Server tests (2026-10-10, no model change)
+
+- `tests/contract/` (53 tests, no CARLA): the real FastAPI app with a `FakeWorld` that uses the
+  real `SessionManager`. Pages, admin auth (missing/wrong/unconfigured token), join -> telemetry
+  -> leave, kick, WebSocket telemetry/ping/expiry/disconnect cleanup, traffic/pedestrian
+  endpoints, request validation. Mutation-checked: breaking auth or `leave` makes them fail.
+- `tests/server/` (marker `server`, skipped without `SERVER_URL`): the same life cycle against a
+  RUNNING server over real HTTP/WebSocket. Needs `SERVER_URL`, `ADMIN_TOKEN`; simulation tests
+  (marker `carla`) also use `CARLA_HOST`/`CARLA_PORT` and connect the server if it is idle.
+- Measured against the real app code path with a fake world: telemetry WebSocket rate 2.48 Hz
+  (documented 5 Hz) - confirms handoff defect C6. Not yet verified against live CARLA.
