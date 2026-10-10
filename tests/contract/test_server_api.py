@@ -265,3 +265,9 @@ def test_stop_with_world_requests_shutdown(client, world):
 @pytest.mark.parametrize("rate", [-0.1, 1.5])
 def test_connect_rejects_penetration_rate_outside_0_1(client, rate):
     assert client.post("/admin/connect", json={"v2x_penetration_rate": rate}, headers=AUTH).status_code == 422
+
+
+@pytest.mark.parametrize("rate", [3.0, 7.0, 0.0, -1.0])
+def test_connect_rejects_a_v2x_rate_that_is_not_a_whole_number_of_frames(client, rate):
+    """20 FPS: 3 Hz would be every 6.67 frames, which cannot be scheduled exactly (decision D8)."""
+    assert client.post("/admin/connect", json={"v2x_update_rate_hz": rate}, headers=AUTH).status_code == 422

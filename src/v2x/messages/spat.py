@@ -31,7 +31,7 @@ class SPATMovementState:
 @dataclass
 class SPATMessage:
     """
-    Signal Phase and Timing Message — SAE J2735 §7.18 / ETSI TS 103 301 v2.1.1.
+    Signal Phase and Timing Message — SAE J2735 (section number unverified) / ETSI TS 103 301 v2.1.1.
 
     Broadcast by RSUs at 2 Hz so that approaching vehicles can plan their
     trajectory through an intersection (speed advisory, stop-line timing).

@@ -299,3 +299,16 @@ APPLICATION-LAYER cutoff applied after the radio model, which hid that fact.
 - RSU coverage (`RSUConfig.broadcast_range_m`, 300 m) and the 100 m VRU cutoff in the client payload are
   separate settings, not yet radio-modelled (S4).
 - Also fixed: a nested f-string in `start_server.py` was invalid on Python 3.10 (the Docker image).
+
+## Phase 3, S18 / D8 - V2X rate: attribution corrected and configurable (2026-10-10, default unchanged)
+
+The code said the 2 Hz BSM rate follows "SAE J2735 §7.1 minimum beacon interval". J2735 is a message
+dictionary and does not set transmission rates; BSM rates are specified elsewhere (SAE J2945/1, nominally
+10 Hz, and ETSI EN 302 637-2 for CAMs, 1-10 Hz and event-triggered). Both attributions are unverified here,
+so the docstrings now say: 2 Hz is this project's default.
+- The rate is now an option: `/admin/connect` field `v2x_update_rate_hz`, CLI `--v2x-rate`. It must divide
+  the 20 Hz simulation rate into a whole number of frames (2, 4, 5, 10, 20 Hz...); otherwise `/admin/connect`
+  answers 422 (3 Hz would be every 6.67 frames and could not be scheduled exactly, see C7).
+- Section numbers cited for MAP/SPAT (J2735 "§7.4/§7.18") and the RSU 33 dBm / "ETSI TR 101 607" attribution are
+  marked unverified (S16 stays open: needs the documents).
+- Not done: ETSI CAM generation rules (event-triggered rate) as an optional mode.

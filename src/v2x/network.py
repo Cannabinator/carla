@@ -64,8 +64,11 @@ class V2XNetwork:
                        radio model: a neighbour farther away is dropped even if its packet
                        was received. None = no cutoff, the radio alone decides. (Library
                        default 150 m; the server passes WorldConfig.awareness_range_m, 75 m.)
-            update_rate_hz: BSM application update frequency (default 2 Hz per
-                            SAE J2735 §7.1 minimum beacon interval).
+            update_rate_hz: BSM update frequency in Hz. 2 Hz is this project's default, NOT a
+                            standard's value: SAE J2735 is a message dictionary and does not set
+                            transmission rates; BSM rates come from SAE J2945/1 (nominally 10 Hz)
+                            and CAM rates from ETSI EN 302 637-2 (1-10 Hz, triggered by vehicle
+                            dynamics). Both attributions are unverified here (decision D8).
             enable_cooperative_perception: Enable sensor data sharing.
             world: CARLA World instance (optional, auto-detected on first register).
             dsrc_config: DSRCConfig for the IEEE 802.11p channel model. When None,
@@ -85,7 +88,7 @@ class V2XNetwork:
         self.bsm_messages: Dict[int, BSMCore] = {}
         self.enhanced_messages: Dict[int, EnhancedBSMMessage] = {}
 
-        # Message counters (0-127, wraps around per SAE J2735)
+        # Message counters (0-127; wrap-around attributed to SAE J2735, unverified)
         self.msg_counters: Dict[int, int] = {}
 
         # Network topology — populated each 2 Hz tick

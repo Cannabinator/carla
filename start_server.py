@@ -19,6 +19,7 @@ Options
 --admin-token TOKEN Admin API token          (default: read from ADMIN_TOKEN env)
 --port PORT         Web server port          (default: 8000)
 --no-v2x            Disable the V2X network
+--v2x-rate HZ       V2X update rate, must divide 20 Hz into whole frames (default: 2)
 --awareness-range M Awareness filter after the radio model, metres (default: 75)
 --no-awareness-limit No awareness filter: the radio alone decides
 --v2x-penetration F Share of background vehicles that are V2X stations, 0..1 (default: 1.0)
@@ -69,6 +70,8 @@ def _parse_args() -> argparse.Namespace:
                    help="Web server bind address")
     p.add_argument("--no-v2x", action="store_true",
                    help="Disable V2X network")
+    p.add_argument("--v2x-rate", type=float, default=2.0,
+                   help="V2X update rate in Hz; must divide the 20 Hz simulation rate into whole frames")
     p.add_argument("--awareness-range", type=float, default=75.0,
                    help="Awareness filter in metres, applied after the radio model")
     p.add_argument("--no-awareness-limit", action="store_true",
@@ -133,6 +136,7 @@ def main() -> None:
                 port=args.carla_port,
                 v2x_enabled=not args.no_v2x,
                 awareness_range_m=None if args.no_awareness_limit else args.awareness_range,
+                v2x_update_rate_hz=args.v2x_rate,
                 v2x_penetration_rate=args.v2x_penetration,
                 tm_port=args.tm_port,
                 web_port=args.port,

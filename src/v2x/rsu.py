@@ -6,12 +6,12 @@ Implements a stationary ITS station that:
   - Reads CARLA TrafficLight state and produces live SPAT messages.
 
 The RSU transmits at the same 2 Hz cadence as the vehicles' BSM beacons.
-Per ETSI TR 101 607, RSUs use 33 dBm TX power (vs. 23 dBm for OBUs)
-and cover a 300 m intersection radius.
+RSUConfig defaults to 33 dBm TX power (vs. 23 dBm for OBUs) and a 300 m radius; the attribution
+to ETSI TR 101 607 is UNVERIFIED and the TX power is not used by any computation yet (S4).
 
 IEEE / ETSI references:
   ETSI TS 103 301 v2.1.1  — MAP + SPAT (infrastructure services)
-  SAE J2735-202007 §7.18  — SPaTIntersectionState
+  SAE J2735-202007        — SPaTIntersectionState (section number unverified)
   ETSI TR 101 607 v1.1.1  — ITS-G5 RSU deployment guidelines
 """
 

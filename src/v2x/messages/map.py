@@ -23,7 +23,7 @@ class MAPLane:
 @dataclass
 class MAPMessage:
     """
-    MAP Data Message — SAE J2735 §7.4 / ETSI TS 103 301 v2.1.1.
+    MAP Data Message — SAE J2735 (section number unverified) / ETSI TS 103 301 v2.1.1.
 
     Describes intersection geometry so receiving vehicles can associate SPAT
     phase information with specific approach / departure lanes.  The message

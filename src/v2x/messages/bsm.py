@@ -31,7 +31,7 @@ class BSMCore:
     Basic Safety Message (BSM) - Core Data
     Based on SAE J2735 standard for vehicle-to-vehicle communication.
     
-    This is the essential data transmitted at high frequency (2-10 Hz)
+    This is the essential data transmitted at high frequency (rates: see V2XNetwork)
     for cooperative awareness and collision avoidance.
     """
     # Temporal information
