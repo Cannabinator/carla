@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 import src.server.app as app_mod
 from src.lidar.protocol import decode_frame
+from tests.contract import ws_helpers
 from tests.contract.fake_world import FakeWorld
 
 TOKEN = "test-token"
@@ -32,6 +33,10 @@ def world():
     w = FakeWorld()
     app_mod.set_persistent_world(w)
     return w
+
+
+def lconnect(client, world, path):
+    return ws_helpers.connect(client, path, lambda: all(world.lidar.viewer_count(i) == 0 for i in range(1, 8)))
 
 
 def join(client, name="car", **extra):
@@ -192,7 +197,7 @@ def test_leaving_the_session_releases_its_sensor(client, world):
 def recv_until_bytes(ws, max_msgs=20):
     texts = []
     for _ in range(max_msgs):
-        m = ws.receive()
+        m = ws_helpers.recv_raw(ws)
         if m.get("bytes") is not None:
             return texts, m["bytes"]
         texts.append(m["text"])
@@ -203,8 +208,8 @@ def test_ws_streams_decodable_frames_and_state(client, world):
     import json
     j = join(client, enable_lidar=True)
     sid = j["lidar_sensor_id"]
-    with client.websocket_connect(j["lidar_ws_url"]) as ws:
-        assert json.loads(ws.receive_text())["state"] == "requested"
+    with lconnect(client, world, j["lidar_ws_url"]) as ws:
+        assert json.loads(ws_helpers.recv_raw(ws)['text'])["state"] == "requested"
         assert world.lidar.viewer_count(sid) == 1
         tick_until_active(world, sid)
         texts, data = recv_until_bytes(ws)
@@ -220,7 +225,7 @@ def test_ws_streams_decodable_frames_and_state(client, world):
 def test_ws_two_viewers_get_identical_bytes_and_one_encode(client, world):
     j = join(client, enable_lidar=True)
     sid = j["lidar_sensor_id"]
-    with client.websocket_connect(j["lidar_ws_url"]) as w1, client.websocket_connect(j["lidar_ws_url"]) as w2:
+    with lconnect(client, world, j["lidar_ws_url"]) as w1, lconnect(client, world, j["lidar_ws_url"]) as w2:
         assert world.lidar.viewer_count(sid) == 2
         tick_until_active(world, sid)
         _, d1 = recv_until_bytes(w1)
@@ -233,7 +238,7 @@ def test_ws_profile_message_subsamples_and_reports_it(client, world):
     import json
     j = join(client, enable_lidar=True)
     sid = j["lidar_sensor_id"]
-    with client.websocket_connect(j["lidar_ws_url"]) as ws:
+    with lconnect(client, world, j["lidar_ws_url"]) as ws:
         ws.send_text(json.dumps({"op": "profile", "max_points": 100, "max_hz": 20}))   # 100 -> smallest step 10k > 200 pts
         tick_until_active(world, sid)
         texts, data = recv_until_bytes(ws)
@@ -245,10 +250,10 @@ def test_ws_profile_message_subsamples_and_reports_it(client, world):
 def test_ws_bad_profile_gets_an_error_not_a_disconnect(client, world):
     import json
     j = join(client, enable_lidar=True)
-    with client.websocket_connect(j["lidar_ws_url"]) as ws:
+    with lconnect(client, world, j["lidar_ws_url"]) as ws:
         ws.send_text(json.dumps({"op": "profile", "max_hz": -3}))
         for _ in range(5):
-            m = json.loads(ws.receive_text())
+            m = json.loads(ws_helpers.recv_raw(ws)['text'])
             if m["type"] == "error":
                 assert "max_hz" in m["message"]
                 break
@@ -259,21 +264,21 @@ def test_ws_bad_profile_gets_an_error_not_a_disconnect(client, world):
 
 def test_ws_unknown_sensor(client, world):
     import json
-    with client.websocket_connect("/ws/lidar/999") as ws:
-        assert json.loads(ws.receive_text())["type"] == "error"
+    with lconnect(client, world, "/ws/lidar/999") as ws:
+        assert json.loads(ws_helpers.recv_raw(ws)['text'])["type"] == "error"
 
 
 def test_ws_gets_destroyed_state_when_released(client, world):
     import json
     j = join(client, enable_lidar=True)
     sid = j["lidar_sensor_id"]
-    with client.websocket_connect(j["lidar_ws_url"]) as ws:
+    with lconnect(client, world, j["lidar_ws_url"]) as ws:
         tick_until_active(world, sid)
         client.delete(f"/api/lidar/sensors/{sid}", headers=ADMIN)
         world.lidar_tick(10)
         seen = []
         for _ in range(20):
-            m = ws.receive()
+            m = ws_helpers.recv_raw(ws)
             if m.get("text") is None:
                 continue
             seen.append(json.loads(m["text"]))

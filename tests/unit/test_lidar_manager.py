@@ -407,3 +407,22 @@ def test_a_sensor_spawned_at_this_boundary_is_not_waited_for():
     assert time.monotonic() - t0 < 1.0
     assert mgr.list_sensors()[0]["state"] == "warming_up" and mgr.budget()  # and no miss was counted
     assert mgr._sensors[1].missed == 0
+
+
+def test_info_version_bumps_on_change_but_not_every_frame(env):
+    mgr, backend, _ = env
+    v0 = mgr.info_version
+    sid = mgr.request(VEH, 10)
+    mgr.attach_viewer(sid, "v")
+    assert mgr.info_version > v0
+    mgr.collect(1, 0.05)
+    tick(mgr, backend, 2)                    # -> active
+    v = mgr.info_version
+    for f in range(3, 12):                   # steady state: only last_frame moves
+        tick(mgr, backend, f)
+    assert mgr.info_version == v
+    mgr.detach_viewer(sid, "v")
+    mgr.attach_viewer(sid, "a")
+    mgr.attach_viewer(sid, "b")
+    tick(mgr, backend, 12)
+    assert mgr.info_version == v + 1         # viewers 1 -> 2

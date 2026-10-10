@@ -12,12 +12,13 @@ Mount on the main app with::
     app.include_router(admin_router)
 """
 
-import os
 import logging
 import threading
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Header, Depends
+
+from src.server.roles import AuthError, admin_token_ok
 from pydantic import BaseModel, Field, ValidationError
 
 from src.server.route_utils import on_sim_thread
@@ -51,10 +52,11 @@ def set_server_module(mod) -> None:
 
 def check_admin_token(x_admin_token: str) -> None:
     """Raise 403 if the token does not match ADMIN_TOKEN env var (500 if the server has none)."""
-    expected = os.environ.get("ADMIN_TOKEN", "")
-    if not expected:
-        raise HTTPException(status_code=500, detail="ADMIN_TOKEN is not configured on the server")
-    if x_admin_token != expected:
+    try:
+        ok = admin_token_ok(x_admin_token)
+    except AuthError as exc:
+        raise HTTPException(status_code=500, detail=exc.message)
+    if not ok:
         raise HTTPException(status_code=403, detail="Invalid admin token")
 
 

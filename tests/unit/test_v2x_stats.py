@@ -1,0 +1,90 @@
+"""V2XStats bins hand-made links; expected numbers are worked out by hand."""
+
+import pytest
+
+from src.v2x.channel.base import DROP_AWARENESS, DROP_CHANNEL, DROP_MAC, LinkResult
+from src.v2x.frame import ChannelStats, V2XFrame, frozen_map
+from src.v2x.stats import MARGIN_EDGES_DB, V2XStats
+
+
+def link(dist, delivered, los=True, link_type="V2V", cause=None, margin=10.0, rx=2):
+    if cause is None and not delivered:
+        cause = DROP_CHANNEL
+    return LinkResult(frame=1, sim_time=0.05, tx_id=1, rx_id=rx, msg_type="BSM", link_type=link_type,
+                      distance_m=dist, los=los, tx_power_dbm=20.0, path_loss_db=80.0, shadowing_db=0.0,
+                      rx_power_dbm=-70.0, rx_margin_db=margin, p_channel=1.0, p_mac=1.0, p_total=1.0,
+                      delivered=delivered, drop_cause=cause)
+
+
+def frame(links, n=1):
+    return V2XFrame(frame=n, sim_time=n * 0.5, stations=frozen_map({}), sent=frozen_map({}), inbox=frozen_map({}),
+                    links=tuple(links), threats=frozen_map({}), stats=ChannelStats(frozen_map({})))
+
+
+def test_empty_window():
+    s = V2XStats()
+    snap = s.snapshot()
+    assert snap["window_updates"] == 0 and snap["prr_by_distance"] == {} and snap["sim_time_span"] is None
+
+
+def test_prr_by_distance_bin_los_nlos_and_link_type():
+    s = V2XStats(bin_m=20.0, max_distance_m=100.0)       # bins 0,20,40,60,80 and overflow (>=100)
+    s.add(frame([
+        link(5, True), link(10, True), link(15, False),                 # bin 0 LOS: 2 of 3
+        link(25, True), link(39.9, False),                              # bin 1 LOS: 1 of 2
+        link(25, False, los=False),                                     # bin 1 NLOS: 0 of 1
+        link(500, True),                                                # overflow bin
+        link(10, True, link_type="I2V"),
+    ]))
+    p = s.snapshot()["prr_by_distance"]
+    assert set(p) == {"V2V/LOS", "V2V/NLOS", "I2V/LOS"}
+    assert p["V2V/LOS"]["counted"][:2] == [3, 2] and p["V2V/LOS"]["delivered"][:2] == [2, 1]
+    assert p["V2V/LOS"]["prr"][0] == pytest.approx(2 / 3) and p["V2V/LOS"]["prr"][1] == 0.5
+    assert p["V2V/LOS"]["prr"][2] is None                                  # nothing counted: no number
+    assert p["V2V/LOS"]["counted"][-1] == 1 and p["V2V/LOS"]["delivered"][-1] == 1      # overflow
+    assert p["V2V/NLOS"]["counted"][1] == 1 and p["V2V/NLOS"]["prr"][1] == 0.0
+    assert p["I2V/LOS"]["counted"][0] == 1
+    assert len(s.snapshot()["distance_bin_starts_m"]) == 6
+
+
+def test_awareness_drops_are_not_counted_in_prr_but_are_in_drops():
+    s = V2XStats()
+    s.add(frame([link(10, True), link(10, False, cause=DROP_AWARENESS), link(10, False, cause=DROP_MAC),
+                 link(10, False, cause=DROP_CHANNEL)]))
+    snap = s.snapshot()
+    assert snap["prr_by_distance"]["V2V/LOS"]["counted"][0] == 3             # delivered, mac, channel
+    assert snap["prr_by_distance"]["V2V/LOS"]["prr"][0] == pytest.approx(1 / 3)
+    assert snap["drops"]["V2V"] == {"delivered": 1, DROP_CHANNEL: 1, DROP_MAC: 1, DROP_AWARENESS: 1}
+
+
+def test_window_slides():
+    s = V2XStats(window_updates=2)
+    s.add(frame([link(10, True)], n=1))
+    s.add(frame([link(10, False)], n=2))
+    s.add(frame([link(10, False)], n=3))
+    snap = s.snapshot()
+    assert snap["window_updates"] == 2 and snap["first_frame"] == 2 and snap["last_frame"] == 3
+    assert snap["prr_by_distance"]["V2V/LOS"]["prr"][0] == 0.0                # the delivered link left the window
+    assert snap["sim_time_span"] == [1.0, 1.5]
+
+
+def test_margin_histogram_clips_and_separates_delivered():
+    s = V2XStats()
+    s.add(frame([link(10, True, margin=12.0), link(10, True, margin=100.0), link(10, False, margin=-80.0),
+                 link(10, False, margin=-3.0, cause=DROP_AWARENESS)]))
+    h = s.snapshot()["rx_margin_hist"]
+    assert h["edges_db"] == MARGIN_EDGES_DB and sum(h["delivered"]) == 2 and sum(h["dropped"]) == 1
+    assert h["delivered"][-1] == 1                                           # 100 dB clipped into the last bin
+    assert h["delivered"][MARGIN_EDGES_DB.index(10)] == 1                    # 12 dB in [10, 15)
+    assert h["dropped"][0] == 1                                              # -80 dB clipped into the first bin
+
+
+def test_scales_to_a_real_update_size():
+    import time
+    links = [link(d % 300, d % 3 != 0, los=d % 5 != 0, link_type=("V2V", "I2V", "P2V")[d % 3]) for d in range(12000)]
+    f = frame(links)
+    s = V2XStats()
+    t0 = time.perf_counter()
+    s.add(f)
+    s.snapshot()
+    assert time.perf_counter() - t0 < 0.5

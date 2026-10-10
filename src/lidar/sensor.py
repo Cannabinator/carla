@@ -221,6 +221,7 @@ class LidarManager:
         self._latest: Dict[int, LidarFrame] = {}
         self._info: List[Dict[str, Any]] = []
         self._budget: Dict[str, Any] = {}
+        self.info_version = 0                    # bumped on every change of the published sensor list
         self._publish_info()
 
     # ── helpers ────────────────────────────────────────────────────────────────────────────────────
@@ -488,6 +489,11 @@ class LidarManager:
                 "created_frame": s.created_frame, "last_frame": s.last_frame, "error": s.error,
             })
         n, used = self._used()
+        # last_frame changes every tick and is not a change of the list; everything else is
+        def _key(rows):
+            return [{k: v for k, v in r.items() if k != "last_frame"} for r in rows]
+        if _key(info) != _key(self._info) or (n, used) != (self._budget.get("sensors"), self._budget.get("used_pps")):
+            self.info_version += 1
         self._info = info
         self._budget = {"used_pps": used, "max_pps": self.limits.max_points_per_second,
                         "sensors": n, "max_sensors": self.limits.max_sensors}

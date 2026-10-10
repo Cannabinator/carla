@@ -8,6 +8,8 @@ from concurrent.futures import Future
 
 from src.lidar.sensor import LidarLimits, LidarManager
 from src.server.events import EventLog
+from src.server.published import Published
+from src.server.v2x_publisher import V2XPublisher
 from src.server.session_manager import SessionManager
 from tests.unit.lidar_fake import FakeBackend
 
@@ -31,6 +33,13 @@ class FakeWorld:
         self.lidar = LidarManager(self.lidar_backend, LidarLimits(max_sensors=2, max_points_per_second=1_000_000,
                                                                    keep_alive_s=10.0), 0.05, frame_timeout_s=0.0)
         self._streams = {}
+        # what the hub reads (the real world publishes the same things from its simulation thread)
+        self.observer_public = True
+        self.v2x_links_max_rows = 2000
+        self.frame_no = 42
+        self._v2x = V2XPublisher()
+        self._world_state = None
+        self._world_state_version = 0
 
     def submit(self, fn, *args, **kwargs):
         """Mirror PersistentCARLAServer.submit: run now, hand back a Future."""
@@ -79,10 +88,35 @@ class FakeWorld:
         if session_id not in self.spawned:
             return None
         return {"actor_id": self.spawned[session_id], "x": 1.0, "y": 2.0, "z": 0.0,
-                "yaw": 90.0, "speed_kmh": 12.5, "frame": 42}
+                "yaw": 90.0, "speed_kmh": 12.5, "frame": self.frame_no, "sim_time": self.frame_no * 0.05}
 
     def get_vehicle_v2x_data(self, session_id):
         return {"neighbors": [], "threats": []}
+
+    # --- published views for the hub ---------------------------------------
+    def publish_world_state(self, stations):
+        self._world_state_version += 1
+        self._world_state = Published(self._world_state_version, self.frame_no, self.frame_no * 0.05,
+                                      {"stations": stations, "rsus": []})
+
+    def get_world_state(self):
+        return self._world_state
+
+    def publish_v2x(self, frame):
+        self._v2x.on_update(frame)
+
+    def get_v2x_frame(self):
+        return self._v2x.frame
+
+    def get_v2x_published(self):
+        return self._v2x.summary
+
+    def get_v2x_stats(self):
+        return self._v2x.stats
+
+    def get_run_status(self):
+        return Published(self.frame_no // 20, self.frame_no, self.frame_no * 0.05,
+                         {"running": self._running, "frame": self.frame_no})
 
     # --- LiDAR: the real manager over a fake CARLA backend ---------------
     def lidar_request(self, principal, actor_id, config=None, **kw):
