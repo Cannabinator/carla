@@ -71,4 +71,5 @@ Not yet run: modules slated for deletion (`test_complete_system`, `test_frontend
   (42 findings from module-global/None-initialised state) until Phase 2 replaces that design.
 - Test fix: `test_different_seeds_may_differ` computed `all_same` but asserted nothing, so it could
   never fail; it now asserts (seeds 1 and 999 give different delivery sets, deterministic).
-- Still open from Phase 1: `vulture`/import-graph check for unused files, live smoke test by a human.
+- `vulture` (confidence 80): one hit, the unused `sensor_data` parameter of `V2VNetworkEnhanced.enable_bidirectional_sharing` (nothing calls it; goes away with the Phase 3 network merge). Every remaining source file is imported somewhere.
+- Still open from Phase 1: live smoke test by a human (admin connect -> client join -> telemetry; `tests/server` covers it when pointed at a live server); archive tag push (HTTP 403 from this environment).
