@@ -510,3 +510,41 @@ No change to any model number. What the server now guarantees (`src/server/ws_hu
 - Event log fed by sessions, population changes, DENMs and every LiDAR transition, readable as the `events` topic.
 - `docs/openapi.json` and `docs/api.md` are generated and a test fails when they are out of date, so an API change is
   always a reviewable diff.
+
+## Phase 6 - Frontend (2026-10-10)
+
+No model number changed. What a researcher now sees, and what the server does so that the browser cannot mislead
+(`src/web/`, `src/testing/fake_carla/`, `tests/e2e`, `tests/js`):
+
+- **Pages**: `/` status, `/observer` (map in ground-truth and perspective mode, station inspector, link log,
+  channel analytics, LiDAR views), `/vehicle` (join, my radio, LiDAR on request, own-perspective map), `/admin`
+  (connection, population, hot configuration, RSUs, DENM injection by clicking the map, sessions, LiDAR budget and
+  sensors, WebSocket clients). The three old pages are gone; `/client` redirects to `/vehicle`.
+- **Display rules implemented and tested**: every live panel carries its frame and simulation time; rounding only in
+  `units.js`; a missing value is an em dash with the reason in a tooltip (SPAT end time "unknown", never a number);
+  link outcome is colour *and* dash pattern; stale data is marked; nothing is interpolated.
+- **Perspective mode** draws only what the station received, at the positions in the received messages, with the age of
+  that information; stations not heard in the latest update remain as ghosts. The vehicle page has no ground-truth
+  subscription - checked from the server side (`GET /api/hub/connections`) by the browser test.
+- **LiDAR vs V2X overlay** uses the newest V2X inbox whose frame is not newer than the point cloud (tested), and shows
+  the gap `(F_lidar - F_v2x) * dt` in the HUD. Own-vehicle self-hits are filtered and counted. Colour modes a frame
+  cannot offer (intensity on a semantic sensor) are disabled, not faked.
+- **Channel statistics** are binned in 10 m, LOS and NLOS apart, with a Wilson 95 % interval and `n` per bin; two windows
+  (last 60 s of simulation time, whole run). Awareness-filtered links are not counted in the PRR.
+- **Configuration at runtime**: hot fields (`awareness_range_m`, `v2x_penetration_rate`, LiDAR limits, grace period,
+  observer access, rates of published views) change via `PATCH /api/config`, all or nothing, each change an event with
+  the frame it was applied at; everything else is marked `restart` and refused (409). RSUs can be disabled and their
+  transmit power changed; sensors can be pinned (admin only).
+- **Fake world** (`start_server.py --fake`): the REAL server runs on a deterministic synthetic CARLA (grid city, vehicles on
+  rings, pedestrians, signal groups, ray-cast LiDAR with actor ids). It is a test double: no physics, no collisions,
+  lights are not obeyed. The pages show a banner when it is active. All browser tests run against it.
+- **Bugs found only by running a browser** (fixed, with tests): default timer functions called as methods ("Illegal
+  invocation"); `[hidden]` defeated by `display:flex`; the map picker needing the map in view; the container's locale.
+- **Not measured**: the handoff asks for >= 15 rendered fps with three LiDAR views of 50k points at 20 Hz on the lab
+  machine. This container has no GPU (headless Chromium with software WebGL renders about 15 fps for one 13k-point view
+  and is not representative), so the number has to be measured on the lab machine. The viewer renders only when the scene
+  changed, uploads only the used part of its preallocated buffers and decodes in a worker, and counts dropped frames in
+  its HUD, so the measurement is one line of the HUD. The observer allows two views at once; the limit is a constant
+  (`MAX_LIDAR_VIEWS`) in `observer-core.js`.
+- **Not done**: the Run card is a placeholder (recording is Phase 7); the manual live-CARLA script of the handoff is part of
+  the documentation phase; the map's RSU coverage ring is not drawn yet.
