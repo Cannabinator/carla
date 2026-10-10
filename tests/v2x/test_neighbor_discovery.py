@@ -26,6 +26,8 @@ class TestV2XNeighborDiscovery(unittest.TestCase):
     def create_mock_vehicle(self, x, y, z=0.5):
         """Create mock vehicle at position"""
         vehicle = Mock()
+        vehicle.type_id = "vehicle.tesla.model3"
+        vehicle.attributes = {"number_of_wheels": "4"}
         vehicle.id = id(vehicle)
         
         # Mock get_location

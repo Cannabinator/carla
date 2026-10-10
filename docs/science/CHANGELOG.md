@@ -148,3 +148,11 @@ timestamp next to simulation-time BSMs.
   stale re-transmission) and counts it in `stats['skipped_not_in_snapshot']`. A snapshot is required.
 - Normal case (vehicle in snapshot): values unchanged; goldens unchanged.
 - Tests that relied on the fallback (an empty mock snapshot) now pass the actors in the snapshot.
+
+## Phase 3, S11 - cache per-vehicle constants (2026-10-10, outputs identical)
+
+`get_physics_control()` (a blocking server round-trip) ran for every vehicle at every V2X update; its
+`max_steer_angle` never changes. It, the bounding box and the vehicle type are now read once in
+`register()` (`describe_vehicle` -> `VehicleStatic`).
+- Before: 1 RPC per vehicle per update (N vehicles at 2 Hz = 2N RPC/s, on the simulation thread).
+- After: 1 RPC per vehicle in total. BSM values unchanged (goldens unchanged).

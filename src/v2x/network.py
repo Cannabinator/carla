@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
 from .channel import DSRCChannel, DSRCConfig
 from .constants import RANGE_MEDIUM_M, SHARE_SENSOR_DATA_DISTANCE
-from .extract import create_bsm_from_carla
+from .extract import VehicleStatic, create_bsm_from_carla, describe_vehicle
 from .messages import (
     DENM,
     BSMCore,
@@ -77,6 +77,7 @@ class V2XNetwork:
 
         # Vehicle registry
         self.vehicles: Dict[int, carla.Actor] = {}
+        self._static: Dict[int, VehicleStatic] = {}  # per-vehicle constants, read once (S11)
         self.bsm_messages: Dict[int, BSMCore] = {}
         self.enhanced_messages: Dict[int, EnhancedBSMMessage] = {}
 
@@ -152,6 +153,7 @@ class V2XNetwork:
             vehicle: CARLA vehicle actor
         """
         self.vehicles[vehicle_id] = vehicle
+        self._static[vehicle_id] = describe_vehicle(vehicle)
         self.msg_counters[vehicle_id] = 0
         self.neighbors[vehicle_id] = []
         self.prev_speeds[vehicle_id] = 0.0
@@ -169,6 +171,7 @@ class V2XNetwork:
         self.msg_counters.pop(vehicle_id, None)
         self.neighbors.pop(vehicle_id, None)
         self.prev_speeds.pop(vehicle_id, None)
+        self._static.pop(vehicle_id, None)
 
         logger.debug(f"Vehicle {vehicle_id} unregistered from V2X network")
     
@@ -290,7 +293,8 @@ class V2XNetwork:
             vehicle, vehicle_id, msg_count,
             snapshot=snapshot,  # Pass snapshot for fresh data
             prev_velocity=prev_speed,
-            delta_time=delta_time
+            delta_time=delta_time,
+            static=self._static.get(vehicle_id),
         )
 
     def _extract_snapshot_time(self, snapshot) -> Optional[float]:

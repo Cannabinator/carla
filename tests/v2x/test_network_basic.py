@@ -392,3 +392,28 @@ class TestMissingFromSnapshot(unittest.TestCase):
         self.assertIsNone(net.get_bsm(2))
         self.assertEqual(net.stats['skipped_not_in_snapshot'], 1)
         self.assertEqual(net.get_all_bsm()[1].timestamp, 2.0)  # simulation time only
+
+
+class TestStaticVehicleFactsAreCached(unittest.TestCase):
+    """S11: get_physics_control() is a blocking RPC; read it once, at registration."""
+
+    def test_physics_control_is_read_once_not_per_update(self):
+        v1, v2 = MockVehicle(1, x=0, y=0), MockVehicle(2, x=50, y=0)
+        calls = {"n": 0}
+        original = v1.get_physics_control
+
+        def counting():
+            calls["n"] += 1
+            return original()
+
+        v1.get_physics_control = counting
+        world = MockWorld()
+        world.add_vehicle(v1)
+        world.add_vehicle(v2)
+        net = V2XNetwork(max_range=200.0, update_rate_hz=2.0, dsrc_config=_transparent_dsrc(), world=world)
+        net.register(1, v1)
+        net.register(2, v2)
+        self.assertEqual(calls["n"], 1)
+        for t in range(1, 6):
+            net.update(snapshot=MockWorldSnapshot([v1, v2], elapsed_seconds=float(t)), force=True)
+        self.assertEqual(calls["n"], 1, "physics control was read again during updates")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from typing import Optional
 
 from .messages.bsm import BrakingStatus, BSMCore, VehicleType
@@ -73,8 +74,38 @@ def _vehicle_type_from_actor(vehicle) -> 'VehicleType':
     return VehicleType.PASSENGER_CAR
 
 
+DEFAULT_MAX_STEER_DEG = 70.0  # used only if the physics control cannot be read
+
+
+@dataclass(frozen=True)
+class VehicleStatic:
+    """Facts about a vehicle that never change while it lives (read once, at registration)."""
+    vehicle_type: VehicleType
+    length_m: float
+    width_m: float
+    height_m: float
+    max_steer_angle_deg: float
+
+
+def describe_vehicle(vehicle) -> VehicleStatic:
+    """Read the unchanging properties of a vehicle. Does one blocking RPC (physics control)."""
+    try:
+        max_steer = vehicle.get_physics_control().wheels[0].max_steer_angle
+    except Exception:
+        max_steer = DEFAULT_MAX_STEER_DEG
+    bbox = vehicle.bounding_box
+    return VehicleStatic(
+        vehicle_type=_vehicle_type_from_actor(vehicle),
+        length_m=bbox.extent.x * 2,
+        width_m=bbox.extent.y * 2,
+        height_m=bbox.extent.z * 2,
+        max_steer_angle_deg=max_steer,
+    )
+
+
 def create_bsm_from_carla(vehicle, vehicle_id: int, msg_count: int,
-                          snapshot, prev_velocity=None, delta_time=0.05) -> Optional[BSMCore]:
+                          snapshot, prev_velocity=None, delta_time=0.05,
+                          static: Optional[VehicleStatic] = None) -> Optional[BSMCore]:
     """
     Create a BSM from a CARLA vehicle, using only data of one WorldSnapshot.
 
@@ -93,6 +124,7 @@ def create_bsm_from_carla(vehicle, vehicle_id: int, msg_count: int,
         snapshot: WorldSnapshot (required)
         prev_velocity: Previous speed for the acceleration estimate
         delta_time: Time since last update
+        static: Cached VehicleStatic; computed on the spot (one RPC) if omitted
 
     Returns:
         BSMCore instance, or None if the vehicle is missing from the snapshot
@@ -106,6 +138,8 @@ def create_bsm_from_carla(vehicle, vehicle_id: int, msg_count: int,
     velocity = actor_snapshot.get_velocity()
     angular_velocity = actor_snapshot.get_angular_velocity()
     sim_timestamp = float(snapshot.timestamp.elapsed_seconds)
+    if static is None:
+        static = describe_vehicle(vehicle)
 
     # Calculate speed
     speed_ms = math.sqrt(velocity.x**2 + velocity.y**2 + velocity.z**2)
@@ -119,19 +153,13 @@ def create_bsm_from_carla(vehicle, vehicle_id: int, msg_count: int,
     # Get vehicle control
     control = vehicle.get_control()
     
-    # Calculate vehicle-specific steering angle
-    try:
-        physics_control = vehicle.get_physics_control()
-        max_steer_angle = physics_control.wheels[0].max_steer_angle
-        steering_angle = control.steer * max_steer_angle
-    except Exception:
-        # Fallback to generic approximation if physics control unavailable
-        steering_angle = control.steer * 70.0
-    
+    # Vehicle-specific steering angle (max steer angle is cached, S11)
+    steering_angle = control.steer * static.max_steer_angle_deg
+
     # Calculate lateral acceleration (simplified centripetal acceleration)
     if abs(control.steer) > 0.01 and speed_ms > 0.1:
         # Use wheelbase from vehicle dimensions
-        wheelbase = vehicle.bounding_box.extent.x * 2 * 0.6  # Approximate 60% of length
+        wheelbase = static.length_m * 0.6  # Approximate 60% of length
         try:
             turn_radius = wheelbase / abs(math.tan(math.radians(steering_angle)))
             lateral_accel = (speed_ms ** 2) / turn_radius * math.copysign(1, control.steer)
@@ -161,17 +189,11 @@ def create_bsm_from_carla(vehicle, vehicle_id: int, msg_count: int,
     else:
         trans_state = "neutral"
     
-    # Get bounding box for vehicle dimensions
-    bbox = vehicle.bounding_box
-    vehicle_length = bbox.extent.x * 2
-    vehicle_width = bbox.extent.y * 2
-    vehicle_height = bbox.extent.z * 2
-    
     return BSMCore(
         timestamp=sim_timestamp,
         msg_count=msg_count % 128,
         vehicle_id=vehicle_id,
-        vehicle_type=_vehicle_type_from_actor(vehicle),
+        vehicle_type=static.vehicle_type,
         x_m=transform.location.x,
         y_m=transform.location.y,
         z_m=transform.location.z,
@@ -183,9 +205,9 @@ def create_bsm_from_carla(vehicle, vehicle_id: int, msg_count: int,
         lateral_accel=lateral_accel,
         vertical_accel=0.0,  # Road vehicles typically don't need vertical accel
         yaw_rate=yaw_rate,
-        vehicle_length=vehicle_length,
-        vehicle_width=vehicle_width,
-        vehicle_height=vehicle_height,
+        vehicle_length=static.length_m,
+        vehicle_width=static.width_m,
+        vehicle_height=static.height_m,
         brake_status=brake_status,
         brake_pressure=control.brake * 100,
         transmission_state=trans_state,
