@@ -46,3 +46,11 @@ def test_penetration_rate_default_is_all_equipped():
 
 def test_awareness_range_may_be_disabled_so_the_radio_decides():
     assert WorldConfig(host="h", awareness_range_m=None).awareness_range_m is None
+
+
+def test_lidar_budget_defaults_and_validation():
+    c = WorldConfig(host="h")
+    assert (c.lidar_max_sensors, c.lidar_max_points_per_second, c.lidar_keep_alive_s) == (4, 2_000_000, 10.0)
+    for bad in ({"lidar_max_sensors": -1}, {"lidar_max_points_per_second": -5}, {"lidar_keep_alive_s": -1.0}):
+        with pytest.raises(ValidationError):
+            WorldConfig(host="h", **bad)

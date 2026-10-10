@@ -42,6 +42,12 @@ class WorldConfig(BaseModel):
     rsu_max_count: Optional[int] = Field(default=None, ge=0)
     v2x_penetration_rate: float = Field(default=1.0, ge=0.0, le=1.0)
 
+    # LiDAR budget (REFACTOR_HANDOFF 5.5): a sensor is a costly resource that exists only on request
+    lidar_max_sensors: int = Field(default=4, ge=0, le=64)
+    lidar_max_points_per_second: int = Field(default=2_000_000, ge=0)
+    # a sensor without viewers is destroyed after this many WALL seconds (a UI resource policy, not model data)
+    lidar_keep_alive_s: float = Field(default=10.0, ge=0.0)
+
     # web server port, only used to reject a clashing tm_port
     web_port: int = 8000
 
