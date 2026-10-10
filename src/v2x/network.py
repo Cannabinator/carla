@@ -13,14 +13,18 @@ from __future__ import annotations
 
 import logging
 import math
+import random
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+
+import numpy as np
 
 if TYPE_CHECKING:
     import carla
 
 from .channel import DSRCChannel, DSRCConfig
-from .channel.base import DROP_AWARENESS, LinkResult
-from .constants import RANGE_MEDIUM_M, SHARE_SENSOR_DATA_DISTANCE
+from .channel.base import DROP_AWARENESS, LINK_I2V, LINK_P2V, LinkResult
+from .channel.dsrc_logdistance import _CARRIER_SENSE_RANGE_M, _nlos_row
+from .constants import RANGE_MEDIUM_M, SHARE_SENSOR_DATA_DISTANCE, VRU_COVERAGE_M, VRU_TX_POWER_DBM
 from .frame import (
     KIND_OBU,
     KIND_RSU,
@@ -69,7 +73,9 @@ class V2XNetwork:
                  enable_cooperative_perception: bool = True,
                  world=None,
                  dsrc_config: Optional[DSRCConfig] = None,
-                 update_every_n_frames: Optional[int] = None):
+                 update_every_n_frames: Optional[int] = None,
+                 vru_awareness_range_m: float = VRU_COVERAGE_M,
+                 vru_tx_power_dbm: float = VRU_TX_POWER_DBM):
         """
         Initialize enhanced V2X network.
 
@@ -93,6 +99,8 @@ class V2XNetwork:
         # Optional exact, frame-count based gate (C7). None = every call to update() runs; the
         # normal caller (PersistentCARLAServer) already calls it once every N frames.
         self.update_every_n_frames = update_every_n_frames
+        self.vru_awareness_range_m = vru_awareness_range_m
+        self.vru_tx_power_dbm = vru_tx_power_dbm
         self.last_update_frame: Optional[int] = None
         self.last_frame: Optional[V2XFrame] = None       # immutable result of the last update
         self._links_this_update: Tuple[LinkResult, ...] = ()
@@ -139,6 +147,11 @@ class V2XNetwork:
 
         # DSRC/WAVE (IEEE 802.11p) channel model
         self._dsrc_channel = DSRCChannel(dsrc_config)
+        # Separate seeded streams for infrastructure and pedestrian links, so adding RSUs or VRUs
+        # cannot change which vehicle-to-vehicle packets are delivered (and vice versa).
+        _seed = self._dsrc_channel.config.random_seed
+        self._rng_i2v = random.Random(_seed + 101)
+        self._rng_p2v = random.Random(_seed + 102)
 
         # V2I: RSU registry {intersection_id → RoadSideUnit}
         self._rsus: Dict[int, RoadSideUnit] = {}
@@ -210,8 +223,70 @@ class V2XNetwork:
 
         self._update_rsu(sim_time)
         self._update_vru(snapshot, sim_time)
+        self._transmit_infrastructure(sim_time)
         self.last_frame = self._build_frame(sim_time)
         return True
+
+    def _transmit_infrastructure(self, sim_time: float) -> None:
+        """RSU (MAP, SPAT) and pedestrian (VRUAM) messages go through the same radio model as BSMs.
+
+        Order is fixed (RSUs by intersection id, then VRUs by id) and each class has its own seeded
+        random stream. A transmitter only addresses vehicles inside its coverage radius
+        (``RSUConfig.broadcast_range_m``; ``vru_awareness_range_m``): no attempt is evaluated beyond it.
+        """
+        vehicle_ids = list(self.bsm_messages)
+        if not vehicle_ids:
+            return
+        xs = np.array([self.bsm_messages[v].x_m for v in vehicle_ids], dtype=np.float64)
+        ys = np.array([self.bsm_messages[v].y_m for v in vehicle_ids], dtype=np.float64)
+        extra: List[LinkResult] = []
+
+        for iid in sorted(self._rsus):
+            rsu = self._rsus[iid]
+            items = [(t, m) for t, m in (("MAP", self.map_messages.get(iid)),
+                                         ("SPAT", self.spat_messages.get(iid))) if m is not None]
+            x, y, _ = rsu.config.position
+            extra += self._transmit_fixed(
+                rsu_station_id(iid), (x, y), rsu.config.tx_power_dbm, items, LINK_I2V,
+                rsu.config.broadcast_range_m, self._rng_i2v, vehicle_ids, xs, ys, sim_time)
+
+        for vru_id in sorted(self.vru_messages):
+            vruam = self.vru_messages[vru_id]
+            x, y, _ = vruam.position
+            extra += self._transmit_fixed(
+                vru_id, (x, y), self.vru_tx_power_dbm, [("VRUAM", vruam)], LINK_P2V,
+                self.vru_awareness_range_m, self._rng_p2v, vehicle_ids, xs, ys, sim_time)
+
+        if extra:
+            self._links_this_update = self._links_this_update + tuple(extra)
+
+    def _transmit_fixed(self, tx_id, tx_xy, tx_power_dbm, items, link_type, coverage_m, rng,
+                        vehicle_ids, xs, ys, sim_time) -> List[LinkResult]:
+        """One transmitter (not a vehicle) sends each of ``items`` to every vehicle in coverage."""
+        dist = np.sqrt((xs - tx_xy[0]) ** 2 + (ys - tx_xy[1]) ** 2)
+        in_range = np.nonzero(dist <= coverage_m)[0]
+        if in_range.size == 0 or not items:
+            return []
+        # contenders: this transmitter plus the stations within carrier-sense range of it
+        n_contenders = 1 + int(np.count_nonzero(dist <= _CARRIER_SENSE_RANGE_M))
+        nlos_row = (_nlos_row(tx_xy, xs, ys, None)
+                    if self._dsrc_channel.config.enable_nlos_model and len(vehicle_ids) > 1 else None)
+        links: List[LinkResult] = []
+        for msg_type, _message in items:
+            for j in in_range:
+                nlos = bool(nlos_row[j]) if nlos_row is not None else False
+                links.append(self._dsrc_channel.evaluate_link(
+                    tx_id, vehicle_ids[j], float(dist[j]), nlos, n_contenders,
+                    msg_type=msg_type, link_type=link_type, tx_power_dbm=tx_power_dbm,
+                    frame=self._frame_number, sim_time=sim_time, rng=rng))
+        return links
+
+    def get_received(self, vehicle_id: int, msg_type: Optional[str] = None) -> List[ReceivedMessage]:
+        """What a vehicle received in the last update (its V2X view), optionally one message type."""
+        f = self.last_frame
+        if f is None:
+            return []
+        return [m for m in f.inbox.get(vehicle_id, ()) if msg_type is None or m.msg_type == msg_type]
 
     def get_frame(self) -> Optional[V2XFrame]:
         """The immutable result of the last update (None before the first one)."""

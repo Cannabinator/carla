@@ -364,3 +364,32 @@ per-frame `ChannelStats` (by link type: total, delivered, channel/mac/awareness 
 - Deviation from the handoff's sketch: `inbox` maps a receiver to a TUPLE of `ReceivedMessage` (a transmitter
   can send several message types), not to one message per transmitter.
 - Frames are built from the same state as before; neighbours, threats and statistics are unchanged.
+
+## Phase 3, S4 steps 3-4 - RSU and pedestrian messages through the radio model (2026-10-10)
+
+IMPORTANT: changes what vehicles "know" about signals and pedestrians.
+Before: a vehicle "received" an RSU's SPAT if it was within the RSU's 300 m radius, and a pedestrian's VRUAM
+if within 100 m: a geometric test, always 100 % within range, regardless of buildings/blockers, transmit power or
+channel (`RSUConfig.tx_power_dbm` was never used). Only vehicle BSMs used the radio model.
+After: RSU MAP and SPAT (link type I2V, 33 dBm from `RSUConfig`) and pedestrian VRUAM (P2V, 23 dBm,
+`vru_tx_power_dbm`) are separate transmission attempts evaluated by the same `evaluate_link` as BSMs: path
+loss, one shadowing draw, LOS/NLOS from vehicles on the segment, the contention factor, one delivery draw.
+The coverage radii (RSU 300 m, pedestrian 100 m) are kept as hard limits: no attempt is evaluated beyond them.
+Each delivered message lands in the receiver's inbox (`V2XNetwork.get_received`, `V2XFrame.inbox`); the client
+payload (`spat_nearby`, `vru_nearby`) now lists only messages that were received, with `rx_power_dbm`, and
+carries `v2x_frame` / `v2x_sim_time`.
+Expected delivery probability per attempt (shadowing averaged, 1 contender), from the model of docs/science/model.md:
+| link | LOS | NLOS |
+|---|---|---|
+| RSU 33 dBm, 100 m | 1.0000 | - |
+| RSU 33 dBm, 150 m | - | 0.9798 |
+| RSU 33 dBm, 300 m | 0.9999 | 0.8034 |
+| VRU 23 dBm, 50 m | 1.0000 | 0.9966 |
+| VRU 23 dBm, 100 m | 0.9999 | 0.9342 |
+So behind a blocker at the edge of coverage an RSU message is lost about one time in five, where it was never
+lost before; in line of sight almost nothing changes.
+- Reproducibility: infrastructure and pedestrian links use their own seeded streams (seed + 101 / + 102):
+  adding RSUs or pedestrians does not change a single vehicle-to-vehicle outcome (tested).
+- Assumption without a source: the pedestrian device transmits at 23 dBm (the OBU value).
+- Not yet done: DENM through the channel (next step), antenna height (recorded nowhere; the log-distance model
+  has no height term), SPAT/MAP/VRUAM `NLOS` blockers are other V2X vehicles only (as for BSMs).

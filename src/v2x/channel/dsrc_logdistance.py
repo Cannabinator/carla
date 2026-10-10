@@ -258,21 +258,23 @@ class DSRCChannel:
     # ── Channel physics ─────────────────────────────────────────────────────────
 
     def _link_budget(
-        self, distance_m: float, nlos: bool, tx_power_dbm: Optional[float] = None
+        self, distance_m: float, nlos: bool, tx_power_dbm: Optional[float] = None,
+        rng: Optional[random.Random] = None,
     ) -> Tuple[float, float, float]:
         """
         Mean path loss, one shadowing sample and the resulting received power (dBm).
 
             P_rx = P_tx + 2*G_ant - [L0 + 10*n*log10(d/d0) + X],   X ~ N(0, sigma^2)
 
-        Draws exactly one gaussian from the channel RNG. See docs/science/model.md.
+        Draws exactly one gaussian from ``rng`` (default: the channel's own stream).
+        See docs/science/model.md.
         """
         cfg = self.config
         n = cfg.path_loss_exponent_nlos if nlos else cfg.path_loss_exponent_los
         sigma = cfg.shadowing_std_nlos_db if nlos else cfg.shadowing_std_los_db
 
         path_loss = _L0_DB + 10.0 * n * math.log10(distance_m / _REFERENCE_DIST_M)
-        shadowing = self._rng.gauss(0.0, sigma)
+        shadowing = (rng or self._rng).gauss(0.0, sigma)
 
         # Both TX and RX carry the same omnidirectional antenna
         tx = cfg.tx_power_dbm if tx_power_dbm is None else tx_power_dbm
@@ -323,11 +325,14 @@ class DSRCChannel:
         tx_power_dbm: Optional[float] = None,
         frame: int = 0,
         sim_time: float = 0.0,
+        rng: Optional[random.Random] = None,
     ) -> LinkResult:
         """
         Decide one transmission attempt and return everything that went into the decision.
 
-        Random draws, in this order: one gaussian (shadowing), then one uniform (delivery).
+        Random draws, in this order: one gaussian (shadowing), then one uniform (delivery), both from
+        ``rng`` (default: the channel's own stream; callers pass a separate seeded stream for other
+        message classes so they cannot disturb the vehicle-to-vehicle sequence).
         Co-located stations (< 0.5 m) are delivered without any draw.
         """
         cfg = self.config
@@ -345,7 +350,7 @@ class DSRCChannel:
             self._count(result)
             return result
 
-        path_loss, shadowing, p_rx = self._link_budget(distance_m, nlos, tx_power_dbm)
+        path_loss, shadowing, p_rx = self._link_budget(distance_m, nlos, tx_power_dbm, rng)
         rx_margin_db = p_rx - cfg.rx_sensitivity_dbm
 
         self._rx_margin_ring.append(rx_margin_db)
@@ -356,7 +361,7 @@ class DSRCChannel:
         p_mac = self._csma_success_prob(n_contenders)
         p_total = p_channel * p_mac
 
-        u = self._rng.random()
+        u = (rng or self._rng).random()
         delivered = u < p_total
         cause = None if delivered else (DROP_CHANNEL if u >= p_channel else DROP_MAC)
         result = LinkResult(
@@ -495,12 +500,13 @@ def _nlos_row(
     tx: Tuple[float, float],
     xs: np.ndarray,
     ys: np.ndarray,
-    sender_idx: int,
+    sender_idx: Optional[int],
 ) -> np.ndarray:
     """
     NLOS flag from one transmitter to every station, all at once.
 
-    ``out[j]`` is True iff some station k (k != sender, k != j) lies within
+    ``out[j]`` is True iff some station k (k != sender, k != j; ``sender_idx`` is None when the
+    transmitter is not one of the stations in the arrays) lies within
     ``_NLOS_BLOCKER_RADIUS_M`` of the segment tx -> station j. Same arithmetic, in the same
     order, as the scalar ``_point_to_segment_dist`` (float64), so results are identical to
     ``DSRCChannel._is_nlos``; this just replaces an O(N) Python loop per pair by numpy, taking
@@ -523,6 +529,7 @@ def _nlos_row(
         dist[degenerate, :] = np.sqrt((px - ax) ** 2 + (py - ay) ** 2)
     blocked = dist < _NLOS_BLOCKER_RADIUS_M
     n = xs.shape[0]
-    blocked[:, sender_idx] = False                 # the sender is not its own blocker
+    if sender_idx is not None:
+        blocked[:, sender_idx] = False             # the sender is not its own blocker
     blocked[np.arange(n), np.arange(n)] = False    # the receiver does not block its own link
     return blocked.any(axis=1)

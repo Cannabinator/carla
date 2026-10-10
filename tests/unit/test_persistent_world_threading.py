@@ -292,3 +292,35 @@ def test_rsu_creation_is_deterministic(env):
     rec.traffic_lights = list(reversed(rec.traffic_lights))
     second = [[tl.id for tl in r._traffic_lights] for _, r in sorted(make().v2x_network._rsus.items())]
     assert first == second
+
+
+# ── S4: a client's SPAT / VRUAM view is what its radio received ────────────────────────
+
+def _wait_for_v2x_payload(srv, sid, timeout=8.0):
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        p = srv.get_vehicle_v2x_data(sid)
+        if p and p.get("v2x_frame") is not None:
+            return p
+        time.sleep(0.05)
+    raise AssertionError("no V2X payload published")
+
+
+def test_client_payload_lists_spat_it_received_and_not_rsus_out_of_coverage(env):
+    rec, make = env
+    from tests.unit.carla_stub import TrafficLight
+    near = [TrafficLight(100, 5.0, 0.0), TrafficLight(101, 6.0, 0.0)]
+    far = [TrafficLight(200, 700.0, 0.0)]
+    for grp in (near, far):
+        for tl in grp:
+            tl.group = list(grp)
+    rec.traffic_lights = near + far
+    srv = make()
+    session = srv.sessions.create_session("c", "127.0.0.1", "vehicle.test.car0", None)
+    srv.submit(srv.spawn_client_vehicle, session.session_id, "vehicle.test.car0", 0).result(5)  # spawn point 0 = (0, 0)
+    payload = _wait_for_v2x_payload(srv, session.session_id)
+    ids = [s["intersection_id"] for s in payload["spat_nearby"]]
+    assert ids == [1], f"only the RSU within 300 m can have been received, got {ids}"
+    spat = payload["spat_nearby"][0]
+    assert spat["rx_power_dbm"] < 0 and len(spat["states"]) == 2          # two lights = two signal groups
+    assert payload["v2x_frame"] >= 0 and payload["v2x_sim_time"] > 0     # the view is stamped

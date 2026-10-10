@@ -41,3 +41,9 @@ SHARE_LIDAR_DISTANCE = 30  # Share LiDAR data within 30m
 
 
 EMERGENCY_BROADCAST_DISTANCE = 300  # Emergency messages go further
+
+# Pedestrian / cyclist (VRU) device: coverage and transmit power used for VRUAM links.
+# VRU_COVERAGE_M keeps the 100 m radius the code used before VRUAM went through the channel.
+# VRU_TX_POWER_DBM = 23 dBm is an ASSUMPTION (the OBU value); no source is known for a VRU device.
+VRU_COVERAGE_M = 100.0
+VRU_TX_POWER_DBM = 23.0

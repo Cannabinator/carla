@@ -660,45 +660,42 @@ class PersistentCARLAServer:
         def _safe_ttc(ttc: float) -> Optional[float]:
             return None if not math.isfinite(ttc) else round(ttc, 2)
 
-        vx, vy = bsm.x_m, bsm.y_m  # CARLA world x/y in metres
         neighbors = self.v2x_network.get_neighbors(vid)
         threats = self.v2x_network.get_threats(vid)
 
-        # Nearby SPAT — RSUs whose broadcast range covers the vehicle
+        # SPAT and VRUAM THIS vehicle actually received over the radio in the last V2X update
+        # (not a geometric guess): delivered messages only, each with its link quality.
         spat_nearby = []
-        for iid, rsu in getattr(self.v2x_network, "_rsus", {}).items():
-            rx, ry = rsu.config.position[0], rsu.config.position[1]
-            dist = math.sqrt((vx - rx) ** 2 + (vy - ry) ** 2)
-            if dist <= rsu.config.broadcast_range_m:
-                spat = self.v2x_network.spat_messages.get(iid)
-                if spat is not None:
-                    spat_nearby.append({
-                        "intersection_id": spat.intersection_id,
-                        "distance": round(dist, 1),
-                        "states": [
-                            {
-                                "signal_group_id": s.signal_group_id,
-                                "movement_event": s.movement_event,
-                                "likely_time_s": round(s.likely_time_s, 1)
-                                if s.likely_time_s is not None else None,
-                            }
-                            for s in spat.states
-                        ],
-                    })
+        for rm in self.v2x_network.get_received(vid, "SPAT"):
+            spat = rm.message
+            spat_nearby.append({
+                "intersection_id": spat.intersection_id,
+                "distance": round(rm.link.distance_m, 1),
+                "rx_power_dbm": round(rm.link.rx_power_dbm, 1),
+                "states": [
+                    {
+                        "signal_group_id": st.signal_group_id,
+                        "movement_event": st.movement_event,
+                        "likely_time_s": round(st.likely_time_s, 1)
+                        if st.likely_time_s is not None else None,
+                    }
+                    for st in spat.states
+                ],
+            })
 
-        # Nearby VRUAMs — pedestrians / cyclists within 100 m
         vru_nearby = []
-        for vruam in getattr(self.v2x_network, "vru_messages", {}).values():
-            px, py = vruam.position[0], vruam.position[1]
-            dist = math.sqrt((vx - px) ** 2 + (vy - py) ** 2)
-            if dist <= 100.0:
-                vru_nearby.append({
-                    "station_id": vruam.station_id,
-                    "profile": vruam.vru_profile.name,
-                    "distance": round(dist, 1),
-                    "speed": round(vruam.speed, 2),
-                    "motion_state": vruam.motion_state,
-                })
+        for rm in self.v2x_network.get_received(vid, "VRUAM"):
+            vruam = rm.message
+            vru_nearby.append({
+                "station_id": vruam.station_id,
+                "profile": vruam.vru_profile.name,
+                "distance": round(rm.link.distance_m, 1),
+                "rx_power_dbm": round(rm.link.rx_power_dbm, 1),
+                "speed": round(vruam.speed, 2),
+                "motion_state": vruam.motion_state,
+            })
+
+        frame = self.v2x_network.get_frame()
 
         return {
             "bsm": {
@@ -733,6 +730,8 @@ class PersistentCARLAServer:
             ],
             "spat_nearby": spat_nearby,
             "vru_nearby": vru_nearby,
+            "v2x_frame": frame.frame if frame else None,
+            "v2x_sim_time": frame.sim_time if frame else None,
         }
 
     def enable_client_lidar(self, session_id: str) -> bool:
