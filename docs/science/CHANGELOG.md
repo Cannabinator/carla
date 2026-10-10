@@ -126,3 +126,13 @@ For the BSM field rename the golden files were compared after renaming the keys:
   now sends the right keys.
 - Left as is: docker container/network names (`carla-v2v-*`) so existing deployments are unaffected;
   stale `docs/agents/*` and `.instructions.md` (replaced in Phase 8); `.gitignore` entries.
+
+## Phase 3, model change S2 - BSM yaw rate (2026-10-10)
+
+`create_bsm_from_carla` applied `math.degrees()` to `get_angular_velocity().z`, but CARLA already
+returns deg/s, so `yaw_rate` was inflated by 57.3x.
+- Before: input angular velocity z = 0.5 -> `yaw_rate` = 28.64788975654116
+- After:  input angular velocity z = 0.5 -> `yaw_rate` = 0.5
+- Golden diff: only `yaw_rate` in `bsm_from_snapshot` and `bsm_braking_reverse`; channel goldens unchanged
+  (the channel does not use yaw rate). No other consumer of `yaw_rate` exists in the code.
+- TODO(verify): the unit rests on the CARLA 0.9.16 API reference (deg/s); confirm with a live yaw test.
