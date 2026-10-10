@@ -11,9 +11,7 @@ pytest.importorskip("httpx", reason="fastapi TestClient needs httpx")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-import src.server.admin_routes as admin_mod
 import src.server.app as app_mod
-import src.server.client_routes as client_mod
 from tests.contract.fake_world import FakeWorld
 
 TOKEN = "test-token"

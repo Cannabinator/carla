@@ -1,3 +1,5 @@
+# TODO(Phase 2): module-global/None-initialised state is replaced by the WorldController
+# pyright: reportOptionalMemberAccess=false
 """
 Persistent CARLA world — the heart of the live-server architecture.
 
@@ -26,7 +28,7 @@ import random
 import time
 from typing import Any, Callable, Dict, List, Optional
 
-from src.server.session_manager import SessionManager, ClientSession
+from src.server.session_manager import SessionManager
 
 logger = logging.getLogger(__name__)
 

@@ -59,3 +59,16 @@ Not yet run: modules slated for deletion (`test_complete_system`, `test_frontend
   (marker `carla`) also use `CARLA_HOST`/`CARLA_PORT` and connect the server if it is idle.
 - Measured against the real app code path with a fake world: telemetry WebSocket rate 2.48 Hz
   (documented 5 Hz) - confirms handoff defect C6. Not yet verified against live CARLA.
+
+## Phase 1 tooling (2026-10-10, no model change)
+
+- `pyproject.toml` (deps, extras `dev`/`analysis`, ruff config), `.pre-commit-config.yaml`
+  (ruff on commit, offline pytest on push), `pyrightconfig.json` (basic mode on `src/` and
+  `start_server.py`).
+- Ruff (`E9`,`F`) clean: removed 36 unused imports and unused variables. Rule set is
+  deliberately conservative; widen during the restructuring.
+- Pyright basic: 0 errors. `reportOptionalMemberAccess` is switched off in the three server files
+  (42 findings from module-global/None-initialised state) until Phase 2 replaces that design.
+- Test fix: `test_different_seeds_may_differ` computed `all_same` but asserted nothing, so it could
+  never fail; it now asserts (seeds 1 and 999 give different delivery sets, deterministic).
+- Still open from Phase 1: `vulture`/import-graph check for unused files, live smoke test by a human.

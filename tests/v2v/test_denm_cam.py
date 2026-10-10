@@ -11,15 +11,9 @@ Covers:
 Level 1 (pure unit) — no CARLA runtime required.
 """
 
-import pytest
-import time
 
 # Re-use mock infrastructure from the existing basic test suite
 from tests.v2v.test_v2v_basic import (
-    MockVehicle,
-    MockWorld,
-    MockWorldSnapshot,
-    MockActorSnapshot,
     _transparent_dsrc,
 )
 
@@ -28,8 +22,6 @@ from src.v2v.messages import (
     DENM,
     DENMCauseCode,
     create_cam_from_bsm,
-    BrakingStatus,
-    VehicleType,
 )
 from src.v2v.network_enhanced import V2VNetworkEnhanced
 

@@ -13,14 +13,13 @@ from __future__ import annotations
 
 import math
 import logging
-from typing import Dict, List, Optional, Any
+from typing import Dict, Optional, Any
 
 from ..v2v.network_enhanced import V2VNetworkEnhanced
 from ..v2v.dsrc_channel import DSRCConfig
 from .messages import (
     SPATMessage, MAPMessage,
     VRUAwarenessMessage, VRUProfile,
-    CPMMessage,
 )
 from .rsu import RoadSideUnit
 

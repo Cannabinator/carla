@@ -1,3 +1,5 @@
+# TODO(Phase 2): module-global/None-initialised state is replaced by the WorldController
+# pyright: reportOptionalMemberAccess=false
 """
 Client-facing FastAPI router.
 
@@ -15,7 +17,6 @@ Mount on the main app with::
 """
 
 import asyncio
-import json
 import logging
 from typing import Optional
 

@@ -4,7 +4,6 @@ Centralized configuration to avoid magic numbers and improve maintainability.
 """
 
 from dataclasses import dataclass
-from typing import Optional
 
 
 @dataclass

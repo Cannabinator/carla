@@ -1,3 +1,5 @@
+# TODO(Phase 2): module-global/None-initialised state is replaced by the WorldController
+# pyright: reportOptionalMemberAccess=false
 """
 Admin-only FastAPI router.
 
@@ -13,7 +15,6 @@ Mount on the main app with::
 import os
 import logging
 import threading
-from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Header, Depends
 from pydantic import BaseModel, Field
