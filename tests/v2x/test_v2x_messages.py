@@ -119,10 +119,28 @@ class _MockWalker:
         return _MockVector(1.2, 0.0, 0.0)  # ~walking speed
 
 
+class _ActorSnap:
+    def __init__(self, actor):
+        self._a = actor
+
+    def get_transform(self):
+        return self._a.get_transform()
+
+    def get_velocity(self):
+        return self._a.get_velocity()
+
+    def get_angular_velocity(self):
+        return self._a.get_angular_velocity()
+
+
 class _MockSnapshot:
-    """Minimal snapshot that returns nothing (forces fallback to actor.get_*)."""
+    """Snapshot that knows only the actors given (default: none, so find() returns None)."""
+    def __init__(self, actors=()):
+        self._actors = {a.id: a for a in actors}
+
     def find(self, actor_id):
-        return None
+        a = self._actors.get(actor_id)
+        return _ActorSnap(a) if a is not None else None
 
     @property
     def timestamp(self):
@@ -537,7 +555,7 @@ class TestV2XNetwork(unittest.TestCase):
         net.register(0, veh0)
         net.register(1, veh1)
 
-        net.update(snapshot=_MockSnapshot(), force=True)
+        net.update(snapshot=_MockSnapshot([veh0, veh1]), force=True)
 
         # Both vehicles are within 200 m range and transparent channel → neighbors
         nbrs = net.get_neighbors(0)

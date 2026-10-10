@@ -24,3 +24,23 @@ def test_yaw_rate_is_passed_through_as_deg_per_s(z):
     """S2: CARLA already reports deg/s; the BSM must not scale it by 180/pi."""
     bsm = create_bsm_from_carla(_vehicle(), 7, 0, snapshot=_snap_with_yaw_rate(z))
     assert bsm.yaw_rate == z
+
+
+def test_missing_from_snapshot_returns_none_and_never_reads_the_actor_or_wall_clock(monkeypatch):
+    """S10."""
+    import time
+
+    def boom(*a, **k):
+        raise AssertionError("time.time() must not be used for BSM timestamps")
+
+    monkeypatch.setattr(time, "time", boom)
+    veh = _vehicle()
+    veh.get_transform = veh.get_velocity = veh.get_angular_velocity = boom  # RPC state is off limits
+    empty = _snapshot(actor_id=999)  # contains another actor only
+    assert create_bsm_from_carla(veh, 7, 0, snapshot=empty) is None
+    assert create_bsm_from_carla(veh, 7, 0, snapshot=None) is None
+
+
+def test_timestamp_is_the_snapshot_simulation_time():
+    bsm = create_bsm_from_carla(_vehicle(), 7, 0, snapshot=_snapshot())
+    assert bsm.timestamp == 12.35  # snapshot.timestamp.elapsed_seconds, not time.time()

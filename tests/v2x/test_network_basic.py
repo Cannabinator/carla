@@ -366,3 +366,29 @@ def run_tests():
 if __name__ == '__main__':
     success = run_tests()
     sys.exit(0 if success else 1)
+
+
+class TestMissingFromSnapshot(unittest.TestCase):
+    """S10: a station absent from the snapshot is skipped, counted, and not re-transmitted."""
+
+    def _net(self, v1, v2):
+        world = MockWorld()
+        world.add_vehicle(v1)
+        world.add_vehicle(v2)
+        net = V2XNetwork(max_range=200.0, update_rate_hz=2.0, dsrc_config=_transparent_dsrc(), world=world)
+        net.register(1, v1)
+        net.register(2, v2)
+        return net
+
+    def test_skipped_station_is_counted_and_has_no_stale_bsm(self):
+        v1, v2 = MockVehicle(1, x=0, y=0), MockVehicle(2, x=50, y=0)
+        net = self._net(v1, v2)
+        net.update(snapshot=MockWorldSnapshot([v1, v2], elapsed_seconds=1.0), force=True)
+        self.assertEqual(set(net.get_all_bsm()), {1, 2})
+        self.assertEqual(net.stats['skipped_not_in_snapshot'], 0)
+
+        net.update(snapshot=MockWorldSnapshot([v1], elapsed_seconds=2.0), force=True)  # v2 vanished
+        self.assertEqual(set(net.get_all_bsm()), {1})
+        self.assertIsNone(net.get_bsm(2))
+        self.assertEqual(net.stats['skipped_not_in_snapshot'], 1)
+        self.assertEqual(net.get_all_bsm()[1].timestamp, 2.0)  # simulation time only

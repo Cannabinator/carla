@@ -136,3 +136,15 @@ returns deg/s, so `yaw_rate` was inflated by 57.3x.
 - Golden diff: only `yaw_rate` in `bsm_from_snapshot` and `bsm_braking_reverse`; channel goldens unchanged
   (the channel does not use yaw rate). No other consumer of `yaw_rate` exists in the code.
 - TODO(verify): the unit rests on the CARLA 0.9.16 API reference (deg/s); confirm with a live yaw test.
+
+## Phase 3, model change S10 - no wall-clock / RPC fallback in BSMs (2026-10-10)
+
+`create_bsm_from_carla` used `time.time()` and `vehicle.get_transform()/get_velocity()` as defaults
+and kept them if the vehicle was missing from the snapshot, so a BSM could carry a WALL-CLOCK
+timestamp next to simulation-time BSMs.
+- Before: vehicle missing from snapshot -> BSM built from RPC state with `timestamp = time.time()`
+  (about 1.79e9 s) while the others carry simulation seconds (e.g. 12.35).
+- After: returns `None`; `V2XNetwork` skips the station for that frame, removes its previous BSM (no
+  stale re-transmission) and counts it in `stats['skipped_not_in_snapshot']`. A snapshot is required.
+- Normal case (vehicle in snapshot): values unchanged; goldens unchanged.
+- Tests that relied on the fallback (an empty mock snapshot) now pass the actors in the snapshot.

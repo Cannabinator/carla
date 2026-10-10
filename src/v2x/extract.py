@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-import time
+from typing import Optional
 
 from .messages.bsm import BrakingStatus, BSMCore, VehicleType
 
@@ -73,47 +73,40 @@ def _vehicle_type_from_actor(vehicle) -> 'VehicleType':
     return VehicleType.PASSENGER_CAR
 
 
-def create_bsm_from_carla(vehicle, vehicle_id: int, msg_count: int, 
-                          snapshot=None, prev_velocity=None, delta_time=0.05) -> BSMCore:
+def create_bsm_from_carla(vehicle, vehicle_id: int, msg_count: int,
+                          snapshot, prev_velocity=None, delta_time=0.05) -> Optional[BSMCore]:
     """
-    Create BSM message from CARLA vehicle actor.
-    
-    CRITICAL: Uses snapshot data for scientifically accurate measurements.
-    vehicle.get_velocity() returns CACHED data from previous tick, which is 
-    incorrect for synchronous simulation. Always use snapshot.find().get_velocity().
-    
+    Create a BSM from a CARLA vehicle, using only data of one WorldSnapshot.
+
+    ``vehicle.get_velocity()`` returns data cached from the previous tick, which is wrong in
+    synchronous simulation, so kinematics and the timestamp come from the snapshot only.
+
+    Returns ``None`` if the vehicle is not in the snapshot (for example destroyed this tick).
+    There is deliberately no fallback to RPC state or wall-clock time: mixing clocks in one
+    data set is worse than skipping a station for one frame (defect S10). The caller counts
+    the skip.
+
     Args:
         vehicle: CARLA vehicle actor
         vehicle_id: Unique vehicle identifier
         msg_count: Message counter
-        snapshot: WorldSnapshot for fresh data (REQUIRED for accuracy)
-        prev_velocity: Previous velocity for accel calculation
+        snapshot: WorldSnapshot (required)
+        prev_velocity: Previous speed for the acceleration estimate
         delta_time: Time since last update
-    
+
     Returns:
-        BSMCore instance
+        BSMCore instance, or None if the vehicle is missing from the snapshot
     """
-    transform = vehicle.get_transform()
-    sim_timestamp = time.time()
-    
-    # Get FRESH velocity from snapshot (not cached from previous tick)
-    if snapshot:
-        actor_snapshot = snapshot.find(vehicle.id)
-        if actor_snapshot:
-            transform = actor_snapshot.get_transform()
-            velocity = actor_snapshot.get_velocity()
-            angular_velocity = actor_snapshot.get_angular_velocity()
-            if hasattr(snapshot, 'timestamp') and hasattr(snapshot.timestamp, 'elapsed_seconds'):
-                sim_timestamp = float(snapshot.timestamp.elapsed_seconds)
-        else:
-            # Fallback if actor is missing in snapshot (e.g., destroyed this tick).
-            velocity = vehicle.get_velocity()
-            angular_velocity = vehicle.get_angular_velocity()
-    else:
-        # Fallback to cached data (SCIENTIFICALLY INACCURATE)
-        velocity = vehicle.get_velocity()
-        angular_velocity = vehicle.get_angular_velocity()
-    
+    if snapshot is None:
+        return None
+    actor_snapshot = snapshot.find(vehicle.id)
+    if actor_snapshot is None:
+        return None
+    transform = actor_snapshot.get_transform()
+    velocity = actor_snapshot.get_velocity()
+    angular_velocity = actor_snapshot.get_angular_velocity()
+    sim_timestamp = float(snapshot.timestamp.elapsed_seconds)
+
     # Calculate speed
     speed_ms = math.sqrt(velocity.x**2 + velocity.y**2 + velocity.z**2)
     

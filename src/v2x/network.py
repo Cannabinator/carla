@@ -108,6 +108,7 @@ class V2XNetwork:
             'cooperative_shares': 0,
             'total_update_count': 0,          # number of 2 Hz ticks executed
             'measured_update_hz': 0.0,        # achieved update rate (wall clock)
+            'skipped_not_in_snapshot': 0,     # station-frames skipped: actor missing from snapshot
         }
         self._first_update_wall_time: Optional[float] = None
 
@@ -239,6 +240,12 @@ class V2XNetwork:
         # ── Phase 1: Build BSMs from current CARLA snapshot ──────────────────
         for vehicle_id, vehicle in self.vehicles.items():
             bsm = self._create_bsm(vehicle, vehicle_id, snapshot, delta_time)
+            if bsm is None:
+                # Not in this snapshot: skip the station this frame and drop its previous BSM
+                # so a stale message is not transmitted again (S10).
+                self.bsm_messages.pop(vehicle_id, None)
+                self.stats['skipped_not_in_snapshot'] += 1
+                continue
             self.bsm_messages[vehicle_id] = bsm
             successful_sends += 1
 
@@ -274,7 +281,7 @@ class V2XNetwork:
         return True
     
     def _create_bsm(self, vehicle: carla.Actor, vehicle_id: int, 
-                    snapshot, delta_time: float) -> BSMCore:
+                    snapshot, delta_time: float) -> Optional[BSMCore]:
         """Create BSM message from CARLA vehicle"""
         prev_speed = self.prev_speeds.get(vehicle_id, 0.0)
         msg_count = self.msg_counters.get(vehicle_id, 0)
