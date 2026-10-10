@@ -12,8 +12,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import unittest
 from unittest.mock import Mock
 
-from src.v2v.network_enhanced import V2VNetworkEnhanced
-from src.v2v.messages import BSMCore
+from src.v2x.network import V2XNetwork
+from src.v2x.messages import BSMCore
 
 
 class TestV2VNeighborDiscovery(unittest.TestCase):
@@ -21,7 +21,7 @@ class TestV2VNeighborDiscovery(unittest.TestCase):
     
     def setUp(self):
         """Create V2V network for testing"""
-        self.v2v = V2VNetworkEnhanced(max_range=50.0, update_rate_hz=2.0)
+        self.v2v = V2XNetwork(max_range=50.0, update_rate_hz=2.0)
     
     def create_mock_vehicle(self, x, y, z=0.5):
         """Create mock vehicle at position"""

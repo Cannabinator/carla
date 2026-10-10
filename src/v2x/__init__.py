@@ -1,32 +1,35 @@
-"""V2X Communication Package — extends V2V with V2I (RSU/SPAT/MAP) and V2P (VRU) protocols."""
+"""V2X communication: BSM/CAM/DENM between vehicles (V2V link), RSU MAP/SPAT (V2I), VRUAM (V2P)."""
 
+from .channel import DSRCChannel, DSRCConfig
 from .messages import (
-    VRUProfile,
-    ObjectClassification,
+    DENM,
+    BSMCore,
+    BSMPartII,
+    CooperativeAwarenessMessage,
+    CPMMessage,
+    DENMCauseCode,
+    EnhancedBSMMessage,
     MAPLane,
     MAPMessage,
-    SPATMovementState,
-    SPATMessage,
+    ObjectClassification,
     PerceivedObject,
     SensorInfo,
-    CPMMessage,
+    SPATMessage,
+    SPATMovementState,
+    VehicleType,
     VRUAwarenessMessage,
+    VRUProfile,
+    BrakingStatus,
+    create_cam_from_bsm,
 )
-from .rsu import RSUConfig, RoadSideUnit
-from .network import V2XNetworkEnhanced
+from .network import V2XNetwork
+from .rsu import RoadSideUnit, RSUConfig
+from .threat import calculate_threat_level
 
 __all__ = [
-    "VRUProfile",
-    "ObjectClassification",
-    "MAPLane",
-    "MAPMessage",
-    "SPATMovementState",
-    "SPATMessage",
-    "PerceivedObject",
-    "SensorInfo",
-    "CPMMessage",
-    "VRUAwarenessMessage",
-    "RSUConfig",
-    "RoadSideUnit",
-    "V2XNetworkEnhanced",
+    "DSRCChannel", "DSRCConfig", "DENM", "BSMCore", "BSMPartII", "CooperativeAwarenessMessage",
+    "CPMMessage", "DENMCauseCode", "EnhancedBSMMessage", "MAPLane", "MAPMessage",
+    "ObjectClassification", "PerceivedObject", "SensorInfo", "SPATMessage", "SPATMovementState",
+    "VehicleType", "VRUAwarenessMessage", "VRUProfile", "BrakingStatus", "create_cam_from_bsm",
+    "V2XNetwork", "RoadSideUnit", "RSUConfig", "calculate_threat_level",
 ]

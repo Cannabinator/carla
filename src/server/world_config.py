@@ -21,7 +21,7 @@ class WorldConfig(BaseModel):
     max_substeps: int = Field(default=10, ge=1, le=16)
 
     # Traffic Manager. NOTE: -20.0 means 20 % FASTER than the speed limit (CARLA semantics),
-    # while src/config.py says 30.0 "% slower". Current behaviour (-20.0) is kept; the
+    # while the removed src/config.py said 30.0 "% slower". Current behaviour (-20.0) is kept; the
     # contradiction is recorded in docs/science/CHANGELOG.md.
     tm_port: int = Field(default=8001, ge=1024, le=65535)
     seed: int = 42

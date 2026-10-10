@@ -213,9 +213,9 @@ class PersistentCARLAServer:
 
     def _init_v2x(self) -> None:
         try:
-            from src.v2x.network import V2XNetworkEnhanced
+            from src.v2x.network import V2XNetwork
             from src.v2x.rsu import RoadSideUnit
-            self.v2x_network = V2XNetworkEnhanced(
+            self.v2x_network = V2XNetwork(
                 max_range=self.v2x_range,
                 update_rate_hz=self.config.v2x_update_rate_hz,
                 world=self.world,

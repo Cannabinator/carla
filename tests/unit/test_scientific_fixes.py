@@ -1,4 +1,5 @@
 """Real asserts replacing the root-level test_scientific_fixes.py (which asserted nothing).
+(The config.py-vs-DSRCConfig default comparison went away with the duplicate src/config.py.)
 
 The CSMA values are pinned to what the code computes today (tolerance 1e-9). The CSMA
 term is EXPERIMENTAL / uncalibrated (REFACTOR_HANDOFF S6); these pins detect drift, they
@@ -12,8 +13,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from src.config import DEFAULT_DSRC_CONFIG
-from src.v2v.dsrc_channel import DSRCChannel, DSRCConfig
+from src.v2x.channel.dsrc_logdistance import DSRCChannel, DSRCConfig
 
 CSMA_PINNED = {
     1: 1.0,
@@ -42,11 +42,3 @@ def test_csma_bounds_and_monotonic():
 def test_light_traffic_prr_above_090():
     ch = DSRCChannel()
     assert all(ch._csma_success_prob(n) > 0.90 for n in range(1, 21))
-
-
-@pytest.mark.parametrize("name", [
-    "path_loss_exponent_los", "path_loss_exponent_nlos",
-    "shadowing_std_los_db", "shadowing_std_nlos_db", "channel_busy_ratio",
-])
-def test_config_py_matches_dsrc_channel_defaults(name):
-    assert getattr(DEFAULT_DSRC_CONFIG, name) == getattr(DSRCConfig(), name)

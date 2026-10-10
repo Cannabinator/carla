@@ -13,7 +13,7 @@ Coverage:
   - broadcast_all → get_received consistency
   - Channel statistics tracking (total_broadcasts, prr)
   - Deterministic behaviour under a fixed seed
-  - Integration: V2VNetworkEnhanced respects channel drops in neighbour discovery
+  - Integration: V2XNetwork respects channel drops in neighbour discovery
 """
 
 import sys
@@ -22,9 +22,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from src.v2v.dsrc_channel import DSRCChannel, DSRCConfig, _euclidean, _point_to_segment_dist
-from src.v2v.messages import BSMCore, VehicleType, BrakingStatus
-from src.v2v import V2VNetworkEnhanced
+from src.v2x.channel.dsrc_logdistance import DSRCChannel, DSRCConfig, _euclidean, _point_to_segment_dist
+from src.v2x.messages import BSMCore, VehicleType, BrakingStatus
+from src.v2x import V2XNetwork
 
 
 # ── Test helpers ───────────────────────────────────────────────────────────────
@@ -461,7 +461,7 @@ class TestGeometryHelpers(unittest.TestCase):
         self.assertAlmostEqual(dist, 5.0, places=5)
 
 
-# ── Integration test: V2VNetworkEnhanced respects channel model ────────────────
+# ── Integration test: V2XNetwork respects channel model ────────────────
 
 class MockVector:
     def __init__(self, x=0.0, y=0.0, z=0.0):
@@ -530,12 +530,12 @@ class MockSnapshot:
 
 class TestV2VNetworkWithDSRC(unittest.TestCase):
     """
-    Level 2 component test: V2VNetworkEnhanced with the DSRC channel active.
+    Level 2 component test: V2XNetwork with the DSRC channel active.
     Uses zero-shadowing, zero-contention config so outcomes are
     deterministic and physics-driven only.
     """
 
-    def _make_network(self, max_range: float = 100.0) -> V2VNetworkEnhanced:
+    def _make_network(self, max_range: float = 100.0) -> V2XNetwork:
         cfg = DSRCConfig(
             shadowing_std_los_db=0.0,
             shadowing_std_nlos_db=0.0,
@@ -543,7 +543,7 @@ class TestV2VNetworkWithDSRC(unittest.TestCase):
             enable_nlos_model=False,
             random_seed=42,
         )
-        return V2VNetworkEnhanced(
+        return V2XNetwork(
             max_range=max_range,
             update_rate_hz=2.0,
             enable_cooperative_perception=True,

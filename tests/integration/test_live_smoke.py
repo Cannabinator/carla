@@ -21,7 +21,7 @@ def test_world_has_map_and_vehicle_blueprints(carla_client):
 
 
 def test_bsm_from_real_vehicle(carla_client):
-    from src.v2v.messages import create_bsm_from_carla
+    from src.v2x.extract import create_bsm_from_carla
 
     world = carla_client.get_world()
     bp = world.get_blueprint_library().filter("vehicle.tesla.model3")[0]
