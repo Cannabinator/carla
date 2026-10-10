@@ -255,7 +255,7 @@ def test_lidar_lifecycle_budget_and_two_viewers(live_world):
 
         # observers may not create; the admin may; the vehicle may on its own actor
         assert live_world.json("POST", "/api/lidar/sensors", {"actor_id": j["actor_id"]})[0] == 403
-        status, created = live_world.json("POST", f"/api/sessions/{sid}/lidar", {"channels": 32})
+        status, created = live_world.json("POST", f"/api/sessions/{sid}/lidar", {"channels": 32}, headers={"X-Session-Token": j["session_token"]})
         assert status == 202, created
         sensor_id = created["sensor_id"]
 

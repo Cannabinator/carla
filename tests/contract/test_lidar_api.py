@@ -88,27 +88,32 @@ def test_wrong_admin_token_is_403(client, world):
 
 def test_vehicle_creates_on_own_actor_only(client, world):
     j = join(client)
-    h = {"X-Session-Id": j["session_id"]}
+    h = {"X-Session-Token": j["session_token"]}
     assert client.post("/api/lidar/sensors", json={"actor_id": j["actor_id"] + 1}, headers=h).status_code == 403
     r = client.post("/api/lidar/sensors", json={}, headers=h)          # defaults to its own actor
     assert r.status_code == 202
     (info,) = client.get("/api/lidar/sensors").json()["sensors"]
-    assert info["actor_id"] == j["actor_id"] and info["owner"] == j["session_id"]
+    assert info["actor_id"] == j["actor_id"] and info["owner"] == "car"      # the client name, not the session id
     assert client.post("/api/lidar/sensors", json={"pinned": True}, headers=h).status_code == 403
 
 
 def test_vehicle_session_must_exist(client, world):
-    r = client.post("/api/lidar/sensors", json={}, headers={"X-Session-Id": "ghost"})
-    assert r.status_code == 404
+    r = client.post("/api/lidar/sensors", json={}, headers={"X-Session-Token": "ghost"})
+    assert r.status_code == 401
 
 
 def test_session_convenience_endpoint(client, world):
     j = join(client)
-    r = client.post(f"/api/sessions/{j['session_id']}/lidar", json={"channels": 16})
+    h = {"X-Session-Token": j["session_token"]}
+    r = client.post(f"/api/sessions/{j['session_id']}/lidar", json={"channels": 16}, headers=h)
     assert r.status_code == 202
     (info,) = client.get("/api/lidar/sensors").json()["sensors"]
     assert info["config"]["channels"] == 16 and info["actor_id"] == j["actor_id"]
-    assert client.post("/api/sessions/nope/lidar").status_code == 404
+    assert client.post("/api/sessions/nope/lidar", headers=h).status_code == 403     # token of another session
+    assert client.post(f"/api/sessions/{j['session_id']}/lidar").status_code == 403  # no token: observer is not the owner
+    other = join(client, "other")
+    assert client.post(f"/api/sessions/{j['session_id']}/lidar",
+                       headers={"X-Session-Token": other["session_token"]}).status_code == 403
 
 
 def test_invalid_config_is_422(client, world):
@@ -155,13 +160,14 @@ def test_join_with_lidar_requests_a_sensor_on_the_new_vehicle(client, world):
 
 def test_reconfigure_release_and_ownership(client, world):
     a, b = join(client, "a"), join(client, "b")
-    sid = client.post(f"/api/sessions/{a['session_id']}/lidar").json()["sensor_id"]
-    other = {"X-Session-Id": b["session_id"]}
+    sid = client.post(f"/api/sessions/{a['session_id']}/lidar",
+                      headers={"X-Session-Token": a["session_token"]}).json()["sensor_id"]
+    other = {"X-Session-Token": b["session_token"]}
     assert client.put(f"/api/lidar/sensors/{sid}", json={"channels": 64}, headers=other).status_code == 403
     assert client.delete(f"/api/lidar/sensors/{sid}", headers=other).status_code == 403
     assert client.delete(f"/api/lidar/sensors/{sid}").status_code == 403           # observer
 
-    mine = {"X-Session-Id": a["session_id"]}
+    mine = {"X-Session-Token": a["session_token"]}
     world.lidar_tick(1)
     r = client.put(f"/api/lidar/sensors/{sid}", json={"channels": 64}, headers=mine)
     assert r.status_code == 202 and r.json()["state"] == "reconfiguring"
@@ -274,3 +280,10 @@ def test_ws_gets_destroyed_state_when_released(client, world):
             if seen[-1].get("type") == "state" and seen[-1]["state"] == "destroyed":
                 break
         assert seen[-1]["state"] == "destroyed"
+
+
+def test_nothing_an_observer_can_read_contains_a_session_id_or_token(client, world):
+    j = join(client, enable_lidar=True)
+    world.lidar_tick(1)
+    text = client.get("/api/lidar/sensors").text
+    assert j["session_id"] not in text and j["session_token"] not in text

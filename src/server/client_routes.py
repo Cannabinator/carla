@@ -83,6 +83,8 @@ class JoinRequest(BaseModel):
 
 class JoinResponse(BaseModel):
     session_id: str
+    session_token: str = Field(description="Secret for the WebSocket hub (auth message) and the X-Session-Token "
+                                           "header; shown only to the client that joined")
     actor_id: int
     ws_url: str
     lidar_ws_url: Optional[str] = None
@@ -146,7 +148,7 @@ async def join_server(req: JoinRequest, request: Request):
     if req.enable_lidar:
         try:
             lidar_sensor_id = await request_sensor(
-                _world, Principal("vehicle", session.session_id, actor_id), None, req.lidar_config or LidarConfig())
+                _world, Principal("vehicle", session.session_id, actor_id, session.client_name), None, req.lidar_config or LidarConfig())
             session.lidar_enabled = True
             lidar_ws_url = f"/ws/lidar/{lidar_sensor_id}"
         except LidarBudgetExceeded as exc:       # the join itself succeeded
@@ -156,6 +158,7 @@ async def join_server(req: JoinRequest, request: Request):
 
     return JoinResponse(
         session_id=session.session_id,
+        session_token=session.session_token,
         actor_id=actor_id,
         ws_url=f"/ws/client/{session.session_id}",
         lidar_ws_url=lidar_ws_url,
@@ -186,6 +189,7 @@ async def get_vehicle_state(session_id: str):
     if session is None or not session.is_active:
         raise HTTPException(status_code=404, detail="Session not found or ended")
 
+    _world.sessions.touch(session_id)      # a REST-polling client is alive too
     telemetry = _world.get_vehicle_telemetry(session_id)
     if telemetry is None:
         raise HTTPException(status_code=404, detail="Vehicle not found")
@@ -228,6 +232,7 @@ async def client_websocket(websocket: WebSocket, session_id: str):
         await websocket.close()
         return
 
+    _world.sessions.mark_connected(session_id)
     logger.info("Client WS connected: session=%s (%s)", session_id, session.client_name)
 
     async def _receive_loop():
@@ -272,14 +277,19 @@ async def client_websocket(websocket: WebSocket, session_id: str):
         logger.error("Client WS error for session %s: %s", session_id, exc)
     finally:
         receiver.cancel()
-        # Auto-cleanup on any disconnect
         if _world is not None:
-            try:
-                await on_sim_thread(_world, _world.despawn_client_vehicle, session_id)
-            except Exception as exc:  # world may have stopped meanwhile
-                logger.warning("Cleanup of session %s skipped: %s", session_id, exc)
-            _world.sessions.end_session(session_id)
-        logger.info("Auto-cleaned session %s after WS close", session_id)
+            _world.sessions.mark_disconnected(session_id)
+            grace = getattr(_world, "session_disconnect_grace_s", 0.0)
+            if grace > 0:
+                # D4: keep the vehicle; the simulation thread removes the session if nobody comes back in time
+                logger.info("Client WS closed: session=%s kept for %.0f s", session_id, grace)
+            else:
+                try:
+                    await on_sim_thread(_world, _world.despawn_client_vehicle, session_id)
+                except Exception as exc:  # world may have stopped meanwhile
+                    logger.warning("Cleanup of session %s skipped: %s", session_id, exc)
+                _world.sessions.end_session(session_id)
+                logger.info("Auto-cleaned session %s after WS close", session_id)
 
 
 # ------------------------------------------------------------------ #

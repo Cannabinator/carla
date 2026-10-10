@@ -48,6 +48,17 @@ class WorldConfig(BaseModel):
     # a sensor without viewers is destroyed after this many WALL seconds (a UI resource policy, not model data)
     lidar_keep_alive_s: float = Field(default=10.0, ge=0.0)
 
+    # A session whose WebSocket closed is kept this many seconds before its vehicle is removed, so a flaky
+    # connection does not destroy a run (decision D4). 0 = remove at once (old behaviour).
+    session_disconnect_grace_s: float = Field(default=30.0, ge=0.0)
+    # Observers (no token) may use the read-only pages and topics (decision D12)
+    observer_public: bool = True
+    # Rate at which ground-truth station states are published (whole number of frames, like the V2X rate)
+    world_state_rate_hz: float = Field(default=10.0, gt=0)
+    # Row cap of one v2x.links message; more rows are cut and the message says truncated
+    v2x_links_max_rows: int = Field(default=2000, ge=1)
+    event_log_size: int = Field(default=1000, ge=10)
+
     # web server port, only used to reject a clashing tm_port
     web_port: int = 8000
 
@@ -72,7 +83,15 @@ class WorldConfig(BaseModel):
                 f"1 / (v2x_update_rate_hz * fixed_delta_seconds) = {n:.4f} is not a whole "
                 f"number of frames; choose a rate that divides the simulation rate"
             )
+        m = 1.0 / (self.world_state_rate_hz * self.fixed_delta_seconds)
+        if abs(m - round(m)) > 1e-6 or round(m) < 1:
+            raise ValueError(
+                f"1 / (world_state_rate_hz * fixed_delta_seconds) = {m:.4f} is not a whole number of frames")
         return self
+
+    @property
+    def world_state_every_n_frames(self) -> int:
+        return round(1.0 / (self.world_state_rate_hz * self.fixed_delta_seconds))
 
     @property
     def v2x_every_n_frames(self) -> int:

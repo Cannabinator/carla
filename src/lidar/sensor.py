@@ -83,10 +83,12 @@ class Principal:
     kind: str                         # "admin" | "vehicle" | "observer"
     session_id: Optional[str] = None
     actor_id: Optional[int] = None
+    label: Optional[str] = None       # shown as the owner (client name). The session id is a credential-adjacent
+                                      # identifier and is never put in anything an observer can read.
 
     @property
     def owner_label(self) -> str:
-        return "admin" if self.kind == "admin" else (self.session_id or "observer")
+        return "admin" if self.kind == "admin" else (self.label or self.kind)
 
 
 ADMIN = Principal("admin")

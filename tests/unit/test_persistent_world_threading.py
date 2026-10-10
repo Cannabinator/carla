@@ -385,3 +385,51 @@ def test_server_stop_destroys_lidar_sensors(env):
     assert len(sensors) == 1 and srv.lidar.state_of(sid).value == "active"
     srv.stop()
     assert all(s.destroyed for s in sensors)
+
+
+def _wait(cond, seconds=6.0):
+    end = time.time() + seconds
+    while time.time() < end:
+        if cond():
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def test_disconnected_session_is_removed_by_the_sim_thread_after_the_grace_period(env):
+    rec, make = env
+    srv = make(session_disconnect_grace_s=1.0)
+    session, actor_id = _join(srv)
+    srv.sessions.mark_connected(session.session_id)
+    time.sleep(2.5)                                   # connected: never removed, however long
+    assert session.is_active and actor_id in rec.actors
+
+    srv.sessions.mark_disconnected(session.session_id)
+    time.sleep(0.4)
+    assert session.is_active and actor_id in rec.actors, "removed before the grace period ended"
+    assert _wait(lambda: not session.is_active), "not removed after the grace period"
+    assert actor_id not in rec.actors
+    kinds = [e["kind"] for e in srv.events.since(0)[0]]
+    assert "client_vehicle_spawned" in kinds and "session_disconnected_removed" in kinds
+
+
+def test_reconnecting_within_the_grace_period_keeps_the_session(env):
+    rec, make = env
+    srv = make(session_disconnect_grace_s=1.5)
+    session, actor_id = _join(srv)
+    srv.sessions.mark_connected(session.session_id)
+    srv.sessions.mark_disconnected(session.session_id)
+    time.sleep(0.8)
+    srv.sessions.mark_connected(session.session_id)
+    time.sleep(2.5)
+    assert session.is_active and actor_id in rec.actors
+
+
+def test_lidar_transitions_end_up_in_the_event_log(env):
+    from src.lidar.config import LidarConfig
+    from src.lidar.sensor import ADMIN
+    rec, make = env
+    srv = make()
+    _, actor_id = _join(srv)
+    srv.submit(srv.lidar_request, ADMIN, actor_id, LidarConfig(), pinned=True).result(5)
+    assert _wait(lambda: any(e["kind"] == "lidar_active" for e in srv.events.since(0)[0]))

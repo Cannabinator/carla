@@ -5,6 +5,7 @@ Each device that connects (laptop, raspi, workstation…) gets one session,
 and one "leading vehicle" in the simulation.
 """
 
+import secrets
 import uuid
 import logging
 import threading
@@ -29,6 +30,10 @@ class ClientSession:
     is_active: bool = True
     lidar_enabled: bool = False
     last_seen: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    # Secret that identifies the session on the WebSocket hub and in LiDAR requests. It is NOT the session id:
+    # the id is shown in the admin list, the token only goes to the client that joined (never in a URL).
+    session_token: str = field(default_factory=lambda: secrets.token_urlsafe(24), repr=False)
+    ws_connections: int = 0
 
     # ------------------------------------------------------------------ #
     # Computed properties                                                  #
@@ -59,6 +64,7 @@ class ClientSession:
             "lidar_enabled": self.lidar_enabled,
             "remaining_seconds": self.remaining_seconds,
             "last_seen": self.last_seen.isoformat(),
+            "connected": self.ws_connections > 0,
         }
 
 
@@ -135,6 +141,38 @@ class SessionManager:
     def all_sessions(self) -> List[ClientSession]:
         with self._lock:
             return list(self._sessions.values())
+
+    def get_by_token(self, token: str) -> Optional[ClientSession]:
+        """The active session owning ``token`` (constant-time comparison), else None."""
+        with self._lock:
+            sessions = list(self._sessions.values())
+        found = None
+        for s in sessions:
+            if secrets.compare_digest(s.session_token, token) and s.is_active:
+                found = s
+        return found
+
+    def mark_connected(self, session_id: str) -> None:
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if session:
+                session.ws_connections += 1
+                session.last_seen = datetime.now(timezone.utc)
+
+    def mark_disconnected(self, session_id: str) -> None:
+        """A WebSocket of the session closed. The session is kept for the grace period (decision D4)."""
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if session:
+                session.ws_connections = max(0, session.ws_connections - 1)
+                session.last_seen = datetime.now(timezone.utc)
+
+    def get_grace_expired(self, grace_s: float) -> List[ClientSession]:
+        """Active sessions with no WebSocket and no sign of life (``touch``) for longer than ``grace_s``."""
+        now = datetime.now(timezone.utc)
+        with self._lock:
+            return [s for s in self._sessions.values()
+                    if s.is_active and s.ws_connections == 0 and (now - s.last_seen).total_seconds() > grace_s]
 
     def touch(self, session_id: str) -> None:
         """Update last_seen timestamp (called on every WS heartbeat)."""

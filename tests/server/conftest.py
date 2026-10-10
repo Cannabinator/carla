@@ -31,9 +31,9 @@ class Server:
         self.base = base_url.rstrip("/")
         self.token = token
 
-    def request(self, method, path, body=None, admin=False, token=None, timeout=15):
+    def request(self, method, path, body=None, admin=False, token=None, timeout=15, headers=None):
         data = json.dumps(body).encode() if body is not None else None
-        headers = {"Content-Type": "application/json"} if data else {}
+        headers = {**({"Content-Type": "application/json"} if data else {}), **(headers or {})}
         if admin:
             headers["X-Admin-Token"] = token if token is not None else self.token
         req = urllib.request.Request(self.base + path, data=data, method=method, headers=headers)

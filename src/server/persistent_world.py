@@ -43,6 +43,7 @@ import carla
 from src.lidar.carla_backend import CarlaSensorBackend
 from src.lidar.sensor import LidarLimits, LidarManager
 from src.lidar.stream import SensorStream
+from src.server.events import EventLog
 from src.server.session_manager import SessionManager
 from src.server.sim_executor import SimThreadExecutor
 from src.server.world_config import WorldConfig
@@ -56,7 +57,7 @@ _FALLBACK_BLUEPRINTS = [
     "vehicle.lincoln.mkz_2020",
 ]
 
-_SESSION_CHECK_EVERY_N_FRAMES = 100  # ~5 s at 20 FPS
+_SESSION_CHECK_EVERY_N_FRAMES = 20  # ~1 s at 20 FPS (expiry and the disconnect grace period)
 
 
 class PersistentCARLAServer:
@@ -99,6 +100,9 @@ class PersistentCARLAServer:
 
         # Session manager (shared with HTTP routes; has its own lock)
         self.sessions = SessionManager()
+        self.session_disconnect_grace_s = config.session_disconnect_grace_s
+        # things that happened (thread-safe; read by the "events" topic)
+        self.events = EventLog(config.event_log_size)
 
         # V2X network (created in start())
         self.v2x_network = None
@@ -305,6 +309,9 @@ class PersistentCARLAServer:
             return
         try:
             self.lidar.collect(snapshot.frame, float(snapshot.timestamp.elapsed_seconds))
+            for e in self.lidar.drain_events():
+                self.events.add("lidar_" + e["to"], frame=e["frame"], sim_time=snapshot.timestamp.elapsed_seconds,
+                                **{k: v for k, v in e.items() if k != "frame"})
         except Exception:
             logger.exception("LiDAR collection failed at frame %d (simulation continues)", self._frame)
 
@@ -388,8 +395,20 @@ class PersistentCARLAServer:
             logger.info("Session %s expired — removing vehicle", session.session_id)
             self._despawn_client_vehicle(session.session_id)
             self.sessions.end_session(session.session_id)
+            self._event("session_expired", client=session.client_name, actor_id=session.vehicle_actor_id)
             if self.on_session_expired:
                 self.on_session_expired(session.session_id)
+        if self.session_disconnect_grace_s > 0:
+            for session in self.sessions.get_grace_expired(self.session_disconnect_grace_s):
+                logger.info("Session %s: no connection for %.0f s — removing vehicle",
+                            session.session_id, self.session_disconnect_grace_s)
+                self._despawn_client_vehicle(session.session_id)
+                self.sessions.end_session(session.session_id)
+                self._event("session_disconnected_removed", client=session.client_name,
+                            actor_id=session.vehicle_actor_id, grace_s=self.session_disconnect_grace_s)
+
+    def _event(self, kind: str, **data: Any) -> None:
+        self.events.add(kind, frame=self._frame, sim_time=self._frame * self.fixed_delta_seconds, **data)
 
     # ------------------------------------------------------------------ #
     # Admin — background traffic  (simulation thread only: use submit())  #
@@ -447,6 +466,7 @@ class PersistentCARLAServer:
             "Spawned %d / %d background vehicles (%d V2X stations in total)",
             spawned, count, len(self._v2x_background_ids),
         )
+        self._event("background_traffic_spawned", requested=count, spawned=spawned)
         return spawned
 
     def _unregister_background_stations(self) -> None:
@@ -478,6 +498,7 @@ class PersistentCARLAServer:
         self.client.apply_batch_sync(batch, False)
         self._background_vehicles.clear()
         logger.info("Despawned %d background vehicles", count)
+        self._event("background_traffic_removed", count=count)
         return count
 
     # ------------------------------------------------------------------ #
@@ -544,6 +565,7 @@ class PersistentCARLAServer:
             for ped in ped_actors:
                 self.v2x_network.register_vru(ped.id, ped, VRUProfile.PEDESTRIAN)
         logger.info("Spawned %d / %d pedestrians", spawned, count)
+        self._event("pedestrians_spawned", requested=count, spawned=spawned)
         return spawned
 
     def despawn_pedestrians(self) -> int:
@@ -571,6 +593,7 @@ class PersistentCARLAServer:
         self._pedestrian_controllers.clear()
         self._pedestrians.clear()
         logger.info("Despawned %d pedestrians", count)
+        self._event("pedestrians_removed", count=count)
         return count
 
     # ------------------------------------------------------------------ #
@@ -631,6 +654,7 @@ class PersistentCARLAServer:
             "Spawned client vehicle actor=%d for session %s (%s)",
             actor.id, session_id, session.client_name,
         )
+        self._event("client_vehicle_spawned", client=session.client_name, actor_id=actor.id)
         return actor.id
 
     def despawn_client_vehicle(self, session_id: str) -> None:
@@ -661,6 +685,7 @@ class PersistentCARLAServer:
         except Exception as exc:
             logger.warning("Error destroying client vehicle: %s", exc)
         logger.info("Despawned client vehicle for session %s", session_id)
+        self._event("client_vehicle_removed", actor_id=actor.id)
 
     # ------------------------------------------------------------------ #
     # State queries (any thread; read published data, never call CARLA)    #

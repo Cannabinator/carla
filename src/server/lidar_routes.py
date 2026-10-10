@@ -2,7 +2,7 @@
 """LiDAR API (REFACTOR_HANDOFF 5.5): sensors exist only on request, viewers are separate from sensors.
 
 Who may do what (D9, D12): the *admin* (``X-Admin-Token``) may create a sensor on any actor, pin it and record
-its raw frames; a *vehicle* session (``X-Session-Id``) only on its own vehicle; anyone else is an *observer*
+its raw frames; a *vehicle* session (``X-Session-Token``, the secret from the join response) only on its own vehicle; anyone else is an *observer*
 and may only read the sensor list and view active sensors. Phase 5 replaces this header handling by the roles
 of the WebSocket hub; the permission rules themselves live in ``LidarManager``.
 """
@@ -46,15 +46,15 @@ def _ready():
     return _world
 
 
-def principal_from_headers(x_admin_token: Optional[str], x_session_id: Optional[str]) -> Principal:
+def principal_from_headers(x_admin_token: Optional[str], x_session_token: Optional[str]) -> Principal:
     if x_admin_token:
         check_admin_token(x_admin_token)
         return ADMIN
-    if x_session_id:
-        session = _world.sessions.get_session(x_session_id) if _world is not None else None
-        if session is None or not session.is_active:
-            raise HTTPException(status_code=404, detail="Session not found or ended")
-        return Principal("vehicle", session.session_id, session.vehicle_actor_id)
+    if x_session_token:
+        session = _world.sessions.get_by_token(x_session_token) if _world is not None else None
+        if session is None:
+            raise HTTPException(status_code=401, detail="Unknown or ended session token")
+        return Principal("vehicle", session.session_id, session.vehicle_actor_id, session.client_name)
     return Principal("observer")
 
 
@@ -108,9 +108,9 @@ async def list_sensors():
 
 @router.post("/api/lidar/sensors", summary="Request a sensor")
 async def create_sensor(req: SensorRequest, x_admin_token: Optional[str] = Header(default=None),
-                        x_session_id: Optional[str] = Header(default=None)):
+                        x_session_token: Optional[str] = Header(default=None)):
     world = _ready()
-    principal = principal_from_headers(x_admin_token, x_session_id)
+    principal = principal_from_headers(x_admin_token, x_session_token)
     config = req.config or LidarConfig()
     try:
         sensor_id = await request_sensor(world, principal, req.actor_id, config, req.record_raw, req.pinned)
@@ -121,9 +121,9 @@ async def create_sensor(req: SensorRequest, x_admin_token: Optional[str] = Heade
 
 @router.put("/api/lidar/sensors/{sensor_id}", summary="Reconfigure (destroy and respawn at a tick boundary)")
 async def reconfigure_sensor(sensor_id: int, config: LidarConfig, x_admin_token: Optional[str] = Header(default=None),
-                             x_session_id: Optional[str] = Header(default=None)):
+                             x_session_token: Optional[str] = Header(default=None)):
     world = _ready()
-    principal = principal_from_headers(x_admin_token, x_session_id)
+    principal = principal_from_headers(x_admin_token, x_session_token)
     try:
         await on_sim_thread(world, lambda: world.lidar_reconfigure(principal, sensor_id, config))
     except LidarError as exc:
@@ -134,9 +134,9 @@ async def reconfigure_sensor(sensor_id: int, config: LidarConfig, x_admin_token:
 
 @router.delete("/api/lidar/sensors/{sensor_id}", summary="Release a sensor")
 async def release_sensor(sensor_id: int, x_admin_token: Optional[str] = Header(default=None),
-                         x_session_id: Optional[str] = Header(default=None)):
+                         x_session_token: Optional[str] = Header(default=None)):
     world = _ready()
-    principal = principal_from_headers(x_admin_token, x_session_id)
+    principal = principal_from_headers(x_admin_token, x_session_token)
     try:
         await on_sim_thread(world, lambda: world.lidar_release(principal, sensor_id))
     except LidarError as exc:
@@ -145,9 +145,12 @@ async def release_sensor(sensor_id: int, x_admin_token: Optional[str] = Header(d
 
 
 @router.post("/api/sessions/{session_id}/lidar", summary="A vehicle asks for a sensor on its own actor")
-async def create_session_sensor(session_id: str, config: Optional[LidarConfig] = None):
+async def create_session_sensor(session_id: str, config: Optional[LidarConfig] = None,
+                                 x_session_token: Optional[str] = Header(default=None)):
     world = _ready()
-    principal = principal_from_headers(None, session_id)
+    principal = principal_from_headers(None, x_session_token)
+    if principal.kind != "vehicle" or principal.session_id != session_id:
+        raise HTTPException(status_code=403, detail="X-Session-Token must belong to this session")
     config = config or LidarConfig()
     try:
         sensor_id = await request_sensor(world, principal, None, config)

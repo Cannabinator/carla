@@ -8,7 +8,7 @@ from src.lidar.sensor import (ADMIN, LidarBudgetExceeded, LidarError, LidarForbi
 from tests.unit.lidar_fake import FakeBackend
 
 DT = 0.05
-VEH = Principal("vehicle", session_id="s1", actor_id=10)
+VEH = Principal("vehicle", session_id="s1", actor_id=10, label="car-1")
 OBS = Principal("observer")
 
 
@@ -390,7 +390,7 @@ def test_list_sensors_snapshot_content(env):
     mgr.attach_viewer(sid, "v")
     mgr.collect(1, 0.05)
     (info,) = mgr.list_sensors()
-    assert info["sensor_id"] == sid and info["actor_id"] == 10 and info["owner"] == "s1"
+    assert info["sensor_id"] == sid and info["actor_id"] == 10 and info["owner"] == "car-1"
     assert info["state"] == "warming_up" and info["viewers"] == 1 and info["config"]["channels"] == 16
     assert info["points_per_frame"] == pytest.approx(5000)
     assert mgr.budget() == {"used_pps": 100_000, "max_pps": 1_000_000, "sensors": 1, "max_sensors": 2}

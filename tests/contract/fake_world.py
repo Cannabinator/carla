@@ -7,6 +7,7 @@ production code; only spawning and telemetry are faked.
 from concurrent.futures import Future
 
 from src.lidar.sensor import LidarLimits, LidarManager
+from src.server.events import EventLog
 from src.server.session_manager import SessionManager
 from tests.unit.lidar_fake import FakeBackend
 
@@ -24,6 +25,8 @@ class FakeWorld:
         self.pedestrians = 0
         self.v2x_network = None
         self.fixed_delta_seconds = 0.05
+        self.session_disconnect_grace_s = 0.0
+        self.events = EventLog(1000)
         self.lidar_backend = FakeBackend()
         self.lidar = LidarManager(self.lidar_backend, LidarLimits(max_sensors=2, max_points_per_second=1_000_000,
                                                                    keep_alive_s=10.0), 0.05, frame_timeout_s=0.0)

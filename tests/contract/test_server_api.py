@@ -271,3 +271,34 @@ def test_connect_rejects_penetration_rate_outside_0_1(client, rate):
 def test_connect_rejects_a_v2x_rate_that_is_not_a_whole_number_of_frames(client, rate):
     """20 FPS: 3 Hz would be every 6.67 frames, which cannot be scheduled exactly (decision D8)."""
     assert client.post("/admin/connect", json={"v2x_update_rate_hz": rate}, headers=AUTH).status_code == 422
+
+
+# --- disconnect grace period (D4 / C11) --------------------------------------------------------
+
+def test_ws_close_keeps_the_vehicle_during_the_grace_period(client, world):
+    world.session_disconnect_grace_s = 30.0
+    j = _join(client).json()
+    with client.websocket_connect(j["ws_url"]) as ws:
+        assert ws.receive_json()["type"] == "telemetry"
+        assert world.sessions.get_session(j["session_id"]).ws_connections == 1
+    s = world.sessions.get_session(j["session_id"])
+    assert s.is_active and s.ws_connections == 0
+    assert world.despawned == [], "the vehicle must not be removed when the socket closes (grace period)"
+    # reconnecting within the grace period works and is the same session
+    with client.websocket_connect(j["ws_url"]) as ws:
+        assert ws.receive_json()["type"] == "telemetry"
+
+
+def test_ws_close_with_grace_zero_removes_the_vehicle_at_once(client, world):
+    world.session_disconnect_grace_s = 0.0
+    j = _join(client).json()
+    with client.websocket_connect(j["ws_url"]) as ws:
+        ws.receive_json()
+    assert j["session_id"] in world.despawned and not world.sessions.get_session(j["session_id"]).is_active
+
+
+def test_join_response_has_a_token_that_the_admin_list_does_not_show(client, world):
+    j = _join(client).json()
+    assert j["session_token"] and j["session_token"] != j["session_id"]
+    listing = client.get("/admin/sessions", headers=AUTH)
+    assert listing.status_code == 200 and j["session_token"] not in listing.text
