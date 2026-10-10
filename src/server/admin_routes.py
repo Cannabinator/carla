@@ -24,7 +24,7 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 
 # Injected once at startup by start_server.py
 _world = None
-_server_module = None  # reference back to lidar.server for set_persistent_world propagation
+_server_module = None  # reference back to server.app for set_persistent_world propagation
 
 
 def set_persistent_world(world) -> None:

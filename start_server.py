@@ -35,7 +35,7 @@ _project_root = Path(__file__).resolve().parent
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
-from src.lidar.server import run_server, set_persistent_world  # noqa: E402
+from src.server.app import run_server, set_persistent_world  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -100,8 +100,6 @@ def main() -> None:
     print(f"  Web server   : http://{args.host}:{args.port}")
     print(f"  Admin panel  : http://localhost:{args.port}/admin   (token required)")
     print(f"  Client join  : http://localhost:{args.port}/client  (open)")
-    print(f"  Live viewer  : http://localhost:{args.port}/view    (read-only)")
-    print(f"  V2V dashboard: http://localhost:{args.port}/v2v")
     print(f"  Admin token  : {token}")
     if args.live:
         print(f"  CARLA host   : {args.carla_host}:{args.carla_port}")

@@ -27,7 +27,6 @@ import time
 from typing import Any, Callable, Dict, List, Optional
 
 from src.server.session_manager import SessionManager, ClientSession
-from src.utils.potholes import PotholeManager
 
 logger = logging.getLogger(__name__)
 
@@ -113,9 +112,6 @@ class PersistentCARLAServer:
         # Per-client LiDAR collectors (session_id → LiDARDataCollector)
         self._client_lidar_collectors: Dict[str, Any] = {}
 
-        # Pothole manager — deterministic static potholes (initialized in start())
-        self.pothole_manager: Optional[PotholeManager] = None
-
     # ------------------------------------------------------------------ #
     # Lifecycle                                                            #
     # ------------------------------------------------------------------ #
@@ -159,8 +155,6 @@ class PersistentCARLAServer:
         # Optional V2X network (V2V + V2I RSU + V2P VRU)
         if self.v2x_enabled:
             self._init_v2x()
-
-        self._init_potholes()
 
         self._running = True
         self._start_time = time.monotonic()
@@ -216,26 +210,6 @@ class PersistentCARLAServer:
             logger.warning("V2X module not available — V2X disabled")
             self.v2x_network = None
 
-    def _init_potholes(self) -> None:
-        """
-        Initialize pothole manager for BSM communication.
-        
-        NOTE: This no longer generates potholes automatically.
-        Potholes should be pre-placed in your custom CARLA map.
-        Use add_pothole() to register them manually if needed.
-        """
-        try:
-            mgr = PotholeManager()
-            mgr.initialize(self.world)
-            self.pothole_manager = mgr
-            logger.info(
-                "PotholeManager: Ready for BSM pothole communication (%d potholes registered)",
-                len(mgr)
-            )
-        except Exception as exc:
-            logger.warning("Pothole init failed: %s", exc)
-            self.pothole_manager = None
-
     # ------------------------------------------------------------------ #
     # Tick loop                                                            #
     # ------------------------------------------------------------------ #
@@ -256,8 +230,6 @@ class PersistentCARLAServer:
                     if self.v2x_network is not None:
                         snapshot = self.world.get_snapshot()
                         self.v2x_network.update(snapshot)
-                    if self.pothole_manager is not None:
-                        self.pothole_manager.draw_debug()
 
                 # Session expiry check every ~5 s (100 frames @ 20 FPS)
                 if self._frame % 100 == 0:
@@ -549,7 +521,6 @@ class PersistentCARLAServer:
             "v2x_range": self.v2x_range if v2x else 0,
             "rsu_count": len(getattr(v2x, "_rsus", {})),
             "vru_count": len(getattr(v2x, "_vrus", {})),
-            "potholes": len(self.pothole_manager) if self.pothole_manager else 0,
         }
 
     def get_vehicle_telemetry(self, session_id: str) -> Optional[dict]:
