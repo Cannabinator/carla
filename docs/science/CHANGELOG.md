@@ -188,3 +188,17 @@ the vehicle moves where its nose points. Wrong when reversing or sliding.
 - Golden diff: only the two added fields (`vx_mps`=6.0, `vy_mps`=8.0 for velocity (6, 8, 0)).
 - Not changed: centre-to-centre distance (extents ignored, TTC overestimated) and the thresholds
   (10 / 5 / 2 s, 100 m), now labelled PROJECT-DEFINED in the docstring (no standard cited).
+
+## Phase 3, model change S17 - SPAT timing is never fabricated (2026-10-10)
+
+Before: if the CARLA timing query failed, or the light was Off/Unknown, `_remaining_time` returned 5.0 s
+and the SPAT carried `likely_time_s = now + 5`; every known remaining time was also wrapped in an
+invented window, `min = now + remaining - 1`, `max = now + remaining + 1`.
+After: `_remaining_time` returns `None` when it cannot be determined; then `likely_time_s`,
+`min_end_time_s` and `max_end_time_s` are all `None` (the admin API and the client payload show null).
+When known, the three values are equal: CARLA's signal program is deterministic, so there is no
+uncertainty window to report.
+- Example (Green, elapsed 2 s of 10 s, t = 100 s): before likely 108.0, min 107.0, max 109.0;
+  after 108.0 / 108.0 / 108.0. Example (query fails): before likely 105.0; after null.
+- Assumption to check on live CARLA: a light that is externally frozen or switched by a script does not
+  follow its program, so the remaining time can then be wrong. TODO(verify).

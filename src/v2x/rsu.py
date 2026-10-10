@@ -159,8 +159,8 @@ class RoadSideUnit:
         Build a live SPAT from current CARLA TrafficLight state(s).
 
         Each registered TrafficLight actor contributes one SPATMovementState.
-        Phase timing is derived from CARLA's elapsed / phase-duration API;
-        when timing is unavailable the window defaults to ±1 s around now.
+        Phase timing is derived from CARLA's elapsed / phase-duration API; when it cannot be
+        determined the three end-time fields are None.
         """
         state_map = _build_carla_state_map()
         states: List[SPATMovementState] = []
@@ -171,12 +171,15 @@ class RoadSideUnit:
                 movement_event = state_map.get(tl_state, "unavailable")
                 remaining = self._remaining_time(tl)
 
+                # CARLA's signal program is exact, so a known remaining time has no uncertainty
+                # window; an unknown one is reported as unknown (None), never as a guess (S17).
+                end_time = None if remaining is None else timestamp + remaining
                 states.append(SPATMovementState(
                     signal_group_id=sg_id,
                     movement_event=movement_event,
-                    min_end_time_s=timestamp + max(remaining - 1.0, 0.0),
-                    max_end_time_s=timestamp + remaining + 1.0,
-                    likely_time_s=timestamp + remaining,
+                    min_end_time_s=end_time,
+                    max_end_time_s=end_time,
+                    likely_time_s=end_time,
                 ))
             except Exception as exc:
                 logger.debug(
@@ -194,8 +197,8 @@ class RoadSideUnit:
     # ── helpers ───────────────────────────────────────────────────────────────
 
     @staticmethod
-    def _remaining_time(traffic_light) -> float:
-        """Best-effort remaining phase time from the CARLA API (seconds)."""
+    def _remaining_time(traffic_light) -> Optional[float]:
+        """Remaining time of the current phase in seconds, or None if it cannot be determined."""
         try:
             import carla
             state = traffic_light.get_state()
@@ -206,6 +209,6 @@ class RoadSideUnit:
                 return max(traffic_light.get_yellow_time() - elapsed, 0.0)
             elif state == carla.TrafficLightState.Red:
                 return max(traffic_light.get_red_time() - elapsed, 0.0)
-        except Exception:
-            pass
-        return 5.0  # safe fallback
+        except Exception as exc:
+            logger.debug("Could not read traffic light timing: %s", exc)
+        return None  # Off / Unknown state, or the query failed

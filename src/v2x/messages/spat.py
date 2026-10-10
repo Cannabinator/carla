@@ -21,9 +21,11 @@ class SPATMovementState:
     """
     signal_group_id: int
     movement_event: str                   # SAE J2735 MovementPhaseState string
-    min_end_time_s: float                 # Earliest end of current phase (sim seconds)
-    max_end_time_s: float                 # Latest end of current phase (sim seconds)
-    likely_time_s: Optional[float] = None # Most-probable end time
+    # End of the current phase in simulation seconds. All three are None when the timing is
+    # unknown (never a made-up number, S17).
+    min_end_time_s: Optional[float] = None   # Earliest end of current phase
+    max_end_time_s: Optional[float] = None   # Latest end of current phase
+    likely_time_s: Optional[float] = None    # Most-probable end time
 
 
 @dataclass
