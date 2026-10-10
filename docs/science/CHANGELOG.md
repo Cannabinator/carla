@@ -20,5 +20,13 @@ Known-stale tests, now `xfail(strict=True)` (REFACTOR_HANDOFF §3.5):
   `tests/v2v/test_scientific_integrity.py::test_cumulative_avg_neighbors_converges`:
   assume lossless delivery, but the CSMA term drops packets at N=100.
 
+Golden tests added (`tests/golden/`, regenerate only deliberately with `UPDATE_GOLDEN=1`):
+- `DSRCChannel`, seed 42, 5 consecutive ticks: 2-vehicle pairs (30/250/400 m), 10-vehicle line
+  (NLOS blockers, with and without the NLOS model), 50- and 100-vehicle grids.
+- `create_bsm_from_carla` with a mock snapshot (normal, and braking/reverse ambulance).
+- These pin current behaviour including known defects (S2 yaw rate, S8 x/y in lat/lon fields).
+- `test_scientific_fixes.py` (root, asserted nothing) replaced by `tests/unit/test_scientific_fixes.py`
+  with real asserts; its pothole test is dropped (D1: pothole code is to be deleted).
+
 Not yet run: modules slated for deletion (`test_complete_system`, `test_frontend*`,
 `test_reproducibility`), which need a live server, Selenium or `websocket`.
