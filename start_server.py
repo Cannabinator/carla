@@ -19,7 +19,8 @@ Options
 --admin-token TOKEN Admin API token          (default: read from ADMIN_TOKEN env)
 --port PORT         Web server port          (default: 8000)
 --no-v2x            Disable the V2X network
---v2x-range M       V2X cooperative range in metres (default: 75)
+--awareness-range M Awareness filter after the radio model, metres (default: 75)
+--no-awareness-limit No awareness filter: the radio alone decides
 --v2x-penetration F Share of background vehicles that are V2X stations, 0..1 (default: 1.0)
 """
 
@@ -68,8 +69,10 @@ def _parse_args() -> argparse.Namespace:
                    help="Web server bind address")
     p.add_argument("--no-v2x", action="store_true",
                    help="Disable V2X network")
-    p.add_argument("--v2x-range", type=float, default=75.0,
-                   help="V2X cooperative range in metres")
+    p.add_argument("--awareness-range", type=float, default=75.0,
+                   help="Awareness filter in metres, applied after the radio model")
+    p.add_argument("--no-awareness-limit", action="store_true",
+                   help="No awareness filter: the radio alone decides who is a neighbour")
     p.add_argument("--v2x-penetration", type=float, default=1.0,
                    help="Share of background vehicles that are V2X stations, 0..1 (default: 1.0)")
     p.add_argument("--tm-port", type=int, default=8001,
@@ -106,7 +109,13 @@ def main() -> None:
     print(f"  Admin token  : {token}")
     if args.live:
         print(f"  CARLA host   : {args.carla_host}:{args.carla_port}")
-        print(f"  V2X          : {'disabled' if args.no_v2x else f'enabled, range={args.v2x_range:.0f} m'}")
+        if args.no_v2x:
+            v2x_text = "disabled"
+        elif args.no_awareness_limit:
+            v2x_text = "enabled, no awareness filter (radio decides)"
+        else:
+            v2x_text = "enabled, awareness range=%.0f m" % args.awareness_range
+        print(f"  V2X          : {v2x_text}")
     else:
         print("  Mode         : frontend-only (use --live to start simulation)")
     print(sep)
@@ -123,7 +132,7 @@ def main() -> None:
                 host=args.carla_host,
                 port=args.carla_port,
                 v2x_enabled=not args.no_v2x,
-                v2x_range_m=args.v2x_range,
+                awareness_range_m=None if args.no_awareness_limit else args.awareness_range,
                 v2x_penetration_rate=args.v2x_penetration,
                 tm_port=args.tm_port,
                 web_port=args.port,

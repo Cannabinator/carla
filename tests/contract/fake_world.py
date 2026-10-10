@@ -46,7 +46,7 @@ class FakeWorld:
             "pedestrians": self.pedestrians,
             "active_sessions": len(self.sessions.get_active_sessions()),
             "client_vehicles": len(self.spawned), "v2x_enabled": False,
-            "v2x_range": 0, "rsu_count": 0, "vru_count": 0,
+            "awareness_range_m": None, "rsu_count": 0, "vru_count": 0,
         }
 
     # --- client vehicles -------------------------------------------------

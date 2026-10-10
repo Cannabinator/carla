@@ -59,7 +59,7 @@ def _make_denm(station_id: int = 1, action_id: int = 42,
 
 def _make_network() -> V2XNetwork:
     return V2XNetwork(
-        max_range=200.0,
+        awareness_range_m=200.0,
         update_rate_hz=2.0,
         dsrc_config=_transparent_dsrc(),
     )

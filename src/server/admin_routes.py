@@ -72,7 +72,9 @@ class ConnectRequest(BaseModel):
     carla_host: str = Field(default="192.168.1.110")
     carla_port: int = Field(default=2000, ge=1, le=65535)
     v2x_enabled: bool = True
-    v2x_range: float = Field(default=75.0, ge=10.0, le=500.0)
+    awareness_range_m: Optional[float] = Field(
+        default=75.0, ge=10.0, le=500.0,
+        description="Application-layer awareness filter after the radio model; null = radio decides")
     v2x_penetration_rate: float = Field(default=1.0, ge=0.0, le=1.0,
                                         description="Share of background vehicles that are V2X stations")
     tm_port: int = Field(default=8001, ge=1024, le=65535)
@@ -120,7 +122,7 @@ async def connect_world(req: ConnectRequest):
             host=req.carla_host,
             port=req.carla_port,
             v2x_enabled=req.v2x_enabled,
-            v2x_range_m=req.v2x_range,
+            awareness_range_m=req.awareness_range_m,
             v2x_penetration_rate=req.v2x_penetration_rate,
             tm_port=req.tm_port,
         )

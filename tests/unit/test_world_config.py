@@ -8,7 +8,7 @@ def test_defaults_match_pre_refactor_behaviour():
     c = WorldConfig(host="h")
     assert (c.port, c.fixed_delta_seconds, c.tm_port, c.seed) == (2000, 0.05, 8001, 42)
     assert c.global_speed_pct == -20.0 and c.safety_distance_m == 2.5
-    assert c.v2x_range_m == 75.0 and c.v2x_every_n_frames == 10
+    assert c.awareness_range_m == 75.0 and c.v2x_every_n_frames == 10
 
 
 @pytest.mark.parametrize("kwargs", [
@@ -17,7 +17,7 @@ def test_defaults_match_pre_refactor_behaviour():
     {"tm_port": 2000}, {"tm_port": 2001}, {"tm_port": 8000},
     {"v2x_update_rate_hz": 3.0},                        # 1/(3*0.05) = 6.67 frames
     {"v2x_update_rate_hz": 0.0},
-    {"port": 0}, {"v2x_range_m": 5.0}, {"unknown_field": 1},
+    {"port": 0}, {"awareness_range_m": 5.0}, {"unknown_field": 1},
 ])
 def test_invalid_configs_are_rejected(kwargs):
     with pytest.raises(ValidationError):
@@ -42,3 +42,7 @@ def test_penetration_rate_must_be_a_fraction(rate):
 
 def test_penetration_rate_default_is_all_equipped():
     assert WorldConfig(host="h").v2x_penetration_rate == 1.0
+
+
+def test_awareness_range_may_be_disabled_so_the_radio_decides():
+    assert WorldConfig(host="h", awareness_range_m=None).awareness_range_m is None

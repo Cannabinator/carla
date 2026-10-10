@@ -21,7 +21,7 @@ class TestV2XNeighborDiscovery(unittest.TestCase):
     
     def setUp(self):
         """Create V2X network for testing"""
-        self.v2x = V2XNetwork(max_range=50.0, update_rate_hz=2.0)
+        self.v2x = V2XNetwork(awareness_range_m=50.0, update_rate_hz=2.0)
     
     def create_mock_vehicle(self, x, y, z=0.5):
         """Create mock vehicle at position"""

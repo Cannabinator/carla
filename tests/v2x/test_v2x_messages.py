@@ -404,7 +404,7 @@ class TestV2XNetwork(unittest.TestCase):
 
     def _make_network(self):
         return V2XNetwork(
-            max_range=200.0,
+            awareness_range_m=200.0,
             update_rate_hz=2.0,
             dsrc_config=_transparent_dsrc(),
         )

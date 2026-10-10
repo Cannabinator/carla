@@ -284,3 +284,18 @@ layouts, 10 collinear/grid layouts and boundary/duplicate-position cases. The sc
 reference. Limit: beyond about 150 stations the remaining per-pair Python loop still dominates
 (300 stations: 1.3 s per update); a server with that many stations needs a lower update rate, a lower
 penetration rate, or a further rewrite of `broadcast_all`.
+
+## Phase 3, S13 - one meaning for "range" (2026-10-10, same numbers by default)
+
+The code had five unrelated "range" values (library default 150 m, server/CLI/API default 75 m, the
+deleted config's 50 m, RSU 300 m, VRU 100 m) and the one called `max_range` / `v2x_range` was an
+APPLICATION-LAYER cutoff applied after the radio model, which hid that fact.
+- Renamed to `awareness_range_m` everywhere: `V2XNetwork(awareness_range_m=...)`,
+  `WorldConfig.awareness_range_m`, `/admin/connect` field, status field, admin page, CLI
+  `--awareness-range` (was `--v2x-range`) and new `--no-awareness-limit`.
+- `None` now means "no cutoff: the radio model alone decides who is a neighbour". With default radio
+  parameters this makes line-of-sight neighbours out to several hundred metres (model.md).
+- Defaults unchanged (library 150 m, server 75 m); both are now documented as such.
+- RSU coverage (`RSUConfig.broadcast_range_m`, 300 m) and the 100 m VRU cutoff in the client payload are
+  separate settings, not yet radio-modelled (S4).
+- Also fixed: a nested f-string in `start_server.py` was invalid on Python 3.10 (the Docker image).

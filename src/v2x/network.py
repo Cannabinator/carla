@@ -50,7 +50,7 @@ class V2XNetwork:
     """
     
     def __init__(self,
-                 max_range: float = RANGE_MEDIUM_M,
+                 awareness_range_m: Optional[float] = RANGE_MEDIUM_M,
                  update_rate_hz: float = 2.0,
                  enable_cooperative_perception: bool = True,
                  world=None,
@@ -60,9 +60,10 @@ class V2XNetwork:
         Initialize enhanced V2X network.
 
         Args:
-            max_range: Application-layer cooperative awareness zone in meters.
-                       Vehicles outside this radius are excluded from neighbor
-                       discovery regardless of physical channel reachability.
+            awareness_range_m: Application-layer awareness filter in metres, applied AFTER the
+                       radio model: a neighbour farther away is dropped even if its packet
+                       was received. None = no cutoff, the radio alone decides. (Library
+                       default 150 m; the server passes WorldConfig.awareness_range_m, 75 m.)
             update_rate_hz: BSM application update frequency (default 2 Hz per
                             SAE J2735 §7.1 minimum beacon interval).
             enable_cooperative_perception: Enable sensor data sharing.
@@ -70,7 +71,7 @@ class V2XNetwork:
             dsrc_config: DSRCConfig for the IEEE 802.11p channel model. When None,
                          ETSI EN 302 663 Class A OBU defaults are used.
         """
-        self.max_range = max_range
+        self.awareness_range_m = awareness_range_m
         self.update_rate_hz = update_rate_hz
         # Optional exact, frame-count based gate (C7). None = every call to update() runs; the
         # normal caller (PersistentCARLAServer) already calls it once every N frames.
@@ -136,7 +137,7 @@ class V2XNetwork:
         logger.info(
             "V2X network initialized: %.1f Hz, range %.0fm "
             "[DSRC/WAVE channel: TX=%.0f dBm, n_LOS=%.2f, n_NLOS=%.2f, CBR=%.2f]",
-            update_rate_hz, max_range,
+            update_rate_hz, awareness_range_m if awareness_range_m is not None else float('inf'),
             self._dsrc_channel.config.tx_power_dbm,
             self._dsrc_channel.config.path_loss_exponent_los,
             self._dsrc_channel.config.path_loss_exponent_nlos,
@@ -281,7 +282,7 @@ class V2XNetwork:
         Discover neighbours within the cooperative awareness zone.
 
         Two-stage filter:
-          1. Application layer: geometric distance ≤ max_range.
+          1. Application layer: geometric distance ≤ awareness_range_m (skipped when None).
           2. DSRC channel layer: BSM must have survived the IEEE 802.11p
              path-loss + shadowing + CSMA/CA PRR check in broadcast_all().
 
@@ -320,7 +321,7 @@ class V2XNetwork:
                 self.distances[(vid2, vid1)] = distance
 
                 # Neighbour only if within zone AND BSM was delivered by channel
-                if distance <= self.max_range and vid2 in received_by_vid1:
+                if (self.awareness_range_m is None or distance <= self.awareness_range_m) and vid2 in received_by_vid1:
                     self.neighbors[vid1].append(vid2)
     
     def _assess_threats(self):

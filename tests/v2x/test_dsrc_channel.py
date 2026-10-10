@@ -535,7 +535,7 @@ class TestV2XNetworkWithDSRC(unittest.TestCase):
     deterministic and physics-driven only.
     """
 
-    def _make_network(self, max_range: float = 100.0) -> V2XNetwork:
+    def _make_network(self, awareness_range_m: float = 100.0) -> V2XNetwork:
         cfg = DSRCConfig(
             shadowing_std_los_db=0.0,
             shadowing_std_nlos_db=0.0,
@@ -544,7 +544,7 @@ class TestV2XNetworkWithDSRC(unittest.TestCase):
             random_seed=42,
         )
         return V2XNetwork(
-            max_range=max_range,
+            awareness_range_m=awareness_range_m,
             update_rate_hz=2.0,
             enable_cooperative_perception=True,
             dsrc_config=cfg,
@@ -557,7 +557,7 @@ class TestV2XNetworkWithDSRC(unittest.TestCase):
         """
         v0 = MockVehicle(0, x=0.0, y=0.0)
         v1 = MockVehicle(1, x=10.0, y=0.0)
-        net = self._make_network(max_range=100.0)
+        net = self._make_network(awareness_range_m=100.0)
         net.register(0, v0)
         net.register(1, v1)
 
@@ -573,12 +573,12 @@ class TestV2XNetworkWithDSRC(unittest.TestCase):
 
     def test_vehicles_beyond_app_range_not_neighbours(self):
         """
-        Vehicles beyond max_range must not appear as neighbours regardless
+        Vehicles beyond awareness_range_m must not appear as neighbours regardless
         of channel PRR (application-layer range filter takes precedence).
         """
         v0 = MockVehicle(0, x=0.0, y=0.0)
         v1 = MockVehicle(1, x=200.0, y=0.0)
-        net = self._make_network(max_range=50.0)
+        net = self._make_network(awareness_range_m=50.0)
         net.register(0, v0)
         net.register(1, v1)
 
@@ -589,7 +589,7 @@ class TestV2XNetworkWithDSRC(unittest.TestCase):
         neighbours_0 = net.get_neighbors(0)
         self.assertFalse(
             any(n.vehicle_id == 1 for n in neighbours_0),
-            "Vehicle 200 m away must not be a neighbour (beyond max_range=50 m)",
+            "Vehicle 200 m away must not be a neighbour (beyond awareness_range_m=50 m)",
         )
 
     def test_get_channel_stats_returns_dict(self):
@@ -610,7 +610,7 @@ class TestV2XNetworkWithDSRC(unittest.TestCase):
         """After an update tick, channel PRR must be in [0, 1]."""
         v0 = MockVehicle(0, x=0.0, y=0.0)
         v1 = MockVehicle(1, x=30.0, y=0.0)
-        net = self._make_network(max_range=100.0)
+        net = self._make_network(awareness_range_m=100.0)
         net.register(0, v0)
         net.register(1, v1)
 

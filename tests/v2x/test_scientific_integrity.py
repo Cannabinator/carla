@@ -218,7 +218,7 @@ class TestScientificIntegrity(unittest.TestCase):
         world = MockWorld()
         v1 = MockVehicle(1, x=0.0)
         v2 = MockVehicle(2, x=10.0)
-        net = V2XNetwork(max_range=200.0, update_rate_hz=2.0, world=world, dsrc_config=_transparent_dsrc())
+        net = V2XNetwork(awareness_range_m=200.0, update_rate_hz=2.0, world=world, dsrc_config=_transparent_dsrc())
         net.register(1, v1)
         net.register(2, v2)
 
@@ -237,7 +237,7 @@ class TestScientificIntegrity(unittest.TestCase):
         """C7: the optional gate counts frames. 20 FPS, 2 Hz -> every 10th frame, no drift."""
         world = MockWorld()
         v1 = MockVehicle(1, x=0.0)
-        net = V2XNetwork(max_range=200.0, update_rate_hz=2.0, world=world,
+        net = V2XNetwork(awareness_range_m=200.0, update_rate_hz=2.0, world=world,
                          dsrc_config=_transparent_dsrc(), update_every_n_frames=10)
         net.register(1, v1)
         sim_t, performed = 0.0, []
@@ -254,7 +254,7 @@ class TestScientificIntegrity(unittest.TestCase):
     def test_no_gate_by_default_every_call_updates(self):
         world = MockWorld()
         v1 = MockVehicle(1, x=0.0)
-        net = V2XNetwork(max_range=200.0, update_rate_hz=2.0, world=world, dsrc_config=_transparent_dsrc())
+        net = V2XNetwork(awareness_range_m=200.0, update_rate_hz=2.0, world=world, dsrc_config=_transparent_dsrc())
         net.register(1, v1)
         for i in range(5):
             self.assertTrue(net.update(snapshot=MockWorldSnapshot([v1], elapsed_seconds=i * 0.01), force=False))
@@ -264,7 +264,7 @@ class TestScientificIntegrity(unittest.TestCase):
         world = MockWorld()
         v1 = MockVehicle(1, x=0.0, y=0.0, speed_x=10.0)
         v2 = MockVehicle(2, x=20.0, y=0.0, speed_x=-10.0)
-        net = V2XNetwork(max_range=200.0, update_rate_hz=2.0, world=world, dsrc_config=_transparent_dsrc())
+        net = V2XNetwork(awareness_range_m=200.0, update_rate_hz=2.0, world=world, dsrc_config=_transparent_dsrc())
         net.register(1, v1)
         net.register(2, v2)
 
@@ -288,7 +288,7 @@ class TestV2XStatsScientificValidity(unittest.TestCase):
         """Helper: build a network with n vehicles all within range of each other."""
         world = MockWorld()
         vehicles = [MockVehicle(i, x=float(i * 5)) for i in range(n_vehicles)]
-        net = V2XNetwork(max_range=range_m, update_rate_hz=2.0, world=world, dsrc_config=_transparent_dsrc())
+        net = V2XNetwork(awareness_range_m=range_m, update_rate_hz=2.0, world=world, dsrc_config=_transparent_dsrc())
         for v in vehicles:
             net.register(v.id, v)
         return net, vehicles, world
@@ -328,7 +328,7 @@ class TestV2XStatsScientificValidity(unittest.TestCase):
         world = MockWorld()
         v1 = MockVehicle(0, x=0.0)
         v2 = MockVehicle(1, x=500.0)
-        net = V2XNetwork(max_range=75.0, update_rate_hz=2.0, world=world, dsrc_config=_transparent_dsrc())
+        net = V2XNetwork(awareness_range_m=75.0, update_rate_hz=2.0, world=world, dsrc_config=_transparent_dsrc())
         net.register(0, v1)
         net.register(1, v2)
 
@@ -383,7 +383,7 @@ class TestV2XStatsScientificValidity(unittest.TestCase):
         v1 = MockVehicle(0, x=0.0)
         v2 = MockVehicle(1, x=10.0)
         v3 = MockVehicle(2, x=1000.0)  # far away
-        net = V2XNetwork(max_range=75.0, update_rate_hz=2.0, world=world, dsrc_config=_transparent_dsrc())
+        net = V2XNetwork(awareness_range_m=75.0, update_rate_hz=2.0, world=world, dsrc_config=_transparent_dsrc())
         for v in [v1, v2, v3]:
             net.register(v.id, v)
 
@@ -398,7 +398,7 @@ class TestV2XStatsScientificValidity(unittest.TestCase):
 
     def test_new_network_instance_starts_with_zero_stats(self):
         """A freshly created V2XNetwork has all counters at zero."""
-        net = V2XNetwork(max_range=75.0, update_rate_hz=2.0, dsrc_config=_transparent_dsrc())
+        net = V2XNetwork(awareness_range_m=75.0, update_rate_hz=2.0, dsrc_config=_transparent_dsrc())
         stats = net.get_network_stats()
         self.assertEqual(stats['total_messages_sent'], 0)
         self.assertEqual(stats['total_messages_received'], 0)

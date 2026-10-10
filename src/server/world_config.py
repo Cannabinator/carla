@@ -5,6 +5,8 @@ instead of surfacing as odd CARLA behaviour later. Defaults reproduce the behavi
 this class existed (Phase 2 is a refactor, not a model change).
 """
 
+from typing import Optional
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
@@ -30,7 +32,9 @@ class WorldConfig(BaseModel):
 
     # V2X
     v2x_enabled: bool = True
-    v2x_range_m: float = Field(default=75.0, ge=10.0, le=500.0)
+    # Application-layer awareness filter (metres) applied after the radio model; None = the radio
+    # alone decides (S13)
+    awareness_range_m: Optional[float] = Field(default=75.0, ge=10.0, le=500.0)
     v2x_update_rate_hz: float = Field(default=2.0, gt=0)
     # Share of BACKGROUND vehicles that are V2X stations (chosen with a seeded draw when they are
     # spawned). Client vehicles are always stations. 1.0 = all equipped (decision D2 default).

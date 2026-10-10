@@ -70,7 +70,7 @@ class PersistentCARLAServer:
         self.port = config.port
         self.fixed_delta_seconds = config.fixed_delta_seconds
         self.v2x_enabled = config.v2x_enabled
-        self.v2x_range = config.v2x_range_m
+        self.awareness_range_m = config.awareness_range_m
 
         # Seeded RNG for spawn points / blueprints (defect C8)
         self._rng = random.Random(config.seed)
@@ -220,7 +220,7 @@ class PersistentCARLAServer:
             from src.v2x.network import V2XNetwork
             from src.v2x.rsu import RoadSideUnit
             self.v2x_network = V2XNetwork(
-                max_range=self.v2x_range,
+                awareness_range_m=self.awareness_range_m,
                 update_rate_hz=self.config.v2x_update_rate_hz,
                 world=self.world,
             )
@@ -236,7 +236,8 @@ class PersistentCARLAServer:
                 self.v2x_network.register_rsu(rsu)
             logger.info(
                 "V2X network initialised: range=%.0f m, %d RSUs",
-                self.v2x_range, len(self.v2x_network._rsus),
+                self.awareness_range_m if self.awareness_range_m is not None else float('inf'),
+                len(self.v2x_network._rsus),
             )
         except ImportError:
             logger.warning("V2X module not available — V2X disabled")
@@ -633,7 +634,7 @@ class PersistentCARLAServer:
             "v2x_enabled": v2x is not None,
             "v2x_stations": len(getattr(v2x, "vehicles", {})),
             "v2x_penetration_rate": self.config.v2x_penetration_rate,
-            "v2x_range": self.v2x_range if v2x else 0,
+            "awareness_range_m": self.awareness_range_m if v2x else None,
             "rsu_count": len(getattr(v2x, "_rsus", {})),
             "vru_count": len(getattr(v2x, "_vrus", {})),
         }
