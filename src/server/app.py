@@ -12,12 +12,14 @@ from fastapi.staticfiles import StaticFiles
 
 import src.server.admin_routes as _admin_mod
 import src.server.client_routes as _client_mod
+import src.server.lidar_routes as _lidar_mod
 
 WEB_DIR = Path(__file__).parent.parent / "visualization" / "web"
 
 app = FastAPI(title="CARLA V2X + LiDAR Server")
 app.include_router(_admin_mod.router)
 app.include_router(_client_mod.router)
+app.include_router(_lidar_mod.router)
 
 if (WEB_DIR / "assets").exists():
     app.mount("/assets", StaticFiles(directory=str(WEB_DIR / "assets")), name="assets")
@@ -27,6 +29,7 @@ def set_persistent_world(world) -> None:
     """Register the PersistentCARLAServer with the admin and client routes."""
     _admin_mod.set_persistent_world(world)
     _client_mod.set_persistent_world(world)
+    _lidar_mod.set_persistent_world(world)
 
 
 # /admin/connect creates a world after startup and propagates it through this module.

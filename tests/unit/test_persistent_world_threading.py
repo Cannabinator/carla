@@ -75,7 +75,8 @@ def test_mutating_methods_refuse_foreign_threads(env):
     srv = make()
     for fn, args in [(srv.spawn_background_traffic, (1,)), (srv.despawn_background_traffic, ()),
                      (srv.spawn_pedestrians, (1,)), (srv.despawn_pedestrians, ()),
-                     (srv.despawn_client_vehicle, ("x",)), (srv.enable_client_lidar, ("x",))]:
+                     (srv.despawn_client_vehicle, ("x",)), (srv.lidar_request, (None, 1)),
+                     (srv.lidar_reconfigure, (None, 1, None)), (srv.lidar_release, (None, 1))]:
         with pytest.raises(RuntimeError, match="simulation thread"):
             fn(*args)
 
@@ -343,3 +344,44 @@ def test_client_payload_lists_the_denms_it_received(env):
         time.sleep(0.05)
     assert got and got[0]["cause_code"] == "OBSTACLE_ON_ROAD" and got[0]["distance_to_event"] == 40.0
     assert got[0]["action_id"] == 7 and got[0]["rx_power_dbm"] < 0
+
+
+def test_lidar_sensor_lifecycle_runs_on_the_sim_thread_and_sensors_die_before_their_vehicle(env):
+    from src.lidar.config import LidarConfig
+    from src.lidar.sensor import Principal
+    rec, make = env
+    srv = make()
+    mark = len(rec.calls)
+    session, actor_id = _join(srv)
+    sid = srv.submit(srv.lidar_request, Principal("vehicle", session.session_id, actor_id), actor_id,
+                     LidarConfig()).result(5)
+    srv.lidar.attach_viewer(sid, "test-viewer")
+    deadline = time.time() + 5
+    while srv.lidar.state_of(sid).value != "active" and time.time() < deadline:
+        time.sleep(0.02)
+    assert srv.lidar.state_of(sid).value == "active"
+    frame = srv.lidar.get_frame(sid)
+    assert frame.num_points == 10 and frame.ego_actor_id == actor_id and frame.points["x"][0] == frame.frame
+
+    sensor_actor = next(a for a in rec.actors.values() if hasattr(a, "measurement"))
+    srv.submit(srv.despawn_client_vehicle, session.session_id).result(5)
+    assert sensor_actor.destroyed and srv.lidar.state_of(sid).value == "destroyed"
+    names = [(c[0], c[2]) for c in _calls_after(rec, mark)]
+    assert names.index(("actor.destroy", sensor_actor.id)) < names.index(("actor.destroy", actor_id)), \
+        "the sensor must be destroyed before the vehicle it is attached to"
+    foreign = [c for c in _calls_after(rec, mark) if c[1] not in (SIM, "carla-sensor-callback") and c[1] != threading.current_thread().name]
+    assert foreign == [], f"CARLA called from non-simulation threads: {foreign[:5]}"
+
+
+def test_server_stop_destroys_lidar_sensors(env):
+    from src.lidar.config import LidarConfig
+    from src.lidar.sensor import ADMIN
+    rec, make = env
+    srv = make()
+    _, actor_id = _join(srv)
+    sid = srv.submit(srv.lidar_request, ADMIN, actor_id, LidarConfig(), pinned=True).result(5)
+    time.sleep(0.3)
+    sensors = [a for a in rec.actors.values() if hasattr(a, "measurement")]
+    assert len(sensors) == 1 and srv.lidar.state_of(sid).value == "active"
+    srv.stop()
+    assert all(s.destroyed for s in sensors)

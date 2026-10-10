@@ -357,24 +357,27 @@ class LidarManager:
         self._current_frame = frame
         now = self._clock()
 
-        # 1. stop what has to stop, respawn what was reconfigured, spawn what was requested
+        # 1. stop what has to stop, respawn what was reconfigured, spawn what was requested. A sensor spawned
+        #    now cannot have a measurement of the frame that was just ticked: it is not waited for.
+        self.flush_stopping()
+        fresh = set()
         for s in list(self._sensors.values()):
-            if s.state == SensorState.STOPPING:
-                self._destroy(s)
-                self._event(s, SensorState.DESTROYED, s.stop_reason or "")
-            elif s.state == SensorState.RECONFIGURING:
+            if s.state == SensorState.RECONFIGURING:
                 self._destroy(s)
                 if s.pending_config is not None:
                     s.config, s.pending_config = s.pending_config, None
                 self._spawn(s)
+                fresh.add(s.sensor_id)
             elif s.state == SensorState.REQUESTED:
                 self._spawn(s)
+                fresh.add(s.sensor_id)
 
         # 2. collect this frame's measurement from every sensor that can deliver
         frames: List[LidarFrame] = []
         deadline = now + self._frame_timeout
         for s in list(self._sensors.values()):
-            if s.state not in (SensorState.WARMING_UP, SensorState.ACTIVE) or s.inbox is None:
+            if s.state not in (SensorState.WARMING_UP, SensorState.ACTIVE) or s.inbox is None \
+                    or s.sensor_id in fresh:
                 continue
             m = self._measurement_for_frame(s, frame, deadline)
             if m is None:
@@ -406,6 +409,18 @@ class LidarManager:
         self._latest = {f.sensor_id: f for f in frames}
         self._publish_info()
         return frames
+
+    def flush_stopping(self) -> int:
+        """Destroy sensors that are STOPPING now (also used before their vehicle is destroyed)."""
+        n = 0
+        for s in list(self._sensors.values()):
+            if s.state == SensorState.STOPPING:
+                self._destroy(s)
+                self._event(s, SensorState.DESTROYED, s.stop_reason or "")
+                n += 1
+        if n:
+            self._publish_info()
+        return n
 
     def _measurement_for_frame(self, s: _Sensor, frame: int, deadline: float) -> Optional[Any]:
         assert s.inbox is not None
@@ -480,6 +495,12 @@ class LidarManager:
 
     def budget(self) -> Dict[str, Any]:
         return dict(self._budget)
+
+    def info_of(self, sensor_id: int) -> Optional[Dict[str, Any]]:
+        for info in self._info:
+            if info["sensor_id"] == sensor_id:
+                return info
+        return None
 
     def get_frame(self, sensor_id: int) -> Optional[LidarFrame]:
         return self._latest.get(sensor_id)

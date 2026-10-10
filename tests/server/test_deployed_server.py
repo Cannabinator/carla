@@ -165,9 +165,9 @@ def test_admin_population_roundtrip(live_world):
 
 @pytest.mark.carla
 def test_lidar_websocket_streams_decodable_frames(live_world, record_property):
-    """Join with LiDAR, read /ws/lidar/{session}, decode frames with BinaryProtocol."""
+    """Join with LiDAR, read /ws/lidar/{sensor}, decode protocol v3 frames."""
     sync = pytest.importorskip("websockets.sync.client")
-    from src.utils.binary_protocol import BinaryProtocol
+    from src.lidar.protocol import decode_frame
 
     status, j = live_world.json("POST", "/client/join",
                                 {"client_name": "pytest-lidar", "enable_lidar": True})
@@ -176,7 +176,7 @@ def test_lidar_websocket_streams_decodable_frames(live_world, record_property):
     if not j.get("lidar_ws_url"):
         live_world.json("DELETE", f"/client/leave/{sid}")
         pytest.fail("join returned no lidar_ws_url: the server could not enable LiDAR (check server logs)")
-    frames, sizes, points = 0, [], []
+    frames, sizes, points, frame_ids = 0, [], [], []
     try:
         with sync.connect(live_world.ws_base + j["lidar_ws_url"], open_timeout=10, max_size=None) as ws:
             t0 = time.time()
@@ -188,13 +188,14 @@ def test_lidar_websocket_streams_decodable_frames(live_world, record_property):
                 if isinstance(msg, str):
                     assert json.loads(msg)["type"] != "error", msg
                     continue
-                decoded = BinaryProtocol.decode(msg)
-                assert decoded is not None, "binary LiDAR frame could not be decoded"
-                pts, meta = decoded
+                header, _pts = decode_frame(msg)
                 frames += 1
                 sizes.append(len(msg))
-                points.append(meta["num_points"])
-                assert meta["ego_actor_id"] == j["actor_id"]
+                points.append(header.num_points)
+                assert header.ego_actor_id == j["actor_id"]
+                assert header.sensor_id == j["lidar_sensor_id"]
+                assert not frame_ids or header.frame > frame_ids[-1], "frames must arrive in order, once each"
+                frame_ids.append(header.frame)
             elapsed = time.time() - t0
     finally:
         live_world.json("DELETE", f"/client/leave/{sid}")

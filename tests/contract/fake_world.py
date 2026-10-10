@@ -6,7 +6,9 @@ production code; only spawning and telemetry are faked.
 
 from concurrent.futures import Future
 
+from src.lidar.sensor import LidarLimits, LidarManager
 from src.server.session_manager import SessionManager
+from tests.unit.lidar_fake import FakeBackend
 
 
 class FakeWorld:
@@ -21,6 +23,11 @@ class FakeWorld:
         self.background = 0
         self.pedestrians = 0
         self.v2x_network = None
+        self.fixed_delta_seconds = 0.05
+        self.lidar_backend = FakeBackend()
+        self.lidar = LidarManager(self.lidar_backend, LidarLimits(max_sensors=2, max_points_per_second=1_000_000,
+                                                                   keep_alive_s=10.0), 0.05, frame_timeout_s=0.0)
+        self._streams = {}
 
     def submit(self, fn, *args, **kwargs):
         """Mirror PersistentCARLAServer.submit: run now, hand back a Future."""
@@ -55,10 +62,14 @@ class FakeWorld:
             return None
         self._next_actor += 1
         self.spawned[session_id] = self._next_actor
+        session = self.sessions.get_session(session_id)
+        if session is not None:
+            session.vehicle_actor_id = self._next_actor
         return self._next_actor
 
     def despawn_client_vehicle(self, session_id):
         self.despawned.append(session_id)
+        self.lidar.release_owned_by(session_id)
         self.spawned.pop(session_id, None)
 
     def get_vehicle_telemetry(self, session_id):
@@ -70,8 +81,24 @@ class FakeWorld:
     def get_vehicle_v2x_data(self, session_id):
         return {"neighbors": [], "threats": []}
 
-    def enable_client_lidar(self, session_id):
-        return False
+    # --- LiDAR: the real manager over a fake CARLA backend ---------------
+    def lidar_request(self, principal, actor_id, config=None, **kw):
+        return self.lidar.request(principal, actor_id, config, **kw)
+
+    def lidar_reconfigure(self, principal, sensor_id, config):
+        self.lidar.reconfigure(principal, sensor_id, config)
+
+    def lidar_release(self, principal, sensor_id):
+        self.lidar.release(principal, sensor_id)
+
+    def get_lidar_stream(self, sensor_id):
+        from src.lidar.stream import SensorStream
+        return self._streams.setdefault(sensor_id, SensorStream(sensor_id, 20.0))
+
+    def lidar_tick(self, frame):
+        """One simulation step for the LiDAR manager: deliver data for ``frame`` and collect it."""
+        self.lidar_backend.emit_all(frame, n=200)
+        return self.lidar.collect(frame, frame * 0.05)
 
     # --- admin population ------------------------------------------------
     def spawn_background_traffic(self, count):

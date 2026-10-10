@@ -85,7 +85,7 @@
 
   <div class="checkbox-row">
     <input type="checkbox" id="enableLidar">
-    <label for="enableLidar">Enable LiDAR stream <small style="display:inline">— opens /ws/lidar/{session}</small></label>
+    <label for="enableLidar">Enable LiDAR stream <small style="display:inline">— requests a sensor on your vehicle; streams /ws/lidar/{sensor}</small></label>
   </div>
 
   <button id="joinBtn" onclick="joinServer()">Join &amp; Spawn Vehicle</button>
@@ -180,6 +180,7 @@ async function joinServer() {
     showStatus(d.message, 'ok');
     openWS(d.ws_url);
     if (d.lidar_ws_url) openLidarWS(d.lidar_ws_url);
+    else if (d.lidar_error) showStatus(d.message + ' LiDAR not started: ' + (d.lidar_error.reason || d.lidar_error.message || d.lidar_error.error), 'err');
   } catch (e) {
     showStatus('Network error: ' + e.message, 'err');
     document.getElementById('joinBtn').disabled = false;

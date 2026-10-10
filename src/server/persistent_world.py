@@ -40,6 +40,9 @@ from typing import Any, Callable, Dict, List, Optional
 
 import carla
 
+from src.lidar.carla_backend import CarlaSensorBackend
+from src.lidar.sensor import LidarLimits, LidarManager
+from src.lidar.stream import SensorStream
 from src.server.session_manager import SessionManager
 from src.server.sim_executor import SimThreadExecutor
 from src.server.world_config import WorldConfig
@@ -118,8 +121,11 @@ class PersistentCARLAServer:
         # Callback fired when a session expires (so WS can notify the client)
         self.on_session_expired: Optional[Callable[[str], None]] = None
 
-        # Per-client LiDAR collectors (session_id → LiDARDataCollector)
-        self._client_lidar_collectors: Dict[str, Any] = {}
+        # LiDAR sensors exist only on request (REFACTOR_HANDOFF 5.5). The manager is driven by the simulation
+        # thread; viewers (WebSocket tasks) only read its published frames through the per-sensor streams.
+        self.lidar: Optional[LidarManager] = None
+        self._lidar_streams: Dict[int, SensorStream] = {}
+        self._lidar_streams_lock = threading.Lock()
 
     # ------------------------------------------------------------------ #
     # Threading helpers                                                    #
@@ -174,6 +180,13 @@ class PersistentCARLAServer:
         self.tm.set_random_device_seed(cfg.seed)
         self.tm.set_global_distance_to_leading_vehicle(cfg.safety_distance_m)
         self.tm.global_percentage_speed_difference(cfg.global_speed_pct)
+
+        self.lidar = LidarManager(
+            CarlaSensorBackend(carla, self.world),
+            LidarLimits(max_sensors=cfg.lidar_max_sensors, max_points_per_second=cfg.lidar_max_points_per_second,
+                        keep_alive_s=cfg.lidar_keep_alive_s),
+            cfg.fixed_delta_seconds,
+        )
 
         self.bp_lib = self.world.get_blueprint_library()
         self.spawn_points = self.world.get_map().get_spawn_points()
@@ -271,6 +284,7 @@ class PersistentCARLAServer:
                 self._tick()
                 snapshot = self.world.get_snapshot()
                 self._publish_telemetry(snapshot)
+                self._collect_lidar(snapshot)
                 self._run_periodic_work(snapshot, every_n)
 
             except RuntimeError as exc:
@@ -284,6 +298,36 @@ class PersistentCARLAServer:
                 time.sleep(sleep_for)
 
         logger.info("Tick loop stopped at frame %d", self._frame)
+
+    def _collect_lidar(self, snapshot) -> None:
+        """Sensor state machine and this frame's measurements. An error here must not stop the simulation."""
+        if self.lidar is None:
+            return
+        try:
+            self.lidar.collect(snapshot.frame, float(snapshot.timestamp.elapsed_seconds))
+        except Exception:
+            logger.exception("LiDAR collection failed at frame %d (simulation continues)", self._frame)
+
+    # LiDAR requests: simulation thread only (the routes go through ``on_sim_thread``)
+    def lidar_request(self, principal, actor_id, config=None, **kwargs) -> int:
+        self._require_sim_thread()
+        return self.lidar.request(principal, actor_id, config, **kwargs)
+
+    def lidar_reconfigure(self, principal, sensor_id, config) -> None:
+        self._require_sim_thread()
+        self.lidar.reconfigure(principal, sensor_id, config)
+
+    def lidar_release(self, principal, sensor_id) -> None:
+        self._require_sim_thread()
+        self.lidar.release(principal, sensor_id)
+
+    def get_lidar_stream(self, sensor_id: int) -> SensorStream:
+        """Encode-once cache for a sensor (any thread)."""
+        with self._lidar_streams_lock:
+            stream = self._lidar_streams.get(sensor_id)
+            if stream is None:
+                stream = self._lidar_streams[sensor_id] = SensorStream(sensor_id, 1.0 / self.fixed_delta_seconds)
+            return stream
 
     def _run_periodic_work(self, snapshot, every_n: int) -> None:
         """V2X update and session expiry. An error here must not stop the simulation."""
@@ -426,6 +470,10 @@ class PersistentCARLAServer:
         if count == 0:
             return 0
         self._unregister_background_stations()
+        if self.lidar is not None:
+            for v in self._background_vehicles:
+                self.lidar.on_actor_removed(v.id)
+            self.lidar.flush_stopping()
         batch = [carla.command.DestroyActor(v) for v in self._background_vehicles]
         self.client.apply_batch_sync(batch, False)
         self._background_vehicles.clear()
@@ -591,12 +639,13 @@ class PersistentCARLAServer:
         self._despawn_client_vehicle(session_id)
 
     def _despawn_client_vehicle(self, session_id: str) -> None:
-        collector = self._client_lidar_collectors.pop(session_id, None)
-        if collector is not None:
-            try:
-                collector.cleanup()  # stops/destroys the sensor: CARLA calls, so sim thread
-            except Exception as exc:
-                logger.warning("LiDAR cleanup for session %s: %s", session_id, exc)
+        if self.lidar is not None:
+            # sensors go before the vehicle they are attached to
+            self.lidar.release_owned_by(session_id)
+            vehicle = self._client_vehicles.get(session_id)
+            if vehicle is not None:
+                self.lidar.on_actor_removed(vehicle.id)
+            self.lidar.flush_stopping()
         actor = self._client_vehicles.pop(session_id, None)
         self._telemetry = {k: v for k, v in self._telemetry.items() if k != session_id}
         self._v2x_payloads = {k: v for k, v in self._v2x_payloads.items() if k != session_id}
@@ -748,47 +797,6 @@ class PersistentCARLAServer:
             "v2x_sim_time": frame.sim_time if frame else None,
         }
 
-    def enable_client_lidar(self, session_id: str) -> bool:
-        """Attach a LiDAR sensor to the client's vehicle for per-session streaming."""
-        self._require_sim_thread()
-        try:
-            from src.visualization.lidar.collector import LiDARDataCollector
-        except ImportError:
-            logger.warning("LiDAR not available (CARLA not installed)")
-            return False
-
-        actor = self._client_vehicles.get(session_id)
-        if actor is None:
-            logger.warning("enable_client_lidar: no vehicle for session %s", session_id)
-            return False
-        if session_id in self._client_lidar_collectors:
-            return True
-
-        collector = LiDARDataCollector(
-            self.world,
-            downsample_factor=2,
-            channels="32",
-            points_per_second="500000",
-        )
-        try:
-            collector.register_vehicle(0, actor)
-        except Exception as exc:
-            logger.error(
-                "LiDAR sensor attach failed for session %s: %s", session_id, exc
-            )
-            return False
-
-        self._client_lidar_collectors[session_id] = collector
-        logger.info("LiDAR enabled for session %s (actor=%d)", session_id, actor.id)
-        return True
-
-    def get_client_lidar_binary(self, session_id: str) -> Optional[bytes]:
-        """Return the latest binary point-cloud frame for the session's LiDAR."""
-        collector = self._client_lidar_collectors.get(session_id)
-        if collector is None or not collector.is_active():
-            return None
-        return collector.get_combined_pointcloud_binary()
-
     # ------------------------------------------------------------------ #
     # Helpers                                                              #
     # ------------------------------------------------------------------ #
@@ -834,12 +842,8 @@ class PersistentCARLAServer:
     def _cleanup_all(self) -> None:
         """Destroy everything this server spawned (simulation thread, or start() failure)."""
         # Stop LiDAR sensor callbacks before batch-destroying vehicles
-        for sid, collector in list(self._client_lidar_collectors.items()):
-            try:
-                collector.cleanup()
-            except Exception as exc:
-                logger.warning("LiDAR cleanup for session %s: %s", sid, exc)
-        self._client_lidar_collectors.clear()
+        if self.lidar is not None:
+            self.lidar.shutdown()
 
         self._unregister_background_stations()
         all_actors = (

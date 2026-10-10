@@ -49,13 +49,17 @@ def set_server_module(mod) -> None:
 # Auth dependency                                                     #
 # ------------------------------------------------------------------ #
 
-def _require_admin(x_admin_token: str = Header(..., alias="X-Admin-Token")):
-    """Raise 403 if the token does not match ADMIN_TOKEN env var."""
+def check_admin_token(x_admin_token: str) -> None:
+    """Raise 403 if the token does not match ADMIN_TOKEN env var (500 if the server has none)."""
     expected = os.environ.get("ADMIN_TOKEN", "")
     if not expected:
         raise HTTPException(status_code=500, detail="ADMIN_TOKEN is not configured on the server")
     if x_admin_token != expected:
         raise HTTPException(status_code=403, detail="Invalid admin token")
+
+
+def _require_admin(x_admin_token: str = Header(..., alias="X-Admin-Token")):
+    check_admin_token(x_admin_token)
 
 
 # ------------------------------------------------------------------ #

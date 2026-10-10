@@ -93,7 +93,7 @@ class BlueprintLibrary:
         for bp in self.vehicles + self.walkers:
             if bp.id == bid:
                 return bp
-        if bid == "controller.ai.walker":
+        if bid == "controller.ai.walker" or bid.startswith("sensor.lidar."):
             return Blueprint(bid)
         return None
 
@@ -150,6 +150,30 @@ class Actor:
 
     def set_max_speed(self, v):
         self.rec.rec("controller.set_max_speed", self.id)
+
+
+class LidarSensor(Actor):
+    """Attached sensor: after every tick the stub delivers one measurement of that frame to the listener."""
+    def __init__(self, rec, actor_id, bp, transform, parent):
+        super().__init__(rec, actor_id, bp, transform)
+        self.parent, self.callback = parent, None
+
+    def listen(self, callback):
+        self.rec.rec("sensor.listen", self.id)
+        self.callback = callback
+
+    def stop(self):
+        self.rec.rec("sensor.stop", self.id)
+        self.callback = None
+
+    def measurement(self, frame, n=10):
+        import numpy as np
+        dt = np.dtype([("x", "<f4"), ("y", "<f4"), ("z", "<f4"), ("c", "<f4"), ("o", "<u4"), ("t", "<u4")])
+        arr = np.zeros(n, dtype=dt)
+        arr["x"] = frame
+        return types.SimpleNamespace(
+            frame=frame, raw_data=arr.tobytes(),
+            transform=types.SimpleNamespace(location=Location(1.0, 2.0, 3.0), rotation=Rotation(0.0, 90.0, 0.0)))
 
 
 class _ActorSnap:
@@ -234,7 +258,14 @@ class World:
 
     def tick(self):
         self.rec.rec("world.tick")
-        return self.rec.tick()
+        frame = self.rec.tick()
+        for a in list(self.rec.actors.values()):
+            cb = getattr(a, "callback", None)
+            if cb is not None:       # CARLA delivers on its own thread, before tick() returns
+                th = threading.Thread(target=cb, args=(a.measurement(frame),), name="carla-sensor-callback")
+                th.start()
+                th.join()
+        return frame
 
     def get_snapshot(self):
         self.rec.rec("world.get_snapshot")
@@ -262,6 +293,13 @@ class World:
     def get_actor(self, actor_id):
         self.rec.rec("world.get_actor", actor_id)
         return self.rec.actors.get(actor_id)
+
+    def spawn_actor(self, bp, transform, attach_to=None):
+        self.rec.rec("world.spawn_actor", bp.id)
+        self.rec.next_id += 1
+        a = LidarSensor(self.rec, self.rec.next_id, bp, transform, attach_to)
+        self.rec.actors[a.id] = a
+        return a
 
     def try_spawn_actor(self, bp, transform, attach_to=None):
         self.rec.rec("world.try_spawn_actor")

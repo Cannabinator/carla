@@ -394,3 +394,16 @@ def test_list_sensors_snapshot_content(env):
     assert info["state"] == "warming_up" and info["viewers"] == 1 and info["config"]["channels"] == 16
     assert info["points_per_frame"] == pytest.approx(5000)
     assert mgr.budget() == {"used_pps": 100_000, "max_pps": 1_000_000, "sensors": 1, "max_sensors": 2}
+
+
+def test_a_sensor_spawned_at_this_boundary_is_not_waited_for():
+    """It cannot have a measurement of the frame that was just ticked; blocking for frame_timeout would stall
+    the simulation thread (found with the CARLA stub)."""
+    import time
+    mgr = LidarManager(FakeBackend(), LidarLimits(), DT, frame_timeout_s=5.0)
+    mgr.request(ADMIN, 1, pinned=True)
+    t0 = time.monotonic()
+    mgr.collect(1, 0.05)
+    assert time.monotonic() - t0 < 1.0
+    assert mgr.list_sensors()[0]["state"] == "warming_up" and mgr.budget()  # and no miss was counted
+    assert mgr._sensors[1].missed == 0
