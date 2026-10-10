@@ -1,6 +1,8 @@
 // Latest value per topic, update counters, skipped-update (seq gap) tracking and a ring buffer of V2X frames.
 // No DOM, no network: fed by ws.js, read by the views.
 
+const RING_TOPICS = ['v2x.frame', 'v2x.inbox'];
+
 export class Store {
   /** @param {{now?: () => number, ringSimSeconds?: number}} opts */
   constructor({ now = () => Date.now(), ringSimSeconds = 2.0 } = {}) {
@@ -8,7 +10,7 @@ export class Store {
     this.ringSimSeconds = ringSimSeconds;
     this.topics = new Map();          // topic -> {envelope, receivedAt, count, skipped, lastSeq}
     this.listeners = new Map();       // topic -> Set<fn>
-    this.v2xRing = [];                // [{frame, simTime, summary, inbox?}] ascending by frame
+    this.rings = new Map();           // topic -> [{frame, simTime, data}] ascending by frame (v2x.frame, v2x.inbox)
     this.connection = { state: 'closed', detail: '' };
     this.connectionListeners = new Set();
   }
@@ -28,7 +30,7 @@ export class Store {
       skipped: (prev ? prev.skipped : 0) + skipped,
       lastSeq: envelope.seq,
     });
-    if (t === 'v2x.frame') this._pushRing(envelope);
+    if (RING_TOPICS.includes(t)) this._pushRing(t, envelope);
     const ls = this.listeners.get(t);
     if (ls) for (const fn of ls) fn(envelope, skipped);
     return skipped;
@@ -68,27 +70,37 @@ export class Store {
 
   clear() {
     this.topics.clear();
-    this.v2xRing = [];
+    this.rings.clear();
   }
 
-  // ── V2X frame ring buffer ─────────────────────────────────────────────────────────────────────
-  _pushRing(envelope) {
+  // ── V2X ring buffers ──────────────────────────────────────────────────────────────────────────
+  get v2xRing() {
+    return this.rings.get('v2x.frame') || [];
+  }
+
+  _pushRing(topic, envelope) {
     if (typeof envelope.frame !== 'number') return;
-    const last = this.v2xRing[this.v2xRing.length - 1];
+    let ring = this.rings.get(topic);
+    if (!ring) { ring = []; this.rings.set(topic, ring); }
+    const last = ring[ring.length - 1];
     if (last && last.frame === envelope.frame) return;
-    if (last && envelope.frame < last.frame) this.v2xRing = [];           // the simulation restarted
-    this.v2xRing.push({ frame: envelope.frame, simTime: envelope.sim_time, summary: envelope.data });
+    if (last && envelope.frame < last.frame) ring.length = 0;           // the simulation restarted
+    ring.push({ frame: envelope.frame, simTime: envelope.sim_time, summary: envelope.data, data: envelope.data });
     const horizon = envelope.sim_time - this.ringSimSeconds;
-    while (this.v2xRing.length > 1 && this.v2xRing[0].simTime < horizon) this.v2xRing.shift();
+    while (ring.length > 1 && ring[0].simTime < horizon) ring.shift();
   }
 
-  /** The newest V2X frame with frame <= maxFrame (never a newer one), or null. */
-  v2xAtOrBefore(maxFrame) {
+  /** The newest entry of ``topic``'s ring with frame <= maxFrame (never a newer one), or null. */
+  atOrBefore(topic, maxFrame) {
     let best = null;
-    for (const f of this.v2xRing) {
+    for (const f of this.rings.get(topic) || []) {
       if (f.frame <= maxFrame) best = f;
       else break;
     }
     return best;
+  }
+
+  v2xAtOrBefore(maxFrame) {
+    return this.atOrBefore('v2x.frame', maxFrame);
   }
 }

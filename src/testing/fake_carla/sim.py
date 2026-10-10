@@ -177,7 +177,7 @@ class Vehicle(Actor):
 
     def _place(self) -> None:
         x, y, yaw = self.ring.pose(self.s)
-        self.st.x, self.st.y, self.st.z, self.st.yaw = x, y, 0.3, yaw
+        self.st.x, self.st.y, self.st.z, self.st.yaw = x, y, 0.0, yaw
 
     def set_autopilot(self, enabled: bool = True, port: Optional[int] = None) -> None:
         self.autopilot = bool(enabled)
@@ -609,7 +609,7 @@ class World:
         for a in self._actors.values():
             if isinstance(a, Vehicle):
                 e = a.bounding_box.extent
-                out.append(lidar.Box(a.st.x, a.st.y, e.z, e.x, e.y, e.z, a.st.yaw, a.id, lidar.TAG_CAR))
+                out.append(lidar.Box(a.st.x, a.st.y, a.st.z + e.z, e.x, e.y, e.z, a.st.yaw, a.id, lidar.TAG_CAR))
             elif isinstance(a, Walker):
                 out.append(lidar.Box(a.st.x, a.st.y, WALKER_EXTENT.z, 0.25, 0.25, WALKER_EXTENT.z, a.st.yaw, a.id,
                                      lidar.TAG_PEDESTRIAN))

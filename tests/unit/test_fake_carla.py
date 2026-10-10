@@ -255,7 +255,7 @@ def test_sensor_delivers_one_measurement_per_tick_with_the_right_frame_and_a_sel
     assert len(got) == 3
     raw = np.frombuffer(got[-1].raw_data, dtype=lidar.SEMANTIC_DTYPE)
     assert len(raw) > 1000 and (raw["object_idx"] == car.id).any(), "CARLA's sensor sees its own vehicle"
-    assert got[-1].transform.location.z == pytest.approx(0.3 + 2.4)
+    assert got[-1].transform.location.z == pytest.approx(2.4)       # the vehicle stands on the ground (z = 0)
     sensor.stop()
     world.tick()
     assert len(got) == 3

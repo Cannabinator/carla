@@ -7,6 +7,8 @@ import { Inspector, renderLinkDetails } from './inspector.js';
 import { LinkLog } from './link-log.js';
 import { PrrChart, MarginChart, LineChart } from './charts.js';
 import { DeliveryTracker, SentCounter, TimeSeries } from './panels-model.js';
+import { LidarView } from './lidar-view.js';
+import { buildOverlays } from './lidar-overlays.js';
 import * as u from './units.js';
 
 const app = createApp({ role: 'observer' });
@@ -155,6 +157,60 @@ function renderInspector() {
   inspector.render({ station: station || { id: selected, kind: 'unknown' }, inbox: inbox && inbox.data.station_id === selected ? inbox : null,
     delivery: delivery.summary(), sent: sentCounter.summary(), lidar });
   $('insp-stamp').textContent = inbox ? u.stamp(inbox.frame, inbox.sim_time) : '';
+  if (station && station.kind === 'vehicle') $('inspector').prepend(lidarButton(station));
+}
+
+// ── LiDAR views ─────────────────────────────────────────────────────────────────────────────────
+const MAX_LIDAR_VIEWS = 2;                  // an observer may open at most this many streams at once (ui.max_lidar_views)
+const views = new Map();                    // sensor id -> LidarView
+let lidarSchema = null;
+
+async function openLidar(sensor) {
+  if (views.has(sensor.sensor_id)) return;
+  if (views.size >= MAX_LIDAR_VIEWS) { toastLimit(); return; }
+  if (!lidarSchema) lidarSchema = await api.get('/api/lidar/schema');
+  select(sensor.actor_id);                  // the overlay needs the inbox of the sensor's vehicle
+  const panel = $('lidar-panel');
+  panel.hidden = false;
+  const box = document.createElement('div');
+  box.className = 'lidarview';
+  box.dataset.sensor = String(sensor.sensor_id);
+  $('lidar').appendChild(box);
+  const sim = store.get('run.status');
+  const rate = sim ? 1 / sim.data.fixed_delta_seconds : config.fixed_delta_seconds ? 1 / config.fixed_delta_seconds : 20;
+  const view = new LidarView(box, {
+    sensorId: sensor.sensor_id, schema: lidarSchema, simRateHz: rate, canShowTruth: true,
+    getOverlays: (frame) => {
+      const s = (store.get('lidar.sensors') || { data: { sensors: [] } }).data.sensors.find((x) => x.sensor_id === sensor.sensor_id) || sensor;
+      view.setSensorInfo(s);
+      return buildOverlays({ store, stationId: sensor.actor_id, lidarFrame: frame, lidarSimTime: view.latest ? view.latest.header.simTime : 0,
+        world: store.get('world.state'), awareness: config.awareness_range_m, includeTruth: true });
+    },
+    onClose: () => { views.delete(sensor.sensor_id); box.remove(); if (!views.size) panel.hidden = true; },
+  });
+  view.setSensorInfo(sensor);
+  views.set(sensor.sensor_id, view);
+}
+
+function toastLimit() {
+  import('./toasts.js').then((m) => m.toast(`At most ${MAX_LIDAR_VIEWS} LiDAR views can be open at once; close one first.`, 'info'));
+}
+
+function lidarButton(station) {
+  const sensors = (store.get('lidar.sensors') || { data: { sensors: [] } }).data.sensors;
+  const mine = station ? sensors.find((s) => s.actor_id === station.id) : null;
+  const b = document.createElement('button');
+  b.id = 'show-lidar';
+  if (mine) {
+    b.textContent = `Show LiDAR (sensor #${mine.sensor_id}, ${mine.state})`;
+    b.disabled = mine.state === 'stopping' || mine.state === 'error';
+    b.addEventListener('click', () => openLidar(mine));
+  } else {
+    b.textContent = 'Show LiDAR';
+    b.disabled = true;
+    b.title = 'This vehicle has no LiDAR sensor. Observers cannot create sensors: the vehicle\'s own session or an admin can.';
+  }
+  return b;
 }
 
 // ── data ────────────────────────────────────────────────────────────────────────────────────────
@@ -242,4 +298,4 @@ subscribeSelected();                          // nothing selected yet: sets the 
   hub.connect();
 })();
 
-if (new URLSearchParams(location.search).has('debug')) window.carlaDebug = { app, map, select, get selected() { return selected; } };
+if (new URLSearchParams(location.search).has('debug')) window.carlaDebug = { app, map, select, views, openLidar, get selected() { return selected; } };

@@ -56,3 +56,11 @@ test('ring: same frame twice is ignored, a restarted simulation clears it', () =
   s.put(env('v2x.frame', 4, 50, 0.1));              // frame went backwards
   assert.deepEqual(s.v2xRing.map((f) => f.frame), [50]);
 });
+
+test('the inbox of the selected station has its own ring, so overlays can use the frame that matches a LiDAR frame', () => {
+  const s = new Store({ ringSimSeconds: 2.0 });
+  for (let k = 0; k < 6; k++) s.put(env('v2x.inbox', k + 1, 100 + 10 * k, 0.5 * k, { station_id: 7, k }));
+  assert.equal(s.atOrBefore('v2x.inbox', 125).data.k, 2);
+  assert.equal(s.atOrBefore('v2x.inbox', 125).frame, 120);
+  assert.equal(s.atOrBefore('v2x.frame', 125), null, 'rings are per topic');
+});
