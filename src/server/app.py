@@ -72,6 +72,11 @@ async def observer_page():
     return _new_page("observer.html")
 
 
+@app.get("/vehicle", include_in_schema=False)
+async def vehicle_page():
+    return _new_page("vehicle.html")
+
+
 @app.get("/admin", include_in_schema=False)
 async def admin_panel():
     return _page("admin_panel.html", "Admin panel")

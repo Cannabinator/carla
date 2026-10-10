@@ -74,7 +74,7 @@ export class Inspector {
    * @param {object} m.sent SentCounter.summary()
    * @param {object|null} m.lidar sensor info owned by this station's actor
    */
-  render({ station, inbox, summary, delivery, sent, lidar }) {
+  render({ station, inbox, summary, delivery, sent, lidar, truthLabel = 'Ground truth (world.state)' }) {
     const root = this.root;
     root.textContent = '';
     if (!station) return this.clear();
@@ -90,7 +90,7 @@ export class Inspector {
       ['LiDAR', lidar ? `#${lidar.sensor_id} ${lidar.state}` : 'none'],
     ]));
 
-    root.appendChild(el('h3', '', 'Ground truth (world.state)'));
+    root.appendChild(el('h3', '', truthLabel));
     root.appendChild(kv([
       ['position', `${u.num(station.x, 2)}, ${u.num(station.y, 2)}, ${u.num(station.z, 2)} m`, `${station.x}, ${station.y}, ${station.z}`],
       ['yaw', u.degrees(station.yaw, 1), String(station.yaw)],

@@ -64,3 +64,16 @@ test('buildOverlays: ground truth only when allowed, ego from world.state, RSUs 
   const c = buildOverlays({ store: s, stationId: 7, lidarFrame: 100, lidarSimTime: 5, world: null, includeTruth: false });
   assert.equal(c.ego, null);
 });
+
+test('a vehicle has no world.state: ego from its own telemetry, RSUs only from received MAP messages, no ground truth', () => {
+  const s = new Store();
+  s.put(inbox(100, 5, [
+    bsm(1, 0, 0, 5),
+    { tx_id: -3, msg_type: 'MAP', message: { intersection_id: 3, ref_point: [5, 6, 0], timestamp: 4.5 }, link: {} },
+  ]));
+  const o = buildOverlays({ store: s, stationId: 7, lidarFrame: 100, lidarSimTime: 5, world: null, includeTruth: true,
+    ego: { x: 3, y: 4, z: 0, yaw: 90 } });
+  assert.deepEqual(o.ego, { x: 3, y: 4, z: 0, yaw: 90 });
+  assert.deepEqual(o.truth, [], 'without world.state there is no ground truth, whatever the caller asks for');
+  assert.deepEqual(o.rsus.map((r) => [r.id, r.x, r.y]), [[-3, 5, 6]]);
+});

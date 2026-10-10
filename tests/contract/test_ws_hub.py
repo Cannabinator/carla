@@ -450,3 +450,21 @@ def test_a_stalled_client_is_disconnected_instead_of_piling_up():
 
     ws, hub = asyncio.run(scenario())
     assert ws.closed_code == 1013 and hub.connections == 0
+
+
+def test_admin_can_see_who_is_subscribed_to_what(client, world):
+    j = join(client)
+    with connect(client) as ws, connect(client) as ws2:
+        auth(ws, session_token=j["session_token"])
+        send(ws, op="subscribe", topic="session.self")
+        recv(ws, "session.self")
+        send(ws2, op="subscribe", topic="world.state")
+        recv(ws2, "world.state")
+        r = client.get("/api/hub/connections", headers={"X-Admin-Token": TOKEN}).json()
+        by_role = {c["role"]: c for c in r["connections"]}
+        assert set(by_role) == {"vehicle", "observer"}
+        assert set(by_role["vehicle"]["topics"]) == {"session.self"} and by_role["vehicle"]["client_name"] == "car"
+        assert set(by_role["observer"]["topics"]) == {"world.state"}
+        assert r["messages_sent"] > 0 and by_role["observer"]["bytes_sent"] > 0
+    assert client.get("/api/hub/connections").status_code == 403
+    assert client.get("/api/hub/connections", headers={"X-Admin-Token": "bad"}).status_code == 403

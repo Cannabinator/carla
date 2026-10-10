@@ -18,6 +18,7 @@
   --link-ok: #4cc26a; --link-channel: #ff7b72; --link-mac: #f0883e; --link-aware: #b69cff;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }      /* class rules such as .col { display: flex } must not defeat the hidden attribute */
 html, body { height: 100%; }
 body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, -apple-system, Segoe UI, sans-serif; }
 a { color: var(--accent); }

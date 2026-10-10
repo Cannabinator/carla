@@ -26,13 +26,14 @@ const SIGNAL_COLOURS = { protectedMovementAllowed: ['#2e9e4f', 'G'], permissiveM
   unavailable: ['#666', '?'] };
 
 export class MapView {
-  constructor(canvas, { store, onSelect = () => {}, onSelectLink = () => {}, getConfig = () => ({}) } = {}) {
+  constructor(canvas, { store, onSelect = () => {}, onSelectLink = () => {}, getConfig = () => ({}), getSelf = () => null } = {}) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
     this.store = store;
     this.onSelect = onSelect;
     this.onSelectLink = onSelectLink;
     this.getConfig = getConfig;
+    this.getSelf = getSelf;             // vehicle page: the own position from own telemetry (no ground truth available)
     this.layers = { ...DEFAULT_LAYERS };
     this.vp = createViewport({ width: 800, height: 520, cx: 100, cy: 100, scale: 2 });
     this.geometry = null;
@@ -218,6 +219,8 @@ export class MapView {
 
   _followed() {
     if (!this.follow || this.selected === null) return null;
+    const me = this.getSelf();
+    if (me && me.id === this.selected) return me;
     const world = this.store.get('world.state');
     const st = world && world.data.stations.find((s) => s.id === this.selected);
     return st || null;
@@ -439,14 +442,19 @@ export class MapView {
 
   _renderPerspective(ctx, col, world, v2x) {
     const subject = this.selected;
-    const w = world && world.data.stations.find((s) => s.id === subject);
+    const w = this.getSelf() || (world && world.data.stations.find((s) => s.id === subject));
     const inbox = this.store.get('v2x.inbox');
     const simTime = inbox ? inbox.sim_time : world ? world.sim_time : 0;
     const period = 0.5;
     // the subject knows its own position; everything else only through received messages
     if (w) {
       this._glyph(ctx, col, { kind: 'vehicle', v2x: true }, { x: w.x, y: w.y, yaw: w.yaw, colour: col.accent, selected: true });
-      this.drawnStations.push({ id: w.id, x: w.x, y: w.y, kind: 'vehicle', name: w.name });
+      this.drawnStations.push({ id: w.id ?? subject, x: w.x, y: w.y, kind: 'vehicle', name: w.name });
+      const aw = this.getConfig().awareness_range_m;
+      if (aw && this.layers.awareness) {
+        const [sx, sy] = worldToScreen(this.vp, w.x, w.y);
+        ctx.save(); ctx.setLineDash([6, 6]); ctx.strokeStyle = col.accent; ctx.beginPath(); ctx.arc(sx, sy, aw * this.vp.scale, 0, Math.PI * 2); ctx.stroke(); ctx.restore();
+      }
     }
     const ents = this.perspective.entities(simTime);
     for (const e of ents) {

@@ -1291,6 +1291,53 @@
         ]
       }
     },
+    "/api/hub/connections": {
+      "get": {
+        "operationId": "hub_connections_api_hub_connections_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Admin-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "WebSocket clients and their subscriptions (admin)",
+        "tags": [
+          "hub"
+        ]
+      }
+    },
     "/api/lidar/schema": {
       "get": {
         "operationId": "get_schema_api_lidar_schema_get",

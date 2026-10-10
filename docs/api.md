@@ -180,6 +180,13 @@ Get vehicle telemetry (REST)
 
 ## REST: hub
 
+### `GET /api/hub/connections`
+
+WebSocket clients and their subscriptions (admin)
+
+* headers: `x-admin-token`
+* success: 200
+
 ### `GET /api/topics`
 
 WebSocket topics, who may subscribe and which filter they need
@@ -265,7 +272,7 @@ Server to client:
 | `v2x.links` | admin, observer | 2 | required | yes | Link results of the last V2X update (a filter is required) |
 | `v2x.inbox` | admin, observer, vehicle | 2 | required | no | What one station actually received in the last V2X update |
 | `v2x.stats` | admin, observer | 1 | none | yes | Pre-binned channel statistics over a sliding window |
-| `lidar.sensors` | admin, observer, vehicle | 2 | none | no | LiDAR sensors and the budget (push on change) |
+| `lidar.sensors` | admin, observer, vehicle | 10 | none | no | LiDAR sensors and the budget (push on change) |
 | `events` | admin, observer | 2 | none | yes | Admin actions, session changes, LiDAR transitions, errors |
 | `run.status` | admin, observer | 1 | none | yes | Frame, real-time factor, tick durations, queues |
 

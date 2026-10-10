@@ -259,7 +259,7 @@ TOPICS: Dict[str, TopicSpec] = {t.name: t for t in [
               filter_required=True, validate_filter=validate_inbox_filter),
     TopicSpec("v2x.stats", _AO, 1.0, 1.0, _v2x_stats, "Pre-binned channel statistics over a sliding window",
               validate_filter=validate_no_filter, ground_truth=True),
-    TopicSpec("lidar.sensors", _ALL, 2.0, 1.0, _lidar_sensors, "LiDAR sensors and the budget (push on change)",
+    TopicSpec("lidar.sensors", _ALL, 10.0, 2.0, _lidar_sensors, "LiDAR sensors and the budget (push on change)",
               validate_filter=validate_no_filter),
     TopicSpec("events", _AO, 2.0, 1.0, _events, "Admin actions, session changes, LiDAR transitions, errors",
               validate_filter=validate_no_filter, ground_truth=True),

@@ -65,6 +65,9 @@ class Hub:
         self.clock = clock
         self.cache: Dict[Any, Any] = {}
         self.connections = 0
+        self.conns: set = set()                    # live Connection objects (for the admin health card and tests)
+        self.bytes_sent = 0
+        self.messages_sent = 0
 
     def _new_round(self) -> None:
         """Bound the shared cache (its keys carry the frame, so an entry is never wrong, only old)."""
@@ -75,11 +78,18 @@ class Hub:
         await ws.accept()
         conn = Connection(self, ws)
         self.connections += 1
+        self.conns.add(conn)
         try:
             await conn.run()
         finally:
             self.connections -= 1
+            self.conns.discard(conn)
             conn.on_close()
+
+    def describe(self) -> Dict[str, Any]:
+        """Who is connected and what they subscribed to (ground truth of the permission model, for admins)."""
+        return {"connections": [c.info() for c in list(self.conns)], "messages_sent": self.messages_sent,
+                "bytes_sent": self.bytes_sent}
 
 
 class Connection:
@@ -90,6 +100,15 @@ class Connection:
         self.wake = asyncio.Event()
         self.closing = False
         self._session_id: Optional[str] = None       # session whose connection count we hold
+        self.connected_at = time.time()
+        self.sent_messages = 0
+        self.sent_bytes = 0
+
+    def info(self) -> Dict[str, Any]:
+        return {"role": self.principal.kind, "client_name": self.principal.label,
+                "topics": {name: {"max_hz": s.max_hz, "filter": s.filter} for name, s in self.subs.items()},
+                "connected_s": round(time.time() - self.connected_at, 1), "messages_sent": self.sent_messages,
+                "bytes_sent": self.sent_bytes}
 
     # ── output ──────────────────────────────────────────────────────────────────────────────────
     async def _send(self, obj: Dict[str, Any]) -> None:
@@ -100,6 +119,10 @@ class Connection:
             text = json.dumps({"topic": "error", "code": "internal", "message": "server produced invalid data for "
                                f"{obj.get('topic')}"}, separators=(",", ":"))
         await asyncio.wait_for(self.ws.send_text(text), timeout=self.hub.send_timeout_s)
+        self.sent_messages += 1
+        self.sent_bytes += len(text)
+        self.hub.messages_sent += 1
+        self.hub.bytes_sent += len(text)
 
     async def _error(self, code: str, message: str, request: Optional[Dict[str, Any]] = None) -> None:
         await self._send({"topic": "error", "code": code, "message": message, "request": request or {}})
