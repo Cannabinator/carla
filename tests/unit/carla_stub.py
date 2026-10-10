@@ -17,6 +17,7 @@ class Recorder:
         self.actors = {}
         self.lock = threading.Lock()
         self.foreign_ticks = 0
+        self.traffic_lights = []
 
     def rec(self, name, extra=None):
         with self.lock:
@@ -190,8 +191,37 @@ class _Map:
 
 
 class _Actors(list):
+    def __init__(self, rec=None):
+        super().__init__()
+        self.rec = rec
+
     def filter(self, pattern):
+        if self.rec is not None and "traffic_light" in pattern:
+            return list(self.rec.traffic_lights)
         return []
+
+
+class TrafficLight:
+    """Stand-in for carla.TrafficLight; `group` is what get_group_traffic_lights() returns."""
+    def __init__(self, actor_id, x, y, group=None):
+        self.id, self._x, self._y, self.group = actor_id, x, y, group
+
+    def get_transform(self):
+        return Transform(Location(self._x, self._y, 0.0))
+
+    def get_group_traffic_lights(self):
+        if self.group is None:
+            raise RuntimeError("group query failed")
+        return list(self.group)
+
+    def get_state(self):
+        return "Red"
+
+    def get_elapsed_time(self):
+        return 1.0
+
+    def get_red_time(self):
+        return 8.0
 
 
 class World:
@@ -227,7 +257,7 @@ class World:
 
     def get_actors(self):
         self.rec.rec("world.get_actors")
-        return _Actors()
+        return _Actors(self.rec)
 
     def get_actor(self, actor_id):
         self.rec.rec("world.get_actor", actor_id)

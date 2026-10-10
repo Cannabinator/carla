@@ -252,3 +252,43 @@ def test_penetration_with_v2x_disabled_is_harmless(env):
     srv = make(v2x_enabled=False)
     _spawn_background(srv, 5)
     assert srv.v2x_network is None and len(srv._background_vehicles) == 5
+
+
+# ── S7: one RSU per intersection ───────────────────────────────────────────────────
+
+def _junctions(rec, sizes):
+    from tests.unit.carla_stub import TrafficLight
+    next_id, lights = 100, []
+    for n, size in enumerate(sizes):
+        grp = [TrafficLight(next_id + i, n * 200.0 + i, 0.0) for i in range(size)]
+        for tl in grp:
+            tl.group = list(grp)
+        lights += grp
+        next_id += 100
+    rec.traffic_lights = lights
+
+
+def test_one_rsu_per_intersection_not_per_light(env):
+    rec, make = env
+    _junctions(rec, [4, 4, 2, 1])
+    srv = make()
+    rsus = srv.v2x_network._rsus
+    assert sorted(rsus) == [1, 2, 3, 4]
+    assert [len(rsus[i]._traffic_lights) for i in sorted(rsus)] == [4, 4, 2, 1]
+
+
+def test_all_intersections_get_an_rsu_by_default_and_the_cap_is_configurable(env):
+    rec, make = env
+    _junctions(rec, [2] * 15)
+    assert len(make().v2x_network._rsus) == 15          # the old code stopped at 10
+    assert len(make(rsu_max_count=3).v2x_network._rsus) == 3
+    assert len(make(rsu_max_count=0).v2x_network._rsus) == 0
+
+
+def test_rsu_creation_is_deterministic(env):
+    rec, make = env
+    _junctions(rec, [3, 3, 3])
+    first = [[tl.id for tl in r._traffic_lights] for _, r in sorted(make().v2x_network._rsus.items())]
+    rec.traffic_lights = list(reversed(rec.traffic_lights))
+    second = [[tl.id for tl in r._traffic_lights] for _, r in sorted(make().v2x_network._rsus.items())]
+    assert first == second

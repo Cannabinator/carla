@@ -203,3 +203,20 @@ def test_lidar_websocket_streams_decodable_frames(live_world, record_property):
     print(f"\nLiDAR: {frames} frames in {elapsed:.1f} s, "
           f"avg {sum(points)/len(points):.0f} points, avg {sum(sizes)/len(sizes)/1024:.0f} kB/frame")
     assert max(points) > 0, "LiDAR frames contained no points"
+
+
+@pytest.mark.carla
+def test_rsus_are_per_intersection_with_one_signal_group_per_light(live_world):
+    """S7 on the real map: prints how many intersections CARLA's light groups produce."""
+    status, rsus = live_world.json("GET", "/admin/v2x/rsus", admin=True)
+    assert status == 200
+    status, spat = live_world.json("GET", "/admin/v2x/spat", admin=True)
+    assert status == 200
+    print(f"\nRSUs (intersections): {len(rsus)}; SPAT messages: {len(spat)}")
+    if not rsus:
+        pytest.skip("this map/server has no traffic lights or V2X is disabled")
+    ids = [r["intersection_id"] for r in rsus]
+    assert sorted(ids) == list(range(1, len(ids) + 1)), "intersection ids must be 1..n, stable and unique"
+    multi = [s for s in spat if len(s.get("states", [])) > 1]
+    print(f"intersections with more than one signal group: {len(multi)} of {len(spat)}")
+    assert multi, "no intersection has more than one signal group: light grouping may not be working"

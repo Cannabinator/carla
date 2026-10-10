@@ -312,3 +312,20 @@ so the docstrings now say: 2 Hz is this project's default.
 - Section numbers cited for MAP/SPAT (J2735 "§7.4/§7.18") and the RSU 33 dBm / "ETSI TR 101 607" attribution are
   marked unverified (S16 stays open: needs the documents).
 - Not done: ETSI CAM generation rules (event-triggered rate) as an optional mode.
+
+## Phase 3, S7 - RSUs per intersection (2026-10-10)
+
+Before: one RSU per traffic-light ACTOR, keyed by `id(tl) % 10000` (a Python object id, not a stable
+identity), only the first 10 lights in arbitrary order got an RSU, and every SPAT therefore had exactly
+one signal group.
+After: lights are grouped with CARLA's own `TrafficLight.get_group_traffic_lights()` (transitively merged,
+so asymmetric answers cannot split an intersection; a failed query makes a light its own group), one RSU
+per group at the mean position of its lights, groups ordered by smallest actor id, lights inside a group by
+actor id (signal group id = index). All intersections get an RSU by default; `rsu_max_count` (config,
+`/admin/connect`) caps it. Intersection ids are 1..n and stable between runs.
+- Effect: SPAT messages now carry all signal groups of an intersection; the number of RSUs equals the
+  number of light groups of the map (not 10).
+- TODO(verify) on live CARLA: that `get_group_traffic_lights()` returns the lights of one physical
+  intersection (and includes the light itself). `tests/server::test_rsus_are_per_intersection...` prints
+  the counts for your map and fails if no intersection has more than one signal group.
+- RSU coverage radius (300 m) and TX power (33 dBm) are unchanged and still not radio-modelled (S4).

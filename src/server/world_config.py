@@ -38,6 +38,8 @@ class WorldConfig(BaseModel):
     v2x_update_rate_hz: float = Field(default=2.0, gt=0)
     # Share of BACKGROUND vehicles that are V2X stations (chosen with a seeded draw when they are
     # spawned). Client vehicles are always stations. 1.0 = all equipped (decision D2 default).
+    # Number of intersection RSUs to create (None = one per intersection, all of them)
+    rsu_max_count: Optional[int] = Field(default=None, ge=0)
     v2x_penetration_rate: float = Field(default=1.0, ge=0.0, le=1.0)
 
     # web server port, only used to reject a clashing tm_port

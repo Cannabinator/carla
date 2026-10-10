@@ -72,6 +72,7 @@ class ConnectRequest(BaseModel):
     carla_host: str = Field(default="192.168.1.110")
     carla_port: int = Field(default=2000, ge=1, le=65535)
     v2x_enabled: bool = True
+    rsu_max_count: Optional[int] = Field(default=None, ge=0, description="Max intersection RSUs; null = all")
     v2x_update_rate_hz: float = Field(
         default=2.0, gt=0, description="V2X update rate; must divide the simulation rate (20 Hz) into whole frames")
     awareness_range_m: Optional[float] = Field(
@@ -126,6 +127,7 @@ async def connect_world(req: ConnectRequest):
             v2x_enabled=req.v2x_enabled,
             awareness_range_m=req.awareness_range_m,
             v2x_update_rate_hz=req.v2x_update_rate_hz,
+            rsu_max_count=req.rsu_max_count,
             v2x_penetration_rate=req.v2x_penetration_rate,
             tm_port=req.tm_port,
         )

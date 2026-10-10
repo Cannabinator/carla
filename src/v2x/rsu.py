@@ -132,6 +132,29 @@ class RoadSideUnit:
         )
         return cls(config, traffic_lights=[traffic_light])
 
+    @classmethod
+    def from_traffic_lights(
+        cls,
+        traffic_lights: List,
+        intersection_id: int,
+        broadcast_range_m: float = 300.0,
+    ) -> "RoadSideUnit":
+        """
+        Build ONE RSU for an intersection from all of its CARLA TrafficLight actors (S7).
+
+        The RSU sits at the mean position of the lights. Signal group ids are the lights'
+        indices in ascending actor-id order, so they are stable between runs.
+        """
+        lights = sorted(traffic_lights, key=lambda tl: tl.id)
+        locs = [tl.get_transform().location for tl in lights]
+        n = len(locs)
+        config = RSUConfig(
+            intersection_id=intersection_id,
+            position=(sum(l.x for l in locs) / n, sum(l.y for l in locs) / n, sum(l.z for l in locs) / n),
+            broadcast_range_m=broadcast_range_m,
+        )
+        return cls(config, traffic_lights=lights)
+
     # ── MAP generation ─────────────────────────────────────────────────────────
 
     def get_map(self, timestamp: float) -> MAPMessage:
@@ -212,3 +235,48 @@ class RoadSideUnit:
         except Exception as exc:
             logger.debug("Could not read traffic light timing: %s", exc)
         return None  # Off / Unknown state, or the query failed
+
+
+def group_traffic_lights(traffic_lights: List) -> List[List]:
+    """
+    Partition traffic lights into intersections using CARLA's own light groups.
+
+    ``TrafficLight.get_group_traffic_lights()`` lists the lights that switch together. Lights are
+    merged transitively (union-find), so an asymmetric answer cannot split an intersection, and a
+    light whose group query fails becomes its own group. The result is deterministic: lights inside
+    a group are sorted by actor id and groups by their smallest actor id.
+    TODO(verify): get_group_traffic_lights() semantics on 0.9.16 (does it include the light itself,
+    does a group correspond to one physical intersection) - run on a live server.
+    """
+    parent: Dict[int, int] = {}
+    actors: Dict[int, Any] = {}
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def add(tl) -> None:
+        if tl.id not in parent:
+            parent[tl.id] = tl.id
+            actors[tl.id] = tl
+
+    for tl in traffic_lights:
+        add(tl)
+    for tl in traffic_lights:
+        try:
+            members = list(tl.get_group_traffic_lights())
+        except Exception as exc:
+            logger.debug("traffic light %s: group query failed: %s", tl.id, exc)
+            members = []
+        for m in members:
+            add(m)
+            ra, rb = find(tl.id), find(m.id)
+            if ra != rb:
+                parent[max(ra, rb)] = min(ra, rb)
+
+    groups: Dict[int, List] = {}
+    for tid, tl in actors.items():
+        groups.setdefault(find(tid), []).append(tl)
+    return [sorted(groups[root], key=lambda t: t.id) for root in sorted(groups)]

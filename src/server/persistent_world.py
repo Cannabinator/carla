@@ -218,21 +218,19 @@ class PersistentCARLAServer:
     def _init_v2x(self) -> None:
         try:
             from src.v2x.network import V2XNetwork
-            from src.v2x.rsu import RoadSideUnit
+            from src.v2x.rsu import RoadSideUnit, group_traffic_lights
             self.v2x_network = V2XNetwork(
                 awareness_range_m=self.awareness_range_m,
                 update_rate_hz=self.config.v2x_update_rate_hz,
                 world=self.world,
             )
-            # Auto-create RSUs from CARLA traffic lights (up to 10 intersections)
+            # One RSU per intersection (CARLA light group), deterministic order, optionally capped
             all_tl = list(self.world.get_actors().filter("traffic.traffic_light"))
-            junctions_seen: dict = {}
-            for tl in all_tl:
-                jid = id(tl) % 10000  # stable pseudo-ID per actor
-                if jid not in junctions_seen:
-                    junctions_seen[jid] = tl
-            for rsu_idx, (_jid, tl) in enumerate(list(junctions_seen.items())[:10]):
-                rsu = RoadSideUnit.from_traffic_light(tl, intersection_id=rsu_idx + 1)
+            groups = group_traffic_lights(all_tl)
+            if self.config.rsu_max_count is not None:
+                groups = groups[: self.config.rsu_max_count]
+            for rsu_idx, group in enumerate(groups):
+                rsu = RoadSideUnit.from_traffic_lights(group, intersection_id=rsu_idx + 1)
                 self.v2x_network.register_rsu(rsu)
             logger.info(
                 "V2X network initialised: range=%.0f m, %d RSUs",
