@@ -262,3 +262,25 @@ Effect on the contention factor (model.md, `p_csma(N)`), N = stations within 300
 (the contention term is experimental, see model.md). Also: more stations means more BSMs per update, more
 neighbours, more NLOS blockers, and roughly N^2 channel evaluations per update (cost grows quadratically).
 Not changed: pedestrians remain VRUs registered as before (no penetration rate for them yet).
+
+## Phase 3, performance of the channel (needed by S3), outputs identical (2026-10-10)
+
+With every background vehicle a station (S3 default), the NLOS blocker search (for each pair, a Python
+loop over all other stations) made one V2X update cost O(N^3) interpreted steps on the simulation thread.
+Measured `DSRCChannel.broadcast_all` (random stations in a 400 m square, one update):
+| stations | before | after |
+|---|---|---|
+| 10 | 0.8 ms | 0.8 ms |
+| 25 | 7.6 ms | 1.8 ms |
+| 50 | 48.5 ms | 7.4 ms |
+| 100 | 311 ms | 34 ms |
+| 150 | 925 ms | 126 ms |
+| 300 | not measured | 1315 ms |
+(One tick is 50 ms and an update runs every 10th tick; before, 100 stations stalled the loop for most of
+each 500 ms window.) The blocker search is now vectorised with numpy per transmitter (`_nlos_row`), same
+arithmetic and order as the scalar `_point_to_segment_dist`. Proof of identical output: channel goldens
+unchanged, and `tests/unit/test_nlos_vectorised.py` compares it with the scalar `_is_nlos` on 40 random
+layouts, 10 collinear/grid layouts and boundary/duplicate-position cases. The scalar function stays as the
+reference. Limit: beyond about 150 stations the remaining per-pair Python loop still dominates
+(300 stations: 1.3 s per update); a server with that many stations needs a lower update rate, a lower
+penetration rate, or a further rewrite of `broadcast_all`.

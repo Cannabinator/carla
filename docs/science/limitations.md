@@ -28,6 +28,12 @@ Things a reader of results from this platform must know. Items marked **fix plan
 * **Standard attributions are unverified**: DENM cause codes (S15), RSU 33 dBm "ETSI TR 101 607" and the
   "Class A 23 dBm ERP" power class (S16), SPAT message structure.
 
+## Scale
+
+* The channel update runs on the simulation thread. One update takes about 7 ms for 50 stations, 34 ms for
+  100, 126 ms for 150 and 1.3 s for 300 (see CHANGELOG), against a 50 ms frame: plan penetration rate and
+  update rate accordingly.
+
 ## Simulation
 
 * **Reproducibility** depends on CARLA/Traffic Manager determinism, which has not been measured here.

@@ -32,6 +32,8 @@ Claimed references (UNVERIFIED, see docs/science/model.md):
 
 import math
 import logging
+
+import numpy as np
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 import random
@@ -52,6 +54,9 @@ _DSRC_LAMBDA = _C_SPEED_OF_LIGHT / _DSRC_FREQ_HZ  # wavelength ≈ 0.0508 m
 _REFERENCE_DIST_M = 10.0
 _L0_DB = 20.0 * math.log10(4.0 * math.pi * _REFERENCE_DIST_M / _DSRC_LAMBDA)
 # _L0_DB ≈ 67.9 dB
+
+# Another vehicle within this distance of the tx-rx segment makes a link NLOS
+_NLOS_BLOCKER_RADIUS_M = 2.5
 
 # Carrier sensing range for CSMA/CA contention counting (IEEE 802.11 CS threshold)
 _CARRIER_SENSE_RANGE_M = 300.0
@@ -183,12 +188,22 @@ class DSRCChannel:
         self._received = {vid: {} for vid in bsm_messages}
         vehicle_ids = list(bsm_messages.keys())
 
+        # Station coordinates as arrays, for the vectorised NLOS search (same order as `positions`)
+        pos_ids = list(positions.keys())
+        pos_index = {vid: i for i, vid in enumerate(pos_ids)}
+        xs = np.array([positions[v][0] for v in pos_ids], dtype=np.float64)
+        ys = np.array([positions[v][1] for v in pos_ids], dtype=np.float64)
+
         for sender_id, bsm in bsm_messages.items():
             tx_pos = positions.get(sender_id)
             if tx_pos is None:
                 continue
 
             n_contenders = self._count_contenders(sender_id, tx_pos, positions)
+            nlos_row = (
+                _nlos_row(tx_pos, xs, ys, pos_index[sender_id])
+                if self.config.enable_nlos_model and len(pos_ids) > 2 else None
+            )
 
             for receiver_id in vehicle_ids:
                 if receiver_id == sender_id:
@@ -207,10 +222,7 @@ class DSRCChannel:
                     self.stats["total_deliveries"] += 1
                     continue
 
-                nlos = (
-                    self.config.enable_nlos_model
-                    and self._is_nlos(sender_id, receiver_id, tx_pos, rx_pos, positions)
-                )
+                nlos = bool(nlos_row[pos_index[receiver_id]]) if nlos_row is not None else False
                 prr = self._compute_prr(distance, nlos, n_contenders)
 
                 self.stats["total_broadcasts"] += 1
@@ -330,7 +342,7 @@ class DSRCChannel:
         for vid, pos in all_positions.items():
             if vid == sender_id or vid == receiver_id:
                 continue
-            if _point_to_segment_dist(pos, tx, rx) < 2.5:
+            if _point_to_segment_dist(pos, tx, rx) < _NLOS_BLOCKER_RADIUS_M:
                 return True
         return False
 
@@ -399,3 +411,40 @@ def _point_to_segment_dist(
     proj_x = ax + t * dx
     proj_y = ay + t * dy
     return math.sqrt((px - proj_x) ** 2 + (py - proj_y) ** 2)
+
+
+def _nlos_row(
+    tx: Tuple[float, float],
+    xs: np.ndarray,
+    ys: np.ndarray,
+    sender_idx: int,
+) -> np.ndarray:
+    """
+    NLOS flag from one transmitter to every station, all at once.
+
+    ``out[j]`` is True iff some station k (k != sender, k != j) lies within
+    ``_NLOS_BLOCKER_RADIUS_M`` of the segment tx -> station j. Same arithmetic, in the same
+    order, as the scalar ``_point_to_segment_dist`` (float64), so results are identical to
+    ``DSRCChannel._is_nlos``; this just replaces an O(N) Python loop per pair by numpy, taking
+    the per-update cost of the channel from O(N^3) interpreted steps to O(N^2) vector steps.
+    """
+    ax, ay = tx
+    dx = xs - ax                                   # (J,) segment vectors tx -> j
+    dy = ys - ay
+    seg_len_sq = dx * dx + dy * dy
+    px = xs[None, :]                               # (1, K) candidate blockers
+    py = ys[None, :]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        t = np.clip(((px - ax) * dx[:, None] + (py - ay) * dy[:, None]) / seg_len_sq[:, None], 0.0, 1.0)
+    proj_x = ax + t * dx[:, None]
+    proj_y = ay + t * dy[:, None]
+    dist = np.sqrt((px - proj_x) ** 2 + (py - proj_y) ** 2)
+    # zero-length segment (receiver exactly at the transmitter): distance to that point
+    degenerate = seg_len_sq == 0.0
+    if degenerate.any():
+        dist[degenerate, :] = np.sqrt((px - ax) ** 2 + (py - ay) ** 2)
+    blocked = dist < _NLOS_BLOCKER_RADIUS_M
+    n = xs.shape[0]
+    blocked[:, sender_idx] = False                 # the sender is not its own blocker
+    blocked[np.arange(n), np.arange(n)] = False    # the receiver does not block its own link
+    return blocked.any(axis=1)
