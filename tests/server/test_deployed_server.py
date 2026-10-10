@@ -161,3 +161,45 @@ def test_admin_population_roundtrip(live_world):
         # always clean up so a failing run does not leave vehicles in the simulation
         cstatus, cbody = live_world.json("DELETE", "/admin/traffic", admin=True, timeout=60)
     assert cstatus == 200 and cbody["removed"] >= 1, cbody
+
+
+@pytest.mark.carla
+def test_lidar_websocket_streams_decodable_frames(live_world, record_property):
+    """Join with LiDAR, read /ws/lidar/{session}, decode frames with BinaryProtocol."""
+    sync = pytest.importorskip("websockets.sync.client")
+    from src.utils.binary_protocol import BinaryProtocol
+
+    status, j = live_world.json("POST", "/client/join",
+                                {"client_name": "pytest-lidar", "enable_lidar": True})
+    assert status == 200, j
+    sid = j["session_id"]
+    if not j.get("lidar_ws_url"):
+        live_world.json("DELETE", f"/client/leave/{sid}")
+        pytest.fail("join returned no lidar_ws_url: the server could not enable LiDAR (check server logs)")
+    frames, sizes, points = 0, [], []
+    try:
+        with sync.connect(live_world.ws_base + j["lidar_ws_url"], open_timeout=10, max_size=None) as ws:
+            t0 = time.time()
+            while time.time() - t0 < 6.0 and frames < 20:
+                try:
+                    msg = ws.recv(timeout=2)
+                except TimeoutError:
+                    break
+                if isinstance(msg, str):
+                    assert json.loads(msg)["type"] != "error", msg
+                    continue
+                decoded = BinaryProtocol.decode(msg)
+                assert decoded is not None, "binary LiDAR frame could not be decoded"
+                pts, meta = decoded
+                frames += 1
+                sizes.append(len(msg))
+                points.append(meta["num_points"])
+                assert meta["ego_actor_id"] == j["actor_id"]
+            elapsed = time.time() - t0
+    finally:
+        live_world.json("DELETE", f"/client/leave/{sid}")
+    assert frames >= 3, f"only {frames} LiDAR frames in 6 s"
+    record_property("lidar_frames", frames)
+    print(f"\nLiDAR: {frames} frames in {elapsed:.1f} s, "
+          f"avg {sum(points)/len(points):.0f} points, avg {sum(sizes)/len(sizes)/1024:.0f} kB/frame")
+    assert max(points) > 0, "LiDAR frames contained no points"
