@@ -349,3 +349,18 @@ p_channel, p_mac, p_total, delivered, drop_cause. `DSRCChannel.evaluate_link(...
   (14 / 34 / 126 ms in the entry above, which had no records). Still far below the 311 / 925 ms before the
   vectorisation, but 100 stations now takes more than one 50 ms frame per V2X update.
 - Next steps (not done yet): V2XFrame, RSU/VRU/DENM messages through the channel with per-station power.
+
+## Phase 3, S4 step 2 - the V2XFrame (2026-10-10, no change of any computed value)
+
+`V2XNetwork.update()` now ends by building an immutable `V2XFrame` (`get_frame()`, `v2x/frame.py`):
+frame number and simulation time (from the snapshot), ground-truth `stations` (kind OBU/RSU/VRU; RSU ids are
+`-intersection_id`), `sent` (what each station transmitted), `inbox` (what each receiver actually got, with the
+link that delivered it), every `LinkResult` of the update, `threats` computed from the receiver's inbox, and
+per-frame `ChannelStats` (by link type: total, delivered, channel/mac/awareness drops; stations skipped).
+- Ground truth and the received view are separate: a station can be in `stations` and absent from a
+  receiver's `inbox`.
+- The application's awareness filter is recorded as the drop cause "out_of_awareness_range" on the
+  radio-delivered link (it used to be invisible); inbox == neighbour tables is tested.
+- Deviation from the handoff's sketch: `inbox` maps a receiver to a TUPLE of `ReceivedMessage` (a transmitter
+  can send several message types), not to one message per transmitter.
+- Frames are built from the same state as before; neighbours, threats and statistics are unchanged.

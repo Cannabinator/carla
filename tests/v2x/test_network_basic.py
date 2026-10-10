@@ -116,8 +116,9 @@ class MockActorSnapshot:
 
 class MockWorldSnapshot:
     """Mock for carla.WorldSnapshot"""
-    def __init__(self, vehicles, elapsed_seconds=0.0):
+    def __init__(self, vehicles, elapsed_seconds=0.0, frame=None):
         self.vehicles = vehicles
+        self.frame = frame
         self.timestamp = type('obj', (object,), {'elapsed_seconds': elapsed_seconds})()
     
     def find(self, vehicle_id):

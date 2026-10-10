@@ -19,7 +19,21 @@ if TYPE_CHECKING:
     import carla
 
 from .channel import DSRCChannel, DSRCConfig
+from .channel.base import DROP_AWARENESS, LinkResult
 from .constants import RANGE_MEDIUM_M, SHARE_SENSOR_DATA_DISTANCE
+from .frame import (
+    KIND_OBU,
+    KIND_RSU,
+    KIND_VRU,
+    ChannelStats,
+    ReceivedMessage,
+    StationState,
+    Threat,
+    V2XFrame,
+    count_links,
+    frozen_map,
+    rsu_station_id,
+)
 from .extract import VehicleStatic, create_bsm_from_carla, describe_vehicle
 from .messages import (
     DENM,
@@ -80,6 +94,10 @@ class V2XNetwork:
         # normal caller (PersistentCARLAServer) already calls it once every N frames.
         self.update_every_n_frames = update_every_n_frames
         self.last_update_frame: Optional[int] = None
+        self.last_frame: Optional[V2XFrame] = None       # immutable result of the last update
+        self._links_this_update: Tuple[LinkResult, ...] = ()
+        self._frame_number = 0
+        self._skipped_this_update = 0
         self.enable_coop_perception = enable_cooperative_perception
 
         # Vehicle registry
@@ -192,7 +210,67 @@ class V2XNetwork:
 
         self._update_rsu(sim_time)
         self._update_vru(snapshot, sim_time)
+        self.last_frame = self._build_frame(sim_time)
         return True
+
+    def get_frame(self) -> Optional[V2XFrame]:
+        """The immutable result of the last update (None before the first one)."""
+        return self.last_frame
+
+    def _build_frame(self, sim_time: float) -> V2XFrame:
+        """Assemble the immutable frame from this update's state."""
+        tx_power = self._dsrc_channel.config.tx_power_dbm
+        stations = {}
+        sent: dict = {}
+        for vid, bsm in self.bsm_messages.items():
+            stations[vid] = StationState(vid, KIND_OBU, bsm.x_m, bsm.y_m, bsm.z_m,
+                                         bsm.heading, bsm.speed, tx_power)
+            sent[vid] = (bsm,)
+        for iid, rsu in self._rsus.items():
+            sid = rsu_station_id(iid)
+            x, y, z = rsu.config.position
+            stations[sid] = StationState(sid, KIND_RSU, x, y, z, 0.0, 0.0, rsu.config.tx_power_dbm)
+            sent[sid] = tuple(m for m in (self.map_messages.get(iid), self.spat_messages.get(iid)) if m is not None)
+        for vru_id, vruam in self.vru_messages.items():
+            x, y, z = vruam.position
+            stations[vru_id] = StationState(vru_id, KIND_VRU, x, y, z, vruam.heading, vruam.speed, None)
+            sent[vru_id] = (vruam,)
+
+        inbox: dict = {}
+        for link in self._links_this_update:
+            if not link.delivered:
+                continue
+            message = self._message_for(link)
+            if message is not None:
+                inbox.setdefault(link.rx_id, []).append(ReceivedMessage(link.tx_id, link.msg_type, message, link))
+
+        threats: dict = {}
+        for (ego, other), t in self.threats.items():
+            threats.setdefault(ego, []).append(Threat(other, t['level'], t['ttc'], t['distance']))
+
+        return V2XFrame(
+            frame=self._frame_number,
+            sim_time=sim_time,
+            stations=frozen_map(stations),
+            sent=frozen_map(sent),
+            inbox=frozen_map({k: tuple(v) for k, v in inbox.items()}),
+            links=self._links_this_update,
+            threats=frozen_map({k: tuple(v) for k, v in threats.items()}),
+            stats=ChannelStats(frozen_map(count_links(self._links_this_update)),
+                               self._skipped_this_update),
+        )
+
+    def _message_for(self, link: LinkResult):
+        """The message object a link carried (as of this update)."""
+        if link.msg_type == "BSM":
+            return self.bsm_messages.get(link.tx_id)
+        if link.msg_type == "SPAT":
+            return self.spat_messages.get(-link.tx_id)
+        if link.msg_type == "MAP":
+            return self.map_messages.get(-link.tx_id)
+        if link.msg_type == "VRUAM":
+            return self.vru_messages.get(link.tx_id)
+        return None
 
     def _update_bsm(self, snapshot=None, force: bool = False) -> Optional[float]:
         """
@@ -226,6 +304,7 @@ class V2XNetwork:
             self.last_update_frame = frame
 
         successful_sends = 0
+        self._skipped_this_update = 0
 
         # ── Phase 1: Build BSMs from current CARLA snapshot ──────────────────
         for vehicle_id, vehicle in self.vehicles.items():
@@ -235,6 +314,7 @@ class V2XNetwork:
                 # so a stale message is not transmitted again (S10).
                 self.bsm_messages.pop(vehicle_id, None)
                 self.stats['skipped_not_in_snapshot'] += 1
+                self._skipped_this_update += 1
                 continue
             self.bsm_messages[vehicle_id] = bsm
             successful_sends += 1
@@ -249,7 +329,18 @@ class V2XNetwork:
             vid: (bsm.x_m, bsm.y_m)
             for vid, bsm in self.bsm_messages.items()
         }
-        self._dsrc_channel.broadcast_all(self.bsm_messages, positions)
+        link_frame = frame if frame is not None else int(self.stats['total_update_count'])
+        links = self._dsrc_channel.broadcast_all(
+            self.bsm_messages, positions, frame=link_frame, sim_time=sim_time)
+        if self.awareness_range_m is not None:
+            # The application filter removes radio-delivered packets beyond the awareness range;
+            # record that as the cause (same rule as _discover_neighbors).
+            limit = self.awareness_range_m
+            links = [l._replace(delivered=False, drop_cause=DROP_AWARENESS)
+                     if (l.delivered and l.distance_m > limit) else l
+                     for l in links]
+        self._links_this_update = tuple(links)
+        self._frame_number = link_frame
 
         # ── Phase 3: Neighbor discovery using channel-filtered BSM view ───────
         self._discover_neighbors()
