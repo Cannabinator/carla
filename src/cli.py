@@ -13,14 +13,14 @@ def main(argv=None) -> int:
     r.add_argument("--runs-dir", default="runs")
     r.add_argument("--fake", action="store_true", help="use the deterministic synthetic world instead of CARLA")
     r.add_argument("-v", "--verbose", action="store_true")
-    s = sub.add_parser("serve", help="start the web server (see start_server.py --help for the options)")
-    s.add_argument("rest", nargs=argparse.REMAINDER)
-    args = p.parse_args(argv)
-    if args.cmd == "serve":
+    sub.add_parser("serve", help="start the web server; every option after 'serve' goes to start_server.py (--help lists them)")
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ["serve"]:               # argparse cannot forward leading --options, so hand them over untouched
         import start_server
-        sys.argv = ["start_server.py", *args.rest]
+        sys.argv = ["start_server.py", *argv[1:]]
         start_server.main()
         return 0
+    args = p.parse_args(argv)
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     from src.scenario import load_scenario, run_scenario
     manifest = run_scenario(load_scenario(args.scenario), args.runs_dir, fake=True if args.fake else None)

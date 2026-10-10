@@ -41,10 +41,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY src/ ./src/
+COPY scenarios/ ./scenarios/
 COPY start_server.py .
 
 # Create logs directory
-RUN mkdir -p logs data
+RUN mkdir -p logs data runs
 
 # Expose the web server port
 EXPOSE 8000

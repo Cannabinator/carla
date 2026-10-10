@@ -23,6 +23,7 @@ services:
       # Persist logs and data outside container
       - ./logs:/app/logs
       - ./data:/app/data
+      - ./runs:/app/runs
     environment:
       - CARLA_HOST=192.168.1.101
       - CARLA_PORT=2000

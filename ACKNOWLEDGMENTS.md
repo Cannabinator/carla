@@ -13,26 +13,23 @@ This project uses the following open-source libraries, resources, and standards.
 | **Pydantic** | MIT License | https://pydantic.dev/ |
 | **WebSockets** | BSD-3-Clause | https://websockets.readthedocs.io/ |
 
-## Optional Dependencies
+## Analysis and development (optional)
 
 | Library | License | Link |
 |---------|---------|------|
-| **Open3D** | MIT License | http://www.open3d.org/ |
-| **OpenCV** | Apache-2.0 | https://opencv.org/ |
-| **Matplotlib** | PSF/BSD-style | https://matplotlib.org/ |
-| **Pandas** | BSD-3-Clause | https://pandas.pydata.org/ |
-| **Selenium** | Apache-2.0 | https://www.selenium.dev/ |
+| **Pandas**, **Matplotlib** | BSD-3-Clause / PSF-style | https://pandas.pydata.org/, https://matplotlib.org/ |
+| **pytest**, **httpx** | MIT / BSD-3-Clause | https://pytest.org/, https://www.python-httpx.org/ |
+| **Playwright** | Apache-2.0 | https://playwright.dev/ |
+| **Ruff**, **Pyright** | MIT | https://docs.astral.sh/ruff/, https://github.com/microsoft/pyright |
 
-## Frontend Libraries (CDN)
+## Frontend libraries (vendored, not loaded from a CDN)
 
-| Library | License | Link |
-|---------|---------|------|
-| **Three.js** | MIT License | https://threejs.org/ |
-| **OrbitControls** | MIT License | Part of Three.js |
-| **PointerLockControls** | MIT License | Part of Three.js |
+| Library | License | Where |
+|---------|---------|-------|
+| **Three.js** (+ OrbitControls) | MIT | `src/web/static/vendor/three/` |
+| **uPlot** | MIT | `src/web/static/vendor/uplot/` |
 
-Three.js is Copyright (c) 2010-2024 Three.js Authors.
-Full license: https://github.com/mrdoob/three.js/blob/dev/LICENSE
+Versions and checksums: `src/web/static/vendor/VERSIONS.md`. Three.js is Copyright (c) 2010-2023 Three.js Authors.
 
 ## Industry Standards
 
@@ -58,15 +55,10 @@ This implementation is based on published industry standards for V2V communicati
 
 ## Algorithm Implementations
 
-The following algorithms are original implementations using standard techniques:
-
-| Algorithm | File | Description |
-|-----------|------|-------------|
-| Octree Downsampling | `src/utils/octree.py` | Voxel-based point cloud downsampling (common technique) |
-| LiDAR wire protocol v3 | `src/lidar/protocol.py` | Custom binary serialization for LiDAR data |
-| Lazy Evaluation | `src/utils/lazy.py` | Standard Python descriptor and memoization patterns |
-
-These implementations do not derive from any copyrighted source code.
+The LiDAR wire protocol v3 (`src/lidar/protocol.py`) is a custom binary format written for this project. The channel
+model (`src/v2x/channel/`) uses textbook techniques (log-distance path loss, log-normal shadowing, a logistic
+reception curve); its parameters are assumptions and its literature references are unverified, see
+`docs/science/model.md` and `docs/science/limitations.md`. No third-party source code is copied.
 
 ---
 

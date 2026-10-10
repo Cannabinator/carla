@@ -90,7 +90,7 @@ and other obstacles are **not** considered, and vehicles that are not V2X statio
   0.82 at 500 m. With the default 150 m awareness range (75 m on the server), the radio model rarely decides
   anything in line of sight; the awareness-range cutoff does. Only NLOS links (0.79 at 150 m) and high
   contender counts make the radio matter inside the awareness range.
-* The calibration printed in earlier code comments and in `docs/agents/audit.md` ("P_rx ~ -71 dBm at 50 m LOS,
+* The calibration printed in earlier code comments and in the removed `docs/agents/audit.md` (in git history) ("P_rx ~ -71 dBm at 50 m LOS,
   -77 dBm at 100 m LOS, -87 dBm at 150 m NLOS; meaningful PRR variation within 10-150 m") is **numerically
   false**. The code gives -56.9, -63.9 and -78.5 dBm (table above). Those statements were removed.
 

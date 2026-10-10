@@ -29,6 +29,8 @@ docker run -d \
   -p 8000:8000 \
   -v $(pwd)/logs:/app/logs \
   -v $(pwd)/data:/app/data \
+  -v $(pwd)/runs:/app/runs \
+  -e ADMIN_TOKEN=choose-a-secret \
   carla-v2v-frontend
 
 # View logs
@@ -45,8 +47,13 @@ Once running, access the web interface at:
 | Page | URL | Description |
 |------|-----|-------------|
 | **Home** | http://localhost:8000/ | Links to the pages below |
-| **Admin panel** | http://localhost:8000/admin | Connect to CARLA, traffic, V2X (admin token required) |
-| **Client join** | http://localhost:8000/client | Join as a vehicle |
+| **Admin** | http://localhost:8000/admin | Connect to CARLA, traffic, configuration, RSUs, DENM, LiDAR, runs (`ADMIN_TOKEN` required) |
+| **Observer** | http://localhost:8000/observer | Map, V2X links, statistics, LiDAR of active sensors (read-only) |
+| **Vehicle** | http://localhost:8000/vehicle | Join as a vehicle; sees what its radio received |
+| **API docs** | http://localhost:8000/docs | OpenAPI |
+
+The container starts without a simulation: connect it to CARLA from the admin page (the CARLA host defaults to
+`CARLA_HOST`).
 
 ## Architecture
 
@@ -78,8 +85,9 @@ Once running, access the web interface at:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CARLA_HOST` | `192.168.1.101` | Default CARLA server IP |
-| `CARLA_PORT` | `2000` | Default CARLA server port |
+| `ADMIN_TOKEN` | none, required by `docker-compose.yml` | Admin token; put it in `.env` (`.env.example`) |
+| `CARLA_HOST` | `192.168.1.101` in `docker-compose.yml` | Default value of `--carla-host` |
+| `CARLA_PORT` | `2000` | Default value of `--carla-port` |
 
 ### Docker Compose Configuration
 

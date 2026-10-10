@@ -61,10 +61,10 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument("--live", action="store_true",
                    help="Start persistent CARLA world on launch")
-    p.add_argument("--carla-host", default="192.168.1.110",
-                   help="CARLA server IP address")
-    p.add_argument("--carla-port", type=int, default=2000,
-                   help="CARLA server port")
+    p.add_argument("--carla-host", default=os.environ.get("CARLA_HOST", "192.168.1.110"),
+                   help="CARLA server IP address (default: $CARLA_HOST)")
+    p.add_argument("--carla-port", type=int, default=int(os.environ.get("CARLA_PORT", "2000")),
+                   help="CARLA server port (default: $CARLA_PORT)")
     p.add_argument("--admin-token", default=None,
                    help="Secret token for the /admin API (overrides ADMIN_TOKEN env var)")
     p.add_argument("--port", type=int, default=8000,

@@ -569,3 +569,15 @@ lidar_meta; a different seed gives different files (`tests/e2e/test_scenarios.py
 
 Not verified: reproducibility on real CARLA (traffic-manager and physics nondeterminism may break it). A live
 test exists (`tests/integration/test_reproducibility_live.py`, marker `carla`) and has not been run.
+
+## Phase 8 - documentation (2026-10-10, no change to any model)
+
+- `AGENTS.md` replaces `.instructions.md`, `docs/agents/*` and `.github/agents/*` (they described removed code and
+  referenced files that never existed); `CLAUDE.md` points to it. New `README.md`, `docs/running.md` (with the manual
+  check for a live CARLA), run-layout document `docs/ER_DATABASE_MODEL.md`, cleaned `ACKNOWLEDGMENTS.md` and
+  `DOCKER.md`. `docs/science/limitations.md` brought up to date (several "fix planned" items had been fixed in Phase 3).
+- Small code fixes found while executing the documented commands: `python -m src.cli serve --fake ...` rejected its
+  options (now forwarded untouched); `CARLA_HOST`/`CARLA_PORT`, which `docker-compose.yml` has always set, were read by
+  nothing and are now the defaults of `--carla-host`/`--carla-port`; the Docker image now contains `scenarios/` and the
+  compose file mounts `./runs`.
+- Not executed: everything that needs a Docker daemon or a real CARLA server (marked in `docs/running.md`).
