@@ -174,3 +174,17 @@ Removed: `prev_velocity`/`delta_time` parameters, the network's `prev_speeds` hi
 `vertical_accel` stays 0.0 (not part of this change). `steering_angle` unchanged.
 TODO(verify): `ActorSnapshot.get_acceleration()` units (m/s^2) and the axis convention against CARLA:
 `tests/integration/test_geometry_live.py` compares `v2x/geometry.py` with `carla.Transform` (needs `carla`).
+
+## Phase 3, model change S14 - threat assessment from velocity vectors (2026-10-10)
+
+`calculate_threat_level` built each vehicle's velocity as `speed * (cos, sin)(heading)`, i.e. assumed
+the vehicle moves where its nose points. Wrong when reversing or sliding.
+- `BSMCore` gains `vx_mps`, `vy_mps` (world frame, from the snapshot velocity); the closing speed uses them.
+- Example (reversing car, heading 0, vx = -5 m/s, stationary car 50 m ahead):
+  before: closing 5 m/s, TTC 10 s, threat level 2; after: closing -5 m/s, TTC inf, threat level 0.
+- Example (sliding car, heading 0, velocity (0, 5), stationary car 20 m to its side): before: no threat
+  (moving "forward", away from it); after: TTC 4.0 s, level 3.
+- Hand-made BSMs without a velocity vector (tests) fall back to speed along the heading, as before.
+- Golden diff: only the two added fields (`vx_mps`=6.0, `vy_mps`=8.0 for velocity (6, 8, 0)).
+- Not changed: centre-to-centre distance (extents ignored, TTC overestimated) and the thresholds
+  (10 / 5 / 2 s, 100 m), now labelled PROJECT-DEFINED in the docstring (no standard cited).

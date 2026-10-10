@@ -189,6 +189,8 @@ def create_bsm_from_carla(vehicle, vehicle_id: int, msg_count: int,
         z_m=transform.location.z,
         position_accuracy=0.5,  # Assuming high accuracy in simulation
         speed=speed_ms,
+        vx_mps=velocity.x,
+        vy_mps=velocity.y,
         heading=transform.rotation.yaw % 360,
         steering_angle=steering_angle,
         longitudinal_accel=long_accel,

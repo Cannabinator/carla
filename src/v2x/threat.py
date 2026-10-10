@@ -7,14 +7,29 @@ import math
 from .messages.bsm import BSMCore
 
 
+def _velocity_xy(bsm: BSMCore) -> tuple:
+    """World-frame velocity. Uses the BSM's velocity vector; only a hand-made BSM without one
+    falls back to speed along the heading (wrong when reversing or sliding)."""
+    if bsm.vx_mps is not None and bsm.vy_mps is not None:
+        return bsm.vx_mps, bsm.vy_mps
+    h = math.radians(bsm.heading)
+    return bsm.speed * math.cos(h), bsm.speed * math.sin(h)
+
+
 def calculate_threat_level(ego_bsm: BSMCore, other_bsm: BSMCore) -> tuple:
     """
-    Calculate collision threat level between two vehicles.
-    
+    Collision threat level between two vehicles from their BSMs.
+
+    Time to collision uses the closing speed along the line of sight between the two reference
+    points, computed from the velocity vectors (S14), so reversing or sliding vehicles are
+    handled. Limitations: the distance is centre to centre (vehicle extents are ignored, so TTC
+    is overestimated), and the level thresholds (TTC 10 / 5 / 2 s, range 100 m) are
+    PROJECT-DEFINED, not taken from a standard.
+
     Args:
         ego_bsm: Ego vehicle BSM
         other_bsm: Other vehicle BSM
-    
+
     Returns:
         (threat_level, time_to_collision, distance)
         threat_level: 0=no threat, 1=low, 2=medium, 3=high, 4=imminent
@@ -23,14 +38,11 @@ def calculate_threat_level(ego_bsm: BSMCore, other_bsm: BSMCore) -> tuple:
     dx = other_bsm.x_m - ego_bsm.x_m
     dy = other_bsm.y_m - ego_bsm.y_m
     distance = math.sqrt(dx**2 + dy**2)
-    
-    # Calculate relative velocity
-    ego_vx = ego_bsm.speed * math.cos(math.radians(ego_bsm.heading))
-    ego_vy = ego_bsm.speed * math.sin(math.radians(ego_bsm.heading))
-    
-    other_vx = other_bsm.speed * math.cos(math.radians(other_bsm.heading))
-    other_vy = other_bsm.speed * math.sin(math.radians(other_bsm.heading))
-    
+
+    # Relative velocity from the velocity vectors
+    ego_vx, ego_vy = _velocity_xy(ego_bsm)
+    other_vx, other_vy = _velocity_xy(other_bsm)
+
     rel_vx = other_vx - ego_vx
     rel_vy = other_vy - ego_vy
 

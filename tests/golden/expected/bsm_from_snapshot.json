@@ -19,6 +19,8 @@
  "vehicle_type": 0,
  "vehicle_width": 1.8,
  "vertical_accel": 0.0,
+ "vx_mps": 6.0,
+ "vy_mps": 8.0,
  "x_m": 120.5,
  "y_m": -33.25,
  "yaw_rate": 0.5,

@@ -52,7 +52,11 @@ class BSMCore:
     
     # Motion state
     speed: float = 0.0  # m/s
-    heading: float = 0.0  # degrees (0-359.9)
+    heading: float = 0.0  # degrees (0-359.9), vehicle yaw (direction it points, not necessarily moves)
+    # Velocity vector in CARLA world axes (m/s). None only for hand-made BSMs; the extractor
+    # always sets them. Threat assessment uses these, not speed along the heading (S14).
+    vx_mps: Optional[float] = None
+    vy_mps: Optional[float] = None
     steering_angle: float = 0.0  # degrees
     
     # Acceleration (m/s²)
