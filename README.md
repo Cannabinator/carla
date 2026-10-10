@@ -40,4 +40,4 @@ I recommend to use the Dockerfile to set everything up!
 
 ## ER Database Model
 
-![ER Database Model](docs/ER_DATABASE_MODEL.png)
+See [docs/ER_DATABASE_MODEL.md](docs/ER_DATABASE_MODEL.md) for the run data model.

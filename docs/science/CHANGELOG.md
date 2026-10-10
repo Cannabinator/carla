@@ -548,3 +548,24 @@ No model number changed. What a researcher now sees, and what the server does so
   (`MAX_LIDAR_VIEWS`) in `observer-core.js`.
 - **Not done**: the Run card is a placeholder (recording is Phase 7); the manual live-CARLA script of the handoff is part of
   the documentation phase; the map's RSU coverage ring is not drawn yet.
+
+## Phase 7 - recording, headless runs, reproducibility (2026-10-10, no change to the V2X/DSRC models)
+
+New, outside the models:
+- `RunRecorder` writes a run directory (`docs/ER_DATABASE_MODEL.md`): `stations`, `v2x_links`, `messages`,
+  `lidar_meta`, optional raw LiDAR, `events`, and a `manifest.json` with git sha/dirty, seeds, the full
+  configuration, hot-config changes and sha256 per file. A bounded queue feeds a writer thread; on overflow the
+  run is failed and marked so rather than silently dropping rows.
+- `python -m src.cli run scenarios/crossing.yaml --fake` runs a scripted scenario headless; the server also has
+  `POST /api/runs`, `POST /api/runs/current/stop`, `GET /api/runs[/{id}/manifest]` and an admin Run card.
+
+The one number that moved: the DSRC channel RNG is now seeded from `WorldConfig.seed` instead of a constant.
+Default seed is 42, the old constant, so default outputs are unchanged (golden tests untouched).
+
+Measured on the fake backend (`scenarios/crossing.yaml`, seed 7, 400 ticks at 20 Hz, 40 V2X updates,
+LiDAR raw recording on): 3.0 s wall clock, 14,056 link rows (6.0 MB), 990 message lines (0.7 MB),
+14.9 MB total including raw LiDAR. Two runs give identical sha256 for stations, links, messages and
+lidar_meta; a different seed gives different files (`tests/e2e/test_scenarios.py`).
+
+Not verified: reproducibility on real CARLA (traffic-manager and physics nondeterminism may break it). A live
+test exists (`tests/integration/test_reproducibility_live.py`, marker `carla`) and has not been run.
