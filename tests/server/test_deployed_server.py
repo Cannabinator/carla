@@ -124,8 +124,8 @@ def test_websocket_telemetry_stream(live_world, record_property):
     assert len(frames) >= 4, f"only {len(frames)} telemetry frames in 4 s"
     rate = (len(frames) - 1) / (frames[-1][0] - frames[0][0])
     record_property("telemetry_hz", round(rate, 2))
-    print(f"\nmeasured telemetry rate: {rate:.2f} Hz (documented 5 Hz; handoff C6 predicts <= 2.5 Hz)")
-    assert rate >= 1.0
+    print(f"\nmeasured telemetry rate: {rate:.2f} Hz (documented 5 Hz)")
+    assert rate >= 4.0, f"telemetry only {rate:.2f} Hz; documented 5 Hz (defect C6 was 2.5 Hz)"
     assert frames[-1][1] >= frames[0][1], "simulation frame went backwards"
 
 

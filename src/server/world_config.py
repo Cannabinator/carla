@@ -12,26 +12,26 @@ class WorldConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     host: str
-    port: int = Field(2000, ge=1, le=65535)
-    timeout_s: float = Field(30.0, gt=0)
+    port: int = Field(default=2000, ge=1, le=65535)
+    timeout_s: float = Field(default=30.0, gt=0)
 
     # simulation clock
-    fixed_delta_seconds: float = Field(0.05, gt=0, le=0.1)
-    max_substep_delta_time: float = Field(0.01, gt=0)
-    max_substeps: int = Field(10, ge=1, le=16)
+    fixed_delta_seconds: float = Field(default=0.05, gt=0, le=0.1)
+    max_substep_delta_time: float = Field(default=0.01, gt=0)
+    max_substeps: int = Field(default=10, ge=1, le=16)
 
     # Traffic Manager. NOTE: -20.0 means 20 % FASTER than the speed limit (CARLA semantics),
     # while src/config.py says 30.0 "% slower". Current behaviour (-20.0) is kept; the
     # contradiction is recorded in docs/science/CHANGELOG.md.
-    tm_port: int = Field(8001, ge=1024, le=65535)
+    tm_port: int = Field(default=8001, ge=1024, le=65535)
     seed: int = 42
     global_speed_pct: float = -20.0
-    safety_distance_m: float = Field(2.5, ge=0)
+    safety_distance_m: float = Field(default=2.5, ge=0)
 
     # V2X
     v2x_enabled: bool = True
-    v2x_range_m: float = Field(75.0, ge=10.0, le=500.0)
-    v2x_update_rate_hz: float = Field(2.0, gt=0)
+    v2x_range_m: float = Field(default=75.0, ge=10.0, le=500.0)
+    v2x_update_rate_hz: float = Field(default=2.0, gt=0)
 
     # web server port, only used to reject a clashing tm_port
     web_port: int = 8000

@@ -4,6 +4,8 @@ It uses the real SessionManager, so session behaviour (create/end/expire) is the
 production code; only spawning and telemetry are faked.
 """
 
+from concurrent.futures import Future
+
 from src.server.session_manager import SessionManager
 
 
@@ -19,6 +21,18 @@ class FakeWorld:
         self.background = 0
         self.pedestrians = 0
         self.v2x_network = None
+
+    def submit(self, fn, *args, **kwargs):
+        """Mirror PersistentCARLAServer.submit: run now, hand back a Future."""
+        fut = Future()
+        if not self._running:
+            fut.set_exception(RuntimeError("simulation is not running"))
+            return fut
+        try:
+            fut.set_result(fn(*args, **kwargs))
+        except BaseException as exc:  # noqa: BLE001
+            fut.set_exception(exc)
+        return fut
 
     # --- lifecycle -------------------------------------------------------
     def stop(self):
