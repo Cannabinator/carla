@@ -326,6 +326,7 @@ class DSRCChannel:
         frame: int = 0,
         sim_time: float = 0.0,
         rng: Optional[random.Random] = None,
+        msg_id: Optional[int] = None,
     ) -> LinkResult:
         """
         Decide one transmission attempt and return everything that went into the decision.
@@ -345,7 +346,7 @@ class DSRCChannel:
                 path_loss_db=0.0, shadowing_db=0.0,
                 rx_power_dbm=tx + 2.0 * cfg.antenna_gain_dbi,
                 rx_margin_db=tx + 2.0 * cfg.antenna_gain_dbi - cfg.rx_sensitivity_dbm,
-                p_channel=1.0, p_mac=1.0, p_total=1.0, delivered=True, drop_cause=None,
+                p_channel=1.0, p_mac=1.0, p_total=1.0, delivered=True, drop_cause=None, msg_id=msg_id,
             )
             self._count(result)
             return result
@@ -369,7 +370,7 @@ class DSRCChannel:
             link_type=link_type, distance_m=distance_m, los=not nlos, tx_power_dbm=tx,
             path_loss_db=path_loss, shadowing_db=shadowing, rx_power_dbm=p_rx,
             rx_margin_db=rx_margin_db, p_channel=p_channel, p_mac=p_mac, p_total=p_total,
-            delivered=delivered, drop_cause=cause,
+            delivered=delivered, drop_cause=cause, msg_id=msg_id,
         )
         self._count(result)
         return result

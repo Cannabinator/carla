@@ -40,6 +40,7 @@ class LinkResult(NamedTuple):
     p_total: float
     delivered: bool
     drop_cause: Optional[str]
+    msg_id: Optional[int] = None   # distinguishes several messages of one type from one sender (DENM: action_id)
 
 
 class ChannelModel(Protocol):
@@ -58,4 +59,5 @@ class ChannelModel(Protocol):
         tx_power_dbm: Optional[float] = ...,
         frame: int = ...,
         sim_time: float = ...,
+        msg_id: Optional[int] = ...,
     ) -> LinkResult: ...

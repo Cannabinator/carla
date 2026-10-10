@@ -324,3 +324,22 @@ def test_client_payload_lists_spat_it_received_and_not_rsus_out_of_coverage(env)
     spat = payload["spat_nearby"][0]
     assert spat["rx_power_dbm"] < 0 and len(spat["states"]) == 2          # two lights = two signal groups
     assert payload["v2x_frame"] >= 0 and payload["v2x_sim_time"] > 0     # the view is stamped
+
+
+def test_client_payload_lists_the_denms_it_received(env):
+    rec, make = env
+    from src.v2x.messages import DENM, DENMCauseCode
+    srv = make()
+    session = srv.sessions.create_session("c", "127.0.0.1", "vehicle.test.car0", None)
+    srv.submit(srv.spawn_client_vehicle, session.session_id, "vehicle.test.car0", 0).result(5)   # at (0, 0)
+    srv.submit(srv.v2x_network.publish_denm, DENM(
+        station_id=9001, action_id=7, detection_time=0.0, reference_time=0.0,
+        event_position=(40.0, 0.0, 0.0), cause_code=DENMCauseCode.OBSTACLE_ON_ROAD, relevance_distance=150.0)).result(5)
+    deadline = time.time() + 8
+    got = []
+    while time.time() < deadline and not got:
+        p = srv.get_vehicle_v2x_data(session.session_id)
+        got = (p or {}).get("denm_received", [])
+        time.sleep(0.05)
+    assert got and got[0]["cause_code"] == "OBSTACLE_ON_ROAD" and got[0]["distance_to_event"] == 40.0
+    assert got[0]["action_id"] == 7 and got[0]["rx_power_dbm"] < 0

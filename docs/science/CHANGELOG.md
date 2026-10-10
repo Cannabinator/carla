@@ -393,3 +393,20 @@ lost before; in line of sight almost nothing changes.
 - Assumption without a source: the pedestrian device transmits at 23 dBm (the OBU value).
 - Not yet done: DENM through the channel (next step), antenna height (recorded nowhere; the log-distance model
   has no height term), SPAT/MAP/VRUAM `NLOS` blockers are other V2X vehicles only (as for BSMs).
+
+## Phase 3, S4 step 5 - DENM through the radio model (2026-10-10)
+
+Before: DENMs sat in an in-memory store that nothing delivered (only tests read it).
+After: every active DENM is transmitted at each V2X update by its originating station: the vehicle
+(`station_id` = actor id, V2V link, OBU power), an RSU (`station_id` = -intersection_id, I2V link, the RSU's
+`tx_power_dbm`), or - if the id is neither - a fixed roadside transmitter at the event position (I2V link, OBU
+power). Receivers are the vehicles within `relevance_distance` of the EVENT (the relevance area), except the
+originator; each is a separate attempt with the usual path loss, shadowing, NLOS and contention, using the
+DENM's own seeded stream (seed + 103), so DENM traffic changes no BSM outcome (tested). Several DENMs of one
+station are told apart by `LinkResult.msg_id` (= action_id). Cancelled DENMs stop being transmitted.
+Received DENMs are in the receiver's inbox and in the client payload (`denm_received`: cause, distance to the
+event, rx power).
+- Decisions without a source: relevance area is a circle around the event position; the transmitter for an
+  unregistered originator is placed at the event; DENMs are repeated every V2X update (no ETSI repetition /
+  validity-duration handling).
+- Still missing: an admin API/UI to inject a DENM (handoff F10, decision D11: Phase 5/6).

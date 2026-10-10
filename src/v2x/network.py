@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     import carla
 
 from .channel import DSRCChannel, DSRCConfig
-from .channel.base import DROP_AWARENESS, LINK_I2V, LINK_P2V, LinkResult
+from .channel.base import DROP_AWARENESS, LINK_I2V, LINK_P2V, LINK_V2V, LinkResult
 from .channel.dsrc_logdistance import _CARRIER_SENSE_RANGE_M, _nlos_row
 from .constants import RANGE_MEDIUM_M, SHARE_SENSOR_DATA_DISTANCE, VRU_COVERAGE_M, VRU_TX_POWER_DBM
 from .frame import (
@@ -152,6 +152,7 @@ class V2XNetwork:
         _seed = self._dsrc_channel.config.random_seed
         self._rng_i2v = random.Random(_seed + 101)
         self._rng_p2v = random.Random(_seed + 102)
+        self._rng_denm = random.Random(_seed + 103)
 
         # V2I: RSU registry {intersection_id → RoadSideUnit}
         self._rsus: Dict[int, RoadSideUnit] = {}
@@ -228,11 +229,12 @@ class V2XNetwork:
         return True
 
     def _transmit_infrastructure(self, sim_time: float) -> None:
-        """RSU (MAP, SPAT) and pedestrian (VRUAM) messages go through the same radio model as BSMs.
+        """RSU (MAP, SPAT), pedestrian (VRUAM) and DENM messages use the same radio model as BSMs.
 
-        Order is fixed (RSUs by intersection id, then VRUs by id) and each class has its own seeded
-        random stream. A transmitter only addresses vehicles inside its coverage radius
-        (``RSUConfig.broadcast_range_m``; ``vru_awareness_range_m``): no attempt is evaluated beyond it.
+        Order is fixed (RSUs by intersection id, VRUs by id, DENMs by key) and each class has its own
+        seeded random stream. A transmitter only addresses vehicles inside its coverage radius
+        (``RSUConfig.broadcast_range_m``; ``vru_awareness_range_m``; for a DENM the relevance area
+        around the event): no attempt is evaluated outside it.
         """
         vehicle_ids = list(self.bsm_messages)
         if not vehicle_ids:
@@ -243,42 +245,73 @@ class V2XNetwork:
 
         for iid in sorted(self._rsus):
             rsu = self._rsus[iid]
-            items = [(t, m) for t, m in (("MAP", self.map_messages.get(iid)),
-                                         ("SPAT", self.spat_messages.get(iid))) if m is not None]
+            items = [(t, m, None) for t, m in (("MAP", self.map_messages.get(iid)),
+                                               ("SPAT", self.spat_messages.get(iid))) if m is not None]
             x, y, _ = rsu.config.position
+            dist = np.sqrt((xs - x) ** 2 + (ys - y) ** 2)
             extra += self._transmit_fixed(
                 rsu_station_id(iid), (x, y), rsu.config.tx_power_dbm, items, LINK_I2V,
-                rsu.config.broadcast_range_m, self._rng_i2v, vehicle_ids, xs, ys, sim_time)
+                np.nonzero(dist <= rsu.config.broadcast_range_m)[0], self._rng_i2v,
+                vehicle_ids, xs, ys, dist, sim_time)
 
         for vru_id in sorted(self.vru_messages):
             vruam = self.vru_messages[vru_id]
             x, y, _ = vruam.position
+            dist = np.sqrt((xs - x) ** 2 + (ys - y) ** 2)
             extra += self._transmit_fixed(
-                vru_id, (x, y), self.vru_tx_power_dbm, [("VRUAM", vruam)], LINK_P2V,
-                self.vru_awareness_range_m, self._rng_p2v, vehicle_ids, xs, ys, sim_time)
+                vru_id, (x, y), self.vru_tx_power_dbm, [("VRUAM", vruam, None)], LINK_P2V,
+                np.nonzero(dist <= self.vru_awareness_range_m)[0], self._rng_p2v,
+                vehicle_ids, xs, ys, dist, sim_time)
+
+        for key in sorted(self.denm_store):
+            denm = self.denm_store[key]
+            tx_xy, power, link_type, sender_idx = self._denm_origin(denm, vehicle_ids)
+            dist = np.sqrt((xs - tx_xy[0]) ** 2 + (ys - tx_xy[1]) ** 2)
+            ev_dist = np.sqrt((xs - denm.event_position[0]) ** 2 + (ys - denm.event_position[1]) ** 2)
+            receivers = np.nonzero(ev_dist <= denm.relevance_distance)[0]
+            if sender_idx is not None:
+                receivers = receivers[receivers != sender_idx]
+            extra += self._transmit_fixed(
+                denm.station_id, tx_xy, power, [("DENM", denm, denm.action_id)], link_type,
+                receivers, self._rng_denm, vehicle_ids, xs, ys, dist, sim_time, sender_idx=sender_idx)
 
         if extra:
             self._links_this_update = self._links_this_update + tuple(extra)
 
-    def _transmit_fixed(self, tx_id, tx_xy, tx_power_dbm, items, link_type, coverage_m, rng,
-                        vehicle_ids, xs, ys, sim_time) -> List[LinkResult]:
-        """One transmitter (not a vehicle) sends each of ``items`` to every vehicle in coverage."""
-        dist = np.sqrt((xs - tx_xy[0]) ** 2 + (ys - tx_xy[1]) ** 2)
-        in_range = np.nonzero(dist <= coverage_m)[0]
-        if in_range.size == 0 or not items:
+    def _denm_origin(self, denm: DENM, vehicle_ids: List[int]):
+        """Where a DENM is transmitted from: (xy, tx power dBm, link type, index among vehicles or None).
+
+        The originating vehicle, else the originating RSU (negative station id), else a fixed
+        roadside transmitter at the event position (treated like an RSU with the OBU power).
+        """
+        sid = denm.station_id
+        if sid in self.bsm_messages:
+            b = self.bsm_messages[sid]
+            return (b.x_m, b.y_m), self._dsrc_channel.config.tx_power_dbm, LINK_V2V, vehicle_ids.index(sid)
+        if sid < 0 and -sid in self._rsus:
+            rsu = self._rsus[-sid]
+            return (rsu.config.position[0], rsu.config.position[1]), rsu.config.tx_power_dbm, LINK_I2V, None
+        return ((denm.event_position[0], denm.event_position[1]),
+                self._dsrc_channel.config.tx_power_dbm, LINK_I2V, None)
+
+    def _transmit_fixed(self, tx_id, tx_xy, tx_power_dbm, items, link_type, rx_indices, rng,
+                        vehicle_ids, xs, ys, dist, sim_time, sender_idx=None) -> List[LinkResult]:
+        """One transmitter sends each of ``items`` (type, message, msg_id) to the vehicles at ``rx_indices``."""
+        if len(rx_indices) == 0 or not items:
             return []
-        # contenders: this transmitter plus the stations within carrier-sense range of it
-        n_contenders = 1 + int(np.count_nonzero(dist <= _CARRIER_SENSE_RANGE_M))
-        nlos_row = (_nlos_row(tx_xy, xs, ys, None)
+        # contenders: this transmitter plus the other stations within carrier-sense range of it
+        in_cs = int(np.count_nonzero(dist <= _CARRIER_SENSE_RANGE_M))
+        n_contenders = in_cs if sender_idx is not None else 1 + in_cs
+        nlos_row = (_nlos_row(tx_xy, xs, ys, sender_idx)
                     if self._dsrc_channel.config.enable_nlos_model and len(vehicle_ids) > 1 else None)
         links: List[LinkResult] = []
-        for msg_type, _message in items:
-            for j in in_range:
+        for msg_type, _message, msg_id in items:
+            for j in rx_indices:
                 nlos = bool(nlos_row[j]) if nlos_row is not None else False
                 links.append(self._dsrc_channel.evaluate_link(
                     tx_id, vehicle_ids[j], float(dist[j]), nlos, n_contenders,
                     msg_type=msg_type, link_type=link_type, tx_power_dbm=tx_power_dbm,
-                    frame=self._frame_number, sim_time=sim_time, rng=rng))
+                    frame=self._frame_number, sim_time=sim_time, rng=rng, msg_id=msg_id))
         return links
 
     def get_received(self, vehicle_id: int, msg_type: Optional[str] = None) -> List[ReceivedMessage]:
@@ -310,6 +343,13 @@ class V2XNetwork:
             x, y, z = vruam.position
             stations[vru_id] = StationState(vru_id, KIND_VRU, x, y, z, vruam.heading, vruam.speed, None)
             sent[vru_id] = (vruam,)
+
+        for denm in self.denm_store.values():
+            sid = denm.station_id
+            if sid not in stations:      # a standalone hazard transmitter at the event position
+                ex, ey, ez = denm.event_position
+                stations[sid] = StationState(sid, KIND_RSU, ex, ey, ez, 0.0, 0.0, tx_power)
+            sent[sid] = sent.get(sid, ()) + (denm,)
 
         inbox: dict = {}
         for link in self._links_this_update:
@@ -345,6 +385,8 @@ class V2XNetwork:
             return self.map_messages.get(-link.tx_id)
         if link.msg_type == "VRUAM":
             return self.vru_messages.get(link.tx_id)
+        if link.msg_type == "DENM":
+            return None if link.msg_id is None else self.denm_store.get((link.tx_id, link.msg_id))
         return None
 
     def _update_bsm(self, snapshot=None, force: bool = False) -> Optional[float]:

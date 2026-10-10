@@ -695,6 +695,19 @@ class PersistentCARLAServer:
                 "motion_state": vruam.motion_state,
             })
 
+        denm_received = []
+        for rm in self.v2x_network.get_received(vid, "DENM"):
+            denm = rm.message
+            ex, ey = denm.event_position[0], denm.event_position[1]
+            denm_received.append({
+                "station_id": denm.station_id,
+                "action_id": denm.action_id,
+                "cause_code": denm.cause_code.name,
+                "subcause_code": denm.subcause_code,
+                "distance_to_event": round(math.hypot(bsm.x_m - ex, bsm.y_m - ey), 1),
+                "rx_power_dbm": round(rm.link.rx_power_dbm, 1),
+            })
+
         frame = self.v2x_network.get_frame()
 
         return {
@@ -730,6 +743,7 @@ class PersistentCARLAServer:
             ],
             "spat_nearby": spat_nearby,
             "vru_nearby": vru_nearby,
+            "denm_received": denm_received,
             "v2x_frame": frame.frame if frame else None,
             "v2x_sim_time": frame.sim_time if frame else None,
         }
