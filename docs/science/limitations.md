@@ -30,6 +30,8 @@ Things a reader of results from this platform must know. Items marked **fix plan
 
 ## Scale
 
+* A complete update with 100 vehicles, 20 RSUs and 40 pedestrians took 136 ms (mock vehicles); see the
+  CHANGELOG table. With roughly 100 stations the loop falls behind real time for ~2 frames per update.
 * The channel update runs on the simulation thread. One update takes about 7 ms for 50 stations, 34 ms for
   100 (34 ms without link records, 72 ms with them), 126 / 223 ms for 150 and 1.3 s for 300 (see CHANGELOG), against a 50 ms frame: plan penetration rate and
   update rate accordingly.

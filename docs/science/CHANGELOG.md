@@ -410,3 +410,17 @@ event, rx power).
   unregistered originator is placed at the event; DENMs are repeated every V2X update (no ETSI repetition /
   validity-duration handling).
 - Still missing: an admin API/UI to inject a DENM (handoff F10, decision D11: Phase 5/6).
+
+## Phase 3 - cost of a complete V2X update (measured at the end of S4, 2026-10-10)
+
+`V2XNetwork.update()` on mock vehicles (no CARLA RPC), awareness 75 m, default channel, one call:
+| vehicles | RSUs | pedestrians | links (V2V / I2V / P2V) | update |
+|---|---|---|---|---|
+| 25 | 5 | 10 | 600 / 136 / 20 | 14 ms |
+| 50 | 10 | 20 | 2450 / 498 / 84 | 48 ms |
+| 100 | 20 | 40 | 9900 / 1906 / 271 | 136 ms |
+| 100 | 40 | 100 | 9900 / 4214 / 783 | 153 ms |
+A tick is 50 ms and an update runs every 10th tick on the simulation thread, so with about 100 stations the
+loop falls behind real time for a couple of frames at every update. Levers: `v2x_penetration_rate`,
+`v2x_update_rate_hz`, `awareness_range_m`, `rsu_max_count`. Real CARLA adds per-vehicle calls
+(`get_control`) on top. Measure on the real server before relying on 100+ stations in real-time mode.
