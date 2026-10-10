@@ -31,7 +31,7 @@ Things a reader of results from this platform must know. Items marked **fix plan
 ## Scale
 
 * The channel update runs on the simulation thread. One update takes about 7 ms for 50 stations, 34 ms for
-  100, 126 ms for 150 and 1.3 s for 300 (see CHANGELOG), against a 50 ms frame: plan penetration rate and
+  100 (34 ms without link records, 72 ms with them), 126 / 223 ms for 150 and 1.3 s for 300 (see CHANGELOG), against a 50 ms frame: plan penetration rate and
   update rate accordingly.
 
 ## Simulation

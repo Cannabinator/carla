@@ -39,6 +39,7 @@ from typing import Dict, List, Optional, Tuple
 import random
 
 from ..messages.bsm import BSMCore
+from .base import DROP_CHANNEL, DROP_MAC, LINK_V2V, LinkResult
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +157,10 @@ class DSRCChannel:
             "avg_rx_margin_db": 0.0,
         }
         self._rx_margin_ring: List[float] = []  # rolling rx-margin samples, capped at 500
+        # per link type counters (V2V, I2V, P2V...): total / delivered / dropped by cause
+        self.stats_by_link_type: Dict[str, Dict[str, int]] = {}
+        # links evaluated by the last broadcast_all() call
+        self.last_links: List[LinkResult] = []
 
         logger.debug(
             "DSRCChannel initialized: TX=%.0f dBm, sensitivity=%.0f dBm, "
@@ -173,7 +178,10 @@ class DSRCChannel:
         self,
         bsm_messages: Dict[int, BSMCore],
         positions: Dict[int, Tuple[float, float]],
-    ) -> None:
+        *,
+        frame: int = 0,
+        sim_time: float = 0.0,
+    ) -> List[LinkResult]:
         """
         Compute channel delivery for every (sender, receiver) pair this tick.
 
@@ -182,11 +190,14 @@ class DSRCChannel:
             positions: {vehicle_id: (x_m, y_m)} in CARLA world space.
                        Typically derived from bsm.x_m / bsm.y_m,
                        which store CARLA world coordinates (not geodetic).
+            frame, sim_time: stamped on the returned link records.
 
+        Returns one ``LinkResult`` per evaluated pair (also kept in ``last_links``).
         Call once per V2X update tick. Results are stable until the next call.
         """
         self._received = {vid: {} for vid in bsm_messages}
         vehicle_ids = list(bsm_messages.keys())
+        links: List[LinkResult] = []
 
         # Station coordinates as arrays, for the vectorised NLOS search (same order as `positions`)
         pos_ids = list(positions.keys())
@@ -214,25 +225,18 @@ class DSRCChannel:
                     continue
 
                 distance = _euclidean(tx_pos, rx_pos)
-
-                # Vehicles at the same location: deterministic delivery
-                if distance < 0.5:
-                    self._received[receiver_id][sender_id] = bsm
-                    self.stats["total_broadcasts"] += 1
-                    self.stats["total_deliveries"] += 1
-                    continue
-
                 nlos = bool(nlos_row[pos_index[receiver_id]]) if nlos_row is not None else False
-                prr = self._compute_prr(distance, nlos, n_contenders)
-
-                self.stats["total_broadcasts"] += 1
-                if self._rng.random() < prr:
+                link = self.evaluate_link(
+                    sender_id, receiver_id, distance, nlos, n_contenders,
+                    msg_type="BSM", link_type=LINK_V2V, frame=frame, sim_time=sim_time,
+                )
+                links.append(link)
+                if link.delivered:
                     self._received[receiver_id][sender_id] = bsm
-                    self.stats["total_deliveries"] += 1
-                else:
-                    self.stats["total_drops"] += 1
 
         self._flush_stats()
+        self.last_links = links
+        return links
 
     def get_received(self, receiver_id: int) -> Dict[int, BSMCore]:
         """
@@ -253,15 +257,15 @@ class DSRCChannel:
 
     # ── Channel physics ─────────────────────────────────────────────────────────
 
-    def _received_power_dbm(self, distance_m: float, nlos: bool) -> float:
+    def _link_budget(
+        self, distance_m: float, nlos: bool, tx_power_dbm: Optional[float] = None
+    ) -> Tuple[float, float, float]:
         """
-        Received signal power using log-distance path loss + log-normal shadowing.
+        Mean path loss, one shadowing sample and the resulting received power (dBm).
 
-            P_rx = P_tx + 2·G_ant − [L0 + 10·n·log10(d/d0) + X_σ]
+            P_rx = P_tx + 2*G_ant - [L0 + 10*n*log10(d/d0) + X],   X ~ N(0, sigma^2)
 
-        where X_σ ~ N(0, σ²) is the shadowing term.
-
-        Parameters follow ETSI EN 302 663 / Paier et al. 2008.
+        Draws exactly one gaussian from the channel RNG. See docs/science/model.md.
         """
         cfg = self.config
         n = cfg.path_loss_exponent_nlos if nlos else cfg.path_loss_exponent_los
@@ -271,14 +275,19 @@ class DSRCChannel:
         shadowing = self._rng.gauss(0.0, sigma)
 
         # Both TX and RX carry the same omnidirectional antenna
-        system_gain = cfg.tx_power_dbm + 2.0 * cfg.antenna_gain_dbi
-        return system_gain - path_loss - shadowing
+        tx = cfg.tx_power_dbm if tx_power_dbm is None else tx_power_dbm
+        system_gain = tx + 2.0 * cfg.antenna_gain_dbi
+        return path_loss, shadowing, system_gain - path_loss - shadowing
+
+    def _received_power_dbm(self, distance_m: float, nlos: bool) -> float:
+        """Received power (dBm) with a fresh shadowing sample; see ``_link_budget``."""
+        return self._link_budget(distance_m, nlos)[2]
 
     def _compute_prr(
         self, distance_m: float, nlos: bool, n_contenders: int
     ) -> float:
         """
-        Packet Reception Rate = P_channel × P_no_contention.
+        Delivery probability = P_channel x P_no_contention.
 
         P_channel: logistic function of the SAMPLED rx margin (dB above the receiver
           sensitivity, not an SNR). 0.5 at margin 0 dB. The margin includes a fresh
@@ -300,6 +309,75 @@ class DSRCChannel:
 
         p_csma = self._csma_success_prob(n_contenders)
         return p_channel * p_csma
+
+    def evaluate_link(
+        self,
+        tx_id: int,
+        rx_id: int,
+        distance_m: float,
+        nlos: bool,
+        n_contenders: int,
+        *,
+        msg_type: str = "BSM",
+        link_type: str = LINK_V2V,
+        tx_power_dbm: Optional[float] = None,
+        frame: int = 0,
+        sim_time: float = 0.0,
+    ) -> LinkResult:
+        """
+        Decide one transmission attempt and return everything that went into the decision.
+
+        Random draws, in this order: one gaussian (shadowing), then one uniform (delivery).
+        Co-located stations (< 0.5 m) are delivered without any draw.
+        """
+        cfg = self.config
+        tx = cfg.tx_power_dbm if tx_power_dbm is None else tx_power_dbm
+
+        if distance_m < 0.5:
+            result = LinkResult(
+                frame=frame, sim_time=sim_time, tx_id=tx_id, rx_id=rx_id, msg_type=msg_type,
+                link_type=link_type, distance_m=distance_m, los=not nlos, tx_power_dbm=tx,
+                path_loss_db=0.0, shadowing_db=0.0,
+                rx_power_dbm=tx + 2.0 * cfg.antenna_gain_dbi,
+                rx_margin_db=tx + 2.0 * cfg.antenna_gain_dbi - cfg.rx_sensitivity_dbm,
+                p_channel=1.0, p_mac=1.0, p_total=1.0, delivered=True, drop_cause=None,
+            )
+            self._count(result)
+            return result
+
+        path_loss, shadowing, p_rx = self._link_budget(distance_m, nlos, tx_power_dbm)
+        rx_margin_db = p_rx - cfg.rx_sensitivity_dbm
+
+        self._rx_margin_ring.append(rx_margin_db)
+        if len(self._rx_margin_ring) > 500:
+            self._rx_margin_ring = self._rx_margin_ring[-500:]
+
+        p_channel = 1.0 / (1.0 + math.exp(-cfg.prr_sigmoid_k * rx_margin_db))
+        p_mac = self._csma_success_prob(n_contenders)
+        p_total = p_channel * p_mac
+
+        u = self._rng.random()
+        delivered = u < p_total
+        cause = None if delivered else (DROP_CHANNEL if u >= p_channel else DROP_MAC)
+        result = LinkResult(
+            frame=frame, sim_time=sim_time, tx_id=tx_id, rx_id=rx_id, msg_type=msg_type,
+            link_type=link_type, distance_m=distance_m, los=not nlos, tx_power_dbm=tx,
+            path_loss_db=path_loss, shadowing_db=shadowing, rx_power_dbm=p_rx,
+            rx_margin_db=rx_margin_db, p_channel=p_channel, p_mac=p_mac, p_total=p_total,
+            delivered=delivered, drop_cause=cause,
+        )
+        self._count(result)
+        return result
+
+    def _count(self, link: LinkResult) -> None:
+        """Update counters. ``stats`` (legacy, consumed by the network) covers V2V links only."""
+        by_type = self.stats_by_link_type.setdefault(
+            link.link_type, {"total": 0, "delivered": 0, "dropped": 0})
+        by_type["total"] += 1
+        by_type["delivered" if link.delivered else "dropped"] += 1
+        if link.link_type == LINK_V2V:
+            self.stats["total_broadcasts"] += 1
+            self.stats["total_deliveries" if link.delivered else "total_drops"] += 1
 
     def _csma_success_prob(self, n_contenders: int) -> float:
         """

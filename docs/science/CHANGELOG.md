@@ -329,3 +329,23 @@ actor id (signal group id = index). All intersections get an RSU by default; `rs
   intersection (and includes the light itself). `tests/server::test_rsus_are_per_intersection...` prints
   the counts for your map and fails if no intersection has more than one signal group.
 - RSU coverage radius (300 m) and TX power (33 dBm) are unchanged and still not radio-modelled (S4).
+
+## Phase 3, S4 step 1 - per-link records from the channel (2026-10-10, deliveries identical)
+
+New `LinkResult` (immutable NamedTuple, `v2x/channel/base.py`): frame, sim_time, tx_id, rx_id, msg_type,
+link_type, distance_m, los, tx_power_dbm, path_loss_db, shadowing_db, rx_power_dbm, rx_margin_db,
+p_channel, p_mac, p_total, delivered, drop_cause. `DSRCChannel.evaluate_link(...)` decides one attempt;
+`broadcast_all` is now a loop over it and returns the list (also `last_links`).
+- Deliveries are unchanged: same random draws in the same order (one gaussian, then one uniform), the
+  channel goldens pass untouched.
+- `drop_cause`: with one uniform draw u, a loss is "channel" if u >= p_channel, and "mac" if
+  p_total <= u < p_channel (the radio would have delivered it, contention cost it). "out_of_awareness_range"
+  is set by the network when the application filter removes a radio-delivered packet.
+- Property tests: with a fixed seed, +10 dB TX power gives +10.000 dB rx power and identical path loss and
+  shadowing; the path-loss exponent moves path loss by exactly 10*dn*log10(d/d0); doubling sigma doubles the
+  logged shadowing sample; sensitivity moves the margin one-to-one.
+- Counters: `stats` (legacy) still counts V2V links only; new `stats_by_link_type`.
+- Cost of recording: `broadcast_all` for 50 / 100 / 150 stations is 16 / 72 / 223 ms with records
+  (14 / 34 / 126 ms in the entry above, which had no records). Still far below the 311 / 925 ms before the
+  vectorisation, but 100 stations now takes more than one 50 ms frame per V2X update.
+- Next steps (not done yet): V2XFrame, RSU/VRU/DENM messages through the channel with per-station power.
