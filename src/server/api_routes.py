@@ -5,6 +5,7 @@ Public ones follow ``observer_public``: when it is false they need the admin tok
 """
 
 import logging
+import sys
 from typing import Optional, Union
 
 from fastapi import APIRouter, Header, HTTPException, Request, Response
@@ -60,6 +61,7 @@ async def get_status(x_admin_token: Optional[str] = Header(default=None)):
         "fixed_delta_seconds": _world.fixed_delta_seconds, "v2x_enabled": status["v2x_enabled"],
         "active_sessions": status["active_sessions"], "run_active": False,     # recording: Phase 7
         "observer_public": _world.observer_public,
+        "fake": bool(getattr(sys.modules.get("carla"), "IS_FAKE", False)),   # a synthetic world, not CARLA
     }
 
 
