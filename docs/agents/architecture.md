@@ -70,18 +70,13 @@ traffic/pedestrians/scenarios. **Client** routes let a device join and steer its
 Dataclasses: `SimulationConfig`, `VisualizationConfig`, `V2VConfig`, `VehicleConfig`,
 `DSRCConfig`. Export `DEFAULT_*` instances. **Edit here, not in module code.**
 
-Other utils: `builder.py` (vehicle/world building), `carla_utils.py`, `session.py`,
-`observers.py`, `potholes.py` (`PotholeManager`), `binary_protocol.py`, `data_collector.py`.
+Other utils: `utils/binary_protocol.py` (LiDAR point-cloud wire format).
 
-### `src/lidar/` & `src/visualization/`
-- `lidar/server.py` — `run_server()` (the web server entry) and `set_persistent_world()`
-  (wires the world into the web layer). `collector.py` — LiDAR data collection.
-- `visualization/web/*.html` — frontend: `admin_panel.html`, `client_join.html`,
-  `live_viewer.html`, `viewer.html`, `v2v_map.html`. `visualization/lidar/server.py` — LiDAR
-  viewer server.
-
-### `src/scenarios/v2v_complete_demo.py`
-Self-contained demo scenario (useful as a reference for how a full V2V run is wired).
+### `src/server/` & `src/visualization/`
+- `server/app.py` — FastAPI app, `run_server()` and `set_persistent_world()` (wires the world
+  into the admin/client routes). `server/persistent_world.py` — the simulation owner.
+- `visualization/lidar/collector.py` — LiDAR data collection.
+- `visualization/web/` — frontend pages `admin_panel.html`, `client_join.html`.
 
 ## Data flow (one tick)
 1. `PersistentCARLAServer` ticks CARLA (fixed dt) → updates each leading vehicle's state.

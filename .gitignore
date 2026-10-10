@@ -67,3 +67,5 @@ V2V_GUIDE.md
 V2V_IMPLEMENTATION.md
 
 *.notes
+
+.env

@@ -21,7 +21,7 @@ except ImportError:
     print("⚠️  CARLA module not found. Some tests will be skipped.")
     carla = None
 
-from src.lidar import LiDARDataCollector, ConnectionManager
+from src.visualization.lidar import LiDARDataCollector
 
 
 class TestLiDARDataCollector(unittest.TestCase):
@@ -217,56 +217,6 @@ class TestLiDARDataCollector(unittest.TestCase):
         self.assertEqual(result['num_vehicles'], 2)
         self.assertEqual(len(result['points']['x']), 15)
         self.assertEqual(len(result['points']['tag']), 15)
-
-
-class TestConnectionManager(unittest.TestCase):
-    """Test WebSocket connection manager."""
-    
-    def setUp(self):
-        """Setup connection manager."""
-        self.manager = ConnectionManager()
-    
-    def test_initialization(self):
-        """Test manager initialization."""
-        self.assertEqual(len(self.manager.active_connections), 0)
-    
-    def test_connect(self):
-        """Test connecting a WebSocket."""
-        mock_ws = Mock()
-        mock_ws.accept = AsyncMock()
-        
-        # Run async test
-        asyncio.run(self.manager.connect(mock_ws))
-        
-        self.assertEqual(len(self.manager.active_connections), 1)
-        self.assertIn(mock_ws, self.manager.active_connections)
-    
-    def test_disconnect(self):
-        """Test disconnecting a WebSocket."""
-        mock_ws = Mock()
-        self.manager.active_connections.append(mock_ws)
-        
-        self.manager.disconnect(mock_ws)
-        
-        self.assertEqual(len(self.manager.active_connections), 0)
-    
-    def test_broadcast(self):
-        """Test broadcasting to multiple connections."""
-        mock_ws1 = Mock()
-        mock_ws1.send_text = AsyncMock()
-        
-        mock_ws2 = Mock()
-        mock_ws2.send_text = AsyncMock()
-        
-        self.manager.active_connections = [mock_ws1, mock_ws2]
-        
-        test_message = '{"test": "data"}'
-        
-        # Run async test
-        asyncio.run(self.manager.broadcast(test_message))
-        
-        mock_ws1.send_text.assert_called_once_with(test_message)
-        mock_ws2.send_text.assert_called_once_with(test_message)
 
 
 class TestCoordinateTransformations(unittest.TestCase):

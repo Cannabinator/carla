@@ -41,18 +41,3 @@ I recommend to use the Dockerfile to set everything up!
 ## ER Database Model
 
 ![ER Database Model](docs/ER_DATABASE_MODEL.png)
-
-## to use the pothole map:
-
-if in Server folder:
-
-cd CarlaServer && DISPLAY=:1 ./CarlaUE4.sh -quality-level=Low -carla-rpc-port=2000 -carla-streaming-port=2001 /Game/Carla/Maps/Town01_Potholes_Deeper
-
-if not you need to get the map into the server first:
-
-tar xzf Town01_Potholes_Deeper_standalone.tar.gz
-cp -r Carla/* /path/to/CARLA_0.9.16/CarlaUE4/Content/Carla/
-
-- then from any client: 
-
-client.load_world('Town01_Potholes_Deeper')

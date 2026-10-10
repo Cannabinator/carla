@@ -30,3 +30,20 @@ Golden tests added (`tests/golden/`, regenerate only deliberately with `UPDATE_G
 
 Not yet run: modules slated for deletion (`test_complete_system`, `test_frontend*`,
 `test_reproducibility`), which need a live server, Selenium or `websocket`.
+
+## Phase 1 — repo cleanup (2026-10-10, no behaviour change in the V2X/DSRC models)
+
+- Removed the monolithic/V2V plane: `src/scenarios`, `src/agents`, `src/lidar`, `src/web`,
+  `src/visualization/lidar/{server,api}.py`, `src/v2v/{api.py,dashboard.html}`, all of `src/utils`
+  except `binary_protocol.py`, six plane-A HTML pages, spare logo variants, legacy shell scripts,
+  `docs/V2V_API_REFERENCE.md`, and the plane-A / Selenium / live-server tests.
+- D1 (default): pothole code, README section and `scripts/lidar_pothole_detection_check.py` removed.
+- New `src/server/app.py` holds the app wiring (`/`, `/admin`, `/client`, routers, `/assets`);
+  `start_server.py` imports from it.
+- Removed unused requirements (selenium, open3d, opencv-python, matplotlib, pandas).
+- `docker-compose.yml` reads `ADMIN_TOKEN` from `.env` (`.env.example` added).
+- Tests split per handoff §3.5: protocol/collector-schema cases moved to
+  `tests/unit/test_lidar_protocol.py`; DENM/CAM endpoint tests, `ConnectionManager` tests and
+  `LiDARStreamingAPI` tests dropped with their code.
+- Test result without `carla`: 161 passed, 8 skipped, 5 xfailed.
+- Not done yet from the Phase 1 list: `pyproject.toml`, ruff, pyright, pre-commit.
