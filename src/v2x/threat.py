@@ -20,8 +20,8 @@ def calculate_threat_level(ego_bsm: BSMCore, other_bsm: BSMCore) -> tuple:
         threat_level: 0=no threat, 1=low, 2=medium, 3=high, 4=imminent
     """
     # Calculate distance
-    dx = other_bsm.latitude - ego_bsm.latitude
-    dy = other_bsm.longitude - ego_bsm.longitude
+    dx = other_bsm.x_m - ego_bsm.x_m
+    dy = other_bsm.y_m - ego_bsm.y_m
     distance = math.sqrt(dx**2 + dy**2)
     
     # Calculate relative velocity

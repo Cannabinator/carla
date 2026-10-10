@@ -47,7 +47,7 @@ def create_cam_from_bsm(bsm: 'BSMCore') -> 'CooperativeAwarenessMessage':
     return CooperativeAwarenessMessage(
         station_id=bsm.vehicle_id,
         generation_time=bsm.timestamp,
-        reference_position=(bsm.latitude, bsm.longitude, bsm.elevation),
+        reference_position=(bsm.x_m, bsm.y_m, bsm.z_m),
         heading=bsm.heading,
         speed=bsm.speed,
         drive_direction=direction,

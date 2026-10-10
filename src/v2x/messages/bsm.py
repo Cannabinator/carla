@@ -42,10 +42,10 @@ class BSMCore:
     vehicle_id: int  # Unique vehicle identifier
     vehicle_type: VehicleType = VehicleType.PASSENGER_CAR
     
-    # Position (WGS84 or local coordinate system)
-    latitude: float = 0.0  # or X in local coords
-    longitude: float = 0.0  # or Y in local coords
-    elevation: float = 0.0  # or Z in local coords
+    # Position: CARLA world coordinates in metres (NOT geodetic degrees)
+    x_m: float = 0.0  # CARLA world x, metres
+    y_m: float = 0.0  # CARLA world y, metres
+    z_m: float = 0.0  # CARLA world z, metres
     
     # Position accuracy (meters)
     position_accuracy: float = 1.0
