@@ -90,8 +90,10 @@ def fake_server(tmp_path_factory):
 
 # ── browser (Playwright, Chromium from PLAYWRIGHT_BROWSERS_PATH) ─────────────────────────────────────
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def browser():
+    # Module scope on purpose: while sync_playwright() is active an asyncio loop runs in this thread, and tests
+    # that call asyncio.run() later in the session would fail with "cannot be called from a running event loop".
     sync_api = pytest.importorskip("playwright.sync_api", reason="pip install playwright (browsers are preinstalled)")
     with sync_api.sync_playwright() as p:
         try:
