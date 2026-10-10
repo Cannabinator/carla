@@ -10,6 +10,7 @@ Without SERVER_URL every test here is skipped, so the normal offline run is unaf
 Tests that need a running CARLA simulation are also marked ``carla``.
 """
 
+import http.client
 import json
 import os
 import time
@@ -42,6 +43,10 @@ class Server:
                 return r.status, r.headers.get("content-type", ""), raw
         except urllib.error.HTTPError as e:
             return e.code, e.headers.get("content-type", ""), e.read()
+        except (http.client.RemoteDisconnected, ConnectionResetError) as exc:
+            pytest.fail(f"{method} {path}: server closed the connection without answering "
+                        f"({exc.__class__.__name__}). The server probably crashed or hung in that "
+                        f"handler; check its logs (docker compose logs --tail=100 frontend).")
 
     def json(self, method, path, body=None, admin=False, **kw):
         status, _, raw = self.request(method, path, body, admin, **kw)

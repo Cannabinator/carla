@@ -155,6 +155,9 @@ def test_no_leaked_sessions_after_tests(live_world):
 @pytest.mark.carla
 def test_admin_population_roundtrip(live_world):
     status, body = live_world.json("POST", "/admin/traffic", {"count": 3}, admin=True, timeout=60)
-    assert status == 200 and body["spawned"] >= 1, body
-    status, body = live_world.json("DELETE", "/admin/traffic", admin=True, timeout=60)
-    assert status == 200 and body["removed"] >= 1
+    try:
+        assert status == 200 and body["spawned"] >= 1, body
+    finally:
+        # always clean up so a failing run does not leave vehicles in the simulation
+        cstatus, cbody = live_world.json("DELETE", "/admin/traffic", admin=True, timeout=60)
+    assert cstatus == 200 and cbody["removed"] >= 1, cbody
