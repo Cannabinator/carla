@@ -221,3 +221,24 @@ timestamps are removed; `measured_update_hz` is now per SIMULATED second (it is 
 regular schedule; before it measured how fast the test or server ran). Wall-clock real-time factor
 belongs to the simulation loop (reported with the recorder in Phase 7).
 Config validation (already in `WorldConfig`) guarantees the update rate is a whole number of frames.
+
+## Phase 3, channel honesty S1 / S5 / S6 (2026-10-10, no change of any computed value)
+
+Documentation and naming only; the channel computes exactly what it did.
+- New `docs/science/model.md`: every equation and parameter, each source marked unverified, and tables of
+  mean rx power and delivery probability per distance. `tests/unit/test_channel_model_doc.py` recomputes the
+  tables from the code (P_rx within 0.01 dB, E[p_channel] within 0.001, p_csma within 1e-4), so the document
+  cannot drift again. `docs/science/limitations.md` lists known limitations.
+- S1: the documented calibration (-71 / -77 / -87 dBm; "meaningful PRR variation within 10-150 m") was
+  numerically false; the code gives -56.9 / -63.9 / -78.5 dBm. Comments in the code were replaced by pointers
+  to `model.md`; `docs/agents/audit.md` carries a SUPERSEDED banner (it claimed "P2 RESOLVED").
+- S5: `snr_margin` -> `rx_margin_db` (it is power above sensitivity, not an SNR), stat key
+  `avg_snr_margin_db` -> `avg_rx_margin_db` (golden values compared after the key rename: identical).
+  The double randomisation (sampled margin -> logistic -> Bernoulli) is documented, not changed.
+- S6: the CSMA term is labelled EXPERIMENTAL / UNCALIBRATED; its docstring table contradicted the code and
+  is replaced by the values the code produces.
+- A check made while writing this: Gauss-Hermite quadrature gave 0.7933 for E[p_channel] at 150 m NLOS and was
+  WRONG (logistic functions converge badly under it). Fine-grid integration (0.7905), a 20-million-sample
+  Monte Carlo (0.7905) and the code path (0.7904) agree; the table uses the grid value.
+- Not done: recalibration (decision D5: keep parameters, fix documentation), correlated shadowing, a real MAC
+  model, a decision threshold instead of the logistic.

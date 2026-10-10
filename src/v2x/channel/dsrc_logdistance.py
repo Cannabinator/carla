@@ -4,21 +4,23 @@ DSRC/WAVE (IEEE 802.11p) Channel Model for V2X Simulation
 Models the physical medium characteristics of IEEE 802.11p (DSRC/WAVE) as used
 in SAE J2735 BSM broadcasts. Implements:
 
-  - Log-distance path loss with log-normal shadowing
-    Calibrated to ETSI EN 302 663 and ETSI EN 302 895 parameters.
-  - CSMA/CA channel contention modelled via the channel busy ratio (CBR).
-  - Optional LOS/NLOS distinction via 2-D geometry.
-  - Packet Reception Rate (PRR) via a sigmoid SNR-margin curve calibrated
-    against Sommer et al. (2011) and the WINNER+ B1 urban channel model.
+  - Log-distance path loss with log-normal shadowing (i.i.d. per packet).
+  - A density-based contention term (EXPERIMENTAL, uncalibrated; not Bianchi's model).
+  - Optional LOS/NLOS distinction via 2-D vehicle-blocker geometry.
+  - Packet delivery probability from a logistic function of the sampled rx margin
+    (dB above the receiver sensitivity; there is no noise floor or interference).
+
+EVERY equation, default parameter and its source status is in docs/science/model.md.
+The parameter values below are project assumptions: the cited sources have not been
+verified against the primary text.
 
 All computation is in-process and deterministic (seeded RNG). No threads,
 no external broker, no connections to open or close. Call broadcast_all()
 once per V2X update tick, then query get_received() per vehicle.
 
-Reference parameters follow ETSI EN 302 663 §4 for ITS-G5 Class A OBU:
-  TX power: 23 dBm ERP, carrier: 5.9 GHz, bandwidth: 10 MHz.
+Defaults: TX 23 dBm, carrier 5.9 GHz, bandwidth 10 MHz (ETSI Class A attribution unverified).
 
-Physical model references:
+Claimed references (UNVERIFIED, see docs/science/model.md):
   - Paier et al. (2008): "Characterization of vehicle-to-vehicle radio channels
     from measurements at 5.2 GHz." Wireless Personal Communications.
   - Sommer et al. (2011): "A computationally inexpensive empirical model of IEEE
@@ -60,8 +62,8 @@ class DSRCConfig:
     """
     DSRC/WAVE channel model parameters.
 
-    Defaults follow ETSI EN 302 663 §4 (ITS-G5 Class A OBU).
-    Researchers may tune these to explore path loss conditions, shadowing
+    Default values are project assumptions loosely attributed to ETSI EN 302 663 (unverified).
+    Resulting numbers: docs/science/model.md. Researchers may tune these to explore path loss conditions, shadowing
     intensity, TX power, or channel congestion without changing simulation logic.
 
     Channel busy ratio (CBR) calibration:
@@ -79,11 +81,8 @@ class DSRCConfig:
     rx_sensitivity_dbm: float = -85.0 # 802.11p typical receiver sensitivity floor
 
     # ── Path loss model (log-distance + log-normal shadowing) ────────────────
-    # Calibrated for realistic PRR variation within 10-150m vehicle-to-vehicle ranges.
-    # Higher exponents and shadowing create meaningful differentiation:
-    #   - At 50m LOS: P_rx ≈ -71 dBm → SNR margin ≈ +14 dB → PRR ≈ 0.98
-    #   - At 100m LOS: P_rx ≈ -77 dBm → SNR margin ≈ +8 dB → PRR ≈ 0.92
-    #   - At 150m NLOS: P_rx ≈ -87 dBm → SNR margin ≈ -2 dB → PRR ≈ 0.45
+    # NOT calibrated against data. The resulting mean rx power and delivery probability
+    # per distance are tabulated in docs/science/model.md (LOS: lossless out to ~150 m).
     path_loss_exponent_los: float = 2.3    # Urban LOS (measured: 2.1-2.5)
     path_loss_exponent_nlos: float = 3.2   # Urban NLOS with buildings
     shadowing_std_los_db: float = 5.5      # Increased LOS shadowing
@@ -104,7 +103,7 @@ class DSRCConfig:
 
     # ── PRR sigmoid steepness ─────────────────────────────────────────────────
     # Larger values produce a sharper PRR transition around the sensitivity floor.
-    # k=2.0 matches Sommer et al. (2011) empirical calibration.
+    # k=2.0: attributed to Sommer et al. (2011); unverified.
     prr_sigmoid_k: float = 2.0
 
     # ── Reproducibility ───────────────────────────────────────────────────────
@@ -149,9 +148,9 @@ class DSRCChannel:
             "total_deliveries": 0.0,
             "total_drops": 0.0,
             "prr": 1.0,
-            "avg_snr_margin_db": 0.0,
+            "avg_rx_margin_db": 0.0,
         }
-        self._snr_ring: List[float] = []  # rolling SNR margin samples (capped at 500)
+        self._rx_margin_ring: List[float] = []  # rolling rx-margin samples, capped at 500
 
         logger.debug(
             "DSRCChannel initialized: TX=%.0f dBm, sensitivity=%.0f dBm, "
@@ -269,62 +268,46 @@ class DSRCChannel:
         """
         Packet Reception Rate = P_channel × P_no_contention.
 
-        P_channel: logistic function of SNR margin over the sensitivity floor.
-          Calibrated against Sommer et al. (2011) Figure 3:
-            PRR ≈ 1 for SNR margin >> 0 dB
-            PRR ≈ 0.5 exactly at the sensitivity threshold (margin = 0 dB)
-            PRR ≈ 0 for SNR margin << 0 dB
+        P_channel: logistic function of the SAMPLED rx margin (dB above the receiver
+          sensitivity, not an SNR). 0.5 at margin 0 dB. The margin includes a fresh
+          shadowing draw, and the caller then draws a Bernoulli on the product
+          (see 'double randomisation' in docs/science/model.md).
 
-        P_no_contention: Bianchi (2000) CSMA/CA model — probability that no
-          other station transmits during this packet's transmission slot.
+        P_no_contention: EXPERIMENTAL density term, see _csma_success_prob().
         """
         p_rx = self._received_power_dbm(distance_m, nlos)
-        snr_margin = p_rx - self.config.rx_sensitivity_dbm
+        rx_margin_db = p_rx - self.config.rx_sensitivity_dbm
 
         # Record for stats (avoid unbounded growth)
-        self._snr_ring.append(snr_margin)
-        if len(self._snr_ring) > 500:
-            self._snr_ring = self._snr_ring[-500:]
+        self._rx_margin_ring.append(rx_margin_db)
+        if len(self._rx_margin_ring) > 500:
+            self._rx_margin_ring = self._rx_margin_ring[-500:]
 
         k = self.config.prr_sigmoid_k
-        p_channel = 1.0 / (1.0 + math.exp(-k * snr_margin))
+        p_channel = 1.0 / (1.0 + math.exp(-k * rx_margin_db))
 
         p_csma = self._csma_success_prob(n_contenders)
         return p_channel * p_csma
 
     def _csma_success_prob(self, n_contenders: int) -> float:
         """
-        Probability of successful CSMA/CA transmission given N contenders.
+        EXPERIMENTAL - UNCALIBRATED. Probability factor for channel contention with N contenders.
 
-        Uses a density-aware model calibrated to 802.11p performance at 2 Hz BSM rate.
-        
-        Real 802.11p at 2 Hz with ~200-byte beacons only saturates at hundreds of nodes.
-        This model provides realistic PRR degradation:
-          - N ≤ 20: PRR > 0.95 (minimal contention)
-          - N ≈ 50: PRR ≈ 0.85 (moderate contention)
-          - N ≈ 100: PRR ≈ 0.70 (heavy contention)
-          - N ≥ 200: PRR ≈ 0.50 (saturation)
-        
-        Based on empirical 802.11p measurements from:
-          - Campolo et al. (2011): "IEEE 802.11p performance in vehicular networks"
-          - ETSI TR 102 863: "vehicle-to-vehicle channel congestion analysis"
+        p = max(0.35, exp(-0.005 * (N - 1))); lambda and the floor are not derived from data
+        or from an analytical MAC model (not Bianchi's). Values the code produces:
+        N=20: 0.909, N=50: 0.783, N=100: 0.610, N=200: 0.370, N>=~210: 0.35.
+        The sources previously cited here (Campolo et al. 2011; ETSI TR 102 863) are unverified
+        and the earlier table in this docstring did not match the code. Do not present results
+        that depend on this term as a validated MAC model. See docs/science/model.md.
         """
         if n_contenders <= 1:
             return 1.0
         
-        # Density-aware contention model
-        # At 2 Hz, 200-byte BSMs: packet_time ≈ 0.53ms, interval = 500ms
-        # Theoretical max before saturation: ~900 vehicles (0.53ms/500ms)
-        # Practical saturation starts around 200 vehicles due to backoff overhead
-        
-        # Use exponential decay that matches empirical data
-        # PRR = exp(-λ * (N - 1)) where λ controls degradation rate
-        # λ = 0.005 gives: N=20→0.91, N=50→0.78, N=100→0.61, N=200→0.37
         lambda_contention = 0.005
         
         # Add small constant floor for realistic minimum PRR
         p_csma = math.exp(-lambda_contention * (n_contenders - 1))
-        return max(0.35, p_csma)  # Floor at 35% (realistic saturation level)
+        return max(0.35, p_csma)  # floor 0.35: uncalibrated
 
     # ── Geometry helpers ────────────────────────────────────────────────────────
 
@@ -378,9 +361,9 @@ class DSRCChannel:
         total = self.stats["total_broadcasts"]
         if total > 0:
             self.stats["prr"] = self.stats["total_deliveries"] / total
-        if self._snr_ring:
-            self.stats["avg_snr_margin_db"] = (
-                sum(self._snr_ring) / len(self._snr_ring)
+        if self._rx_margin_ring:
+            self.stats["avg_rx_margin_db"] = (
+                sum(self._rx_margin_ring) / len(self._rx_margin_ring)
             )
 
 

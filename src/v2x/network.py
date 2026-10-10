@@ -533,7 +533,7 @@ class V2XNetwork:
               total_deliveries   — successful packet deliveries
               total_drops        — packets dropped by channel model
               prr                — rolling packet reception rate [0, 1]
-              avg_snr_margin_db  — average SNR margin above sensitivity floor
+              avg_rx_margin_db   — average rx margin (dB above sensitivity; not an SNR)
         """
         return self._dsrc_channel.get_stats()
 

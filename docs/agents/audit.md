@@ -1,3 +1,8 @@
+> **SUPERSEDED - do not rely on this file.** It states that the radio calibration was "RESOLVED" with
+> P_rx of about -71 / -77 / -87 dBm at 50 m LOS / 100 m LOS / 150 m NLOS. The code computes -56.9 / -63.9 /
+> -78.5 dBm and is effectively lossless in line of sight out to ~150 m. See `docs/science/model.md`
+> (verified numbers, machine-checked) and `docs/science/limitations.md`.
+
 # Audit — Scientific Accuracy & Code-Quality Backlog
 
 > **Status:** open — generated from a code review of the V2V/V2X core on 2026-08-20.
