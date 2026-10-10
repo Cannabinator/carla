@@ -2,7 +2,6 @@
 
 import sys
 from pathlib import Path
-from types import SimpleNamespace as NS
 
 import pytest
 
