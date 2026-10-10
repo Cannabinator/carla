@@ -86,3 +86,50 @@ def fake_server(tmp_path_factory):
         proc.wait(timeout=15)
     except subprocess.TimeoutExpired:
         proc.kill()
+
+
+# ── browser (Playwright, Chromium from PLAYWRIGHT_BROWSERS_PATH) ─────────────────────────────────────
+
+@pytest.fixture(scope="session")
+def browser():
+    sync_api = pytest.importorskip("playwright.sync_api", reason="pip install playwright (browsers are preinstalled)")
+    with sync_api.sync_playwright() as p:
+        try:
+            b = p.chromium.launch(args=["--use-gl=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"])
+        except Exception as exc:  # noqa: BLE001
+            pytest.skip(f"Chromium cannot be launched here: {exc}")
+        yield b
+        b.close()
+
+
+class Page:
+    """A page plus everything that went wrong in it: console errors, uncaught exceptions, failed requests."""
+    def __init__(self, page):
+        self.page = page
+        self.errors = []
+        page.on("console", lambda m: self.errors.append(f"console.{m.type}: {m.text}") if m.type in ("error",) else None)
+        page.on("pageerror", lambda e: self.errors.append(f"pageerror: {e}"))
+        page.on("requestfailed", lambda r: self.errors.append(f"requestfailed: {r.url} {r.failure}"))
+        page.on("response", lambda r: self.errors.append(f"http {r.status}: {r.url}") if r.status >= 400 else None)
+
+    def __getattr__(self, name):
+        return getattr(self.page, name)
+
+    def assert_clean(self, allow=()):
+        errs = [e for e in self.errors if not any(a in e for a in allow)]
+        assert not errs, "browser errors:\n" + "\n".join(errs)
+
+
+@pytest.fixture
+def new_page(browser, fake_server):
+    contexts = []
+
+    def make(viewport=(1400, 900), dark=False):
+        ctx = browser.new_context(viewport={"width": viewport[0], "height": viewport[1]},
+                                  color_scheme="dark" if dark else "light")
+        contexts.append(ctx)
+        return Page(ctx.new_page())
+
+    yield make
+    for c in contexts:
+        c.close()

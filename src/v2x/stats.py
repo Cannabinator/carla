@@ -6,12 +6,13 @@ is computed from the same ``LinkResult`` rows the recorder writes, so a plot can
 Definitions (also shown in the UI):
   * a link is *counted* in a PRR bin unless the application-layer awareness filter dropped it
     (``drop_cause == "out_of_awareness_range"``): that decision is not the radio's;
-  * PRR of a bin = delivered / counted (None when nothing was counted);
+  * PRR of a bin = delivered / counted (None when nothing was counted), with its Wilson 95 % interval;
   * distance bins are ``bin_m`` wide, the last one collects everything beyond ``max_distance_m``.
 """
 
 from __future__ import annotations
 
+import math
 from collections import deque
 from typing import Any, Deque, Dict, List, Optional, Tuple
 
@@ -23,8 +24,24 @@ from .frame import V2XFrame
 MARGIN_EDGES_DB = list(range(-30, 65, 5))      # rx margin above sensitivity (not an SNR)
 
 
+def wilson_interval(k: int, n: int, z: float = 1.959963984540054) -> Tuple[Optional[float], Optional[float]]:
+    """Wilson score interval (default 95 %) for k successes in n trials; (None, None) when n == 0.
+    Better behaved than the normal approximation near 0 and 1 and for small n, which is where link
+    statistics live (a distance bin with 8 packets)."""
+    if n <= 0:
+        return None, None
+    p = k / n
+    z2 = z * z
+    denom = 1.0 + z2 / n
+    centre = (p + z2 / (2 * n)) / denom
+    half = z * math.sqrt(p * (1 - p) / n + z2 / (4 * n * n)) / denom
+    lo = 0.0 if k == 0 else max(0.0, centre - half)
+    hi = 1.0 if k == n else min(1.0, centre + half)
+    return lo, hi
+
+
 class V2XStats:
-    def __init__(self, window_updates: int = 20, bin_m: float = 20.0, max_distance_m: float = 400.0):
+    def __init__(self, window_updates: int = 20, bin_m: float = 10.0, max_distance_m: float = 400.0):
         self.window = window_updates
         self.bin_m = float(bin_m)
         self.n_bins = int(round(max_distance_m / bin_m)) + 1       # +1: overflow bin
@@ -72,7 +89,8 @@ class V2XStats:
             "distance_bin_starts_m": edges, "last_bin_is_overflow": True,
             "first_frame": ups[0]["frame"] if ups else None, "last_frame": ups[-1]["frame"] if ups else None,
             "sim_time_span": [ups[0]["sim_time"], ups[-1]["sim_time"]] if ups else None,
-            "definition": "PRR = delivered / counted links; links dropped by the awareness-range filter are not counted",
+            "definition": "PRR = delivered / counted links (Wilson 95 % interval); links dropped by the awareness-range filter "
+                          "are not counted",
             "prr_by_distance": {}, "drops": {}, "rx_margin_hist": None,
         }
         if not ups:
@@ -83,7 +101,9 @@ class V2XStats:
             d = sum((u["series"][k][1] for u in ups if k in u["series"]), np.zeros(self.n_bins, dtype=np.int64))
             with np.errstate(invalid="ignore", divide="ignore"):
                 prr: List[Optional[float]] = [None if c == 0 else float(x) / float(c) for x, c in zip(d, n)]
-            out["prr_by_distance"][k] = {"counted": n.tolist(), "delivered": d.tolist(), "prr": prr}
+            ci = [wilson_interval(int(x), int(c)) for x, c in zip(d, n)]
+            out["prr_by_distance"][k] = {"counted": n.tolist(), "delivered": d.tolist(), "prr": prr,
+                                         "ci95_low": [lo for lo, _ in ci], "ci95_high": [hi for _, hi in ci]}
         lts = sorted({lt for u in ups for lt in u["drops"]})
         for lt in lts:
             acc = {"delivered": 0, DROP_CHANNEL: 0, DROP_MAC: 0, DROP_AWARENESS: 0}

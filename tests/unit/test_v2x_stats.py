@@ -4,7 +4,7 @@ import pytest
 
 from src.v2x.channel.base import DROP_AWARENESS, DROP_CHANNEL, DROP_MAC, LinkResult
 from src.v2x.frame import ChannelStats, V2XFrame, frozen_map
-from src.v2x.stats import MARGIN_EDGES_DB, V2XStats
+from src.v2x.stats import MARGIN_EDGES_DB, V2XStats, wilson_interval
 
 
 def link(dist, delivered, los=True, link_type="V2V", cause=None, margin=10.0, rx=2):
@@ -49,8 +49,8 @@ def test_prr_by_distance_bin_los_nlos_and_link_type():
 
 def test_awareness_drops_are_not_counted_in_prr_but_are_in_drops():
     s = V2XStats()
-    s.add(frame([link(10, True), link(10, False, cause=DROP_AWARENESS), link(10, False, cause=DROP_MAC),
-                 link(10, False, cause=DROP_CHANNEL)]))
+    s.add(frame([link(5, True), link(5, False, cause=DROP_AWARENESS), link(5, False, cause=DROP_MAC),
+                 link(5, False, cause=DROP_CHANNEL)]))
     snap = s.snapshot()
     assert snap["prr_by_distance"]["V2V/LOS"]["counted"][0] == 3             # delivered, mac, channel
     assert snap["prr_by_distance"]["V2V/LOS"]["prr"][0] == pytest.approx(1 / 3)
@@ -59,9 +59,9 @@ def test_awareness_drops_are_not_counted_in_prr_but_are_in_drops():
 
 def test_window_slides():
     s = V2XStats(window_updates=2)
-    s.add(frame([link(10, True)], n=1))
-    s.add(frame([link(10, False)], n=2))
-    s.add(frame([link(10, False)], n=3))
+    s.add(frame([link(5, True)], n=1))
+    s.add(frame([link(5, False)], n=2))
+    s.add(frame([link(5, False)], n=3))
     snap = s.snapshot()
     assert snap["window_updates"] == 2 and snap["first_frame"] == 2 and snap["last_frame"] == 3
     assert snap["prr_by_distance"]["V2V/LOS"]["prr"][0] == 0.0                # the delivered link left the window
@@ -88,3 +88,30 @@ def test_scales_to_a_real_update_size():
     s.add(f)
     s.snapshot()
     assert time.perf_counter() - t0 < 0.5
+
+
+@pytest.mark.parametrize("k,n,lo,hi", [(0, 10, 0.0, 0.2775), (5, 10, 0.2366, 0.7634), (10, 10, 0.7225, 1.0),
+                                       (1, 1, 0.2065, 1.0), (50, 100, 0.4038, 0.5962)])
+def test_wilson_interval_matches_published_values(k, n, lo, hi):
+    """Reference values of the Wilson score interval at 95 % (Wilson 1927; tabulated e.g. in Brown, Cai & DasGupta
+    2001, and reproducible with statsmodels.proportion_confint(method='wilson'))."""
+    a, b = wilson_interval(k, n)
+    assert a == pytest.approx(lo, abs=1e-3) and b == pytest.approx(hi, abs=1e-3)
+
+
+def test_wilson_interval_empty_and_bounds():
+    assert wilson_interval(0, 0) == (None, None)
+    for n in (1, 2, 7, 100, 10_000):
+        for k in range(0, min(n, 20) + 1):
+            lo, hi = wilson_interval(k, n)
+            assert 0.0 <= lo <= k / n <= hi <= 1.0
+
+
+def test_stats_carry_the_interval_per_bin():
+    s = V2XStats(bin_m=10.0, max_distance_m=50.0)
+    s.add(frame([link(5, True)] * 8 + [link(5, False)] * 2 + [link(25, True)]))
+    p = s.snapshot()["prr_by_distance"]["V2V/LOS"]
+    assert p["prr"][0] == pytest.approx(0.8)
+    assert p["ci95_low"][0] == pytest.approx(0.4902, abs=1e-3) and p["ci95_high"][0] == pytest.approx(0.9433, abs=1e-3)
+    assert p["ci95_low"][2] == pytest.approx(0.2065, abs=1e-3)                       # 1 of 1, in the 20-30 m bin
+    assert p["ci95_low"][4] is None and p["ci95_high"][4] is None                     # empty bin: no number
