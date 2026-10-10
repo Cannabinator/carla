@@ -209,8 +209,8 @@ def test_ws_disconnect_ends_session_and_despawns(client, world):
 
 def test_ws_expired_session_is_reported(client, world):
     sid = _join(client, duration_seconds=60).json()["session_id"]
-    from datetime import datetime, timedelta
-    world.sessions.get_session(sid).expires_at = datetime.utcnow() - timedelta(seconds=1)
+    from datetime import datetime, timedelta, timezone
+    world.sessions.get_session(sid).expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
     with client.websocket_connect(f"/ws/client/{sid}") as ws:
         assert ws.receive_json()["type"] == "session_expired"
 
