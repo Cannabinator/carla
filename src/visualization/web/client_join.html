@@ -277,6 +277,8 @@ function openLidarWS(path) {
     const badge = document.getElementById('lidarBadge');
     badge.style.display = 'inline-flex';
     badge.classList.add('active');
+    // this page only shows that the stream is alive: ask for the cheapest profile (full rate would be ~10 MB/s)
+    _lidarWs.send(JSON.stringify({ op: 'profile', max_points: 10000, max_hz: 1 }));
     _lidarWs._ping = setInterval(() => _lidarWs.readyState === WebSocket.OPEN && _lidarWs.send('ping'), 10000);
   };
 

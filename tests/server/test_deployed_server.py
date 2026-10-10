@@ -221,3 +221,92 @@ def test_rsus_are_per_intersection_with_one_signal_group_per_light(live_world):
     multi = [s for s in spat if len(s.get("states", [])) > 1]
     print(f"intersections with more than one signal group: {len(multi)} of {len(spat)}")
     assert multi, "no intersection has more than one signal group: light grouping may not be working"
+
+
+# ── LiDAR on request (Phase 4) ─────────────────────────────────────────────────────────────────────
+
+def _ws_frames(sync, url, seconds, out, stop_after=40):
+    """Collect (frame_id, bytes) from a LiDAR socket for a few seconds; text messages go to out['text']."""
+    from src.lidar.protocol import decode_frame
+    t0 = time.time()
+    with sync.connect(url, open_timeout=10, max_size=None) as ws:
+        while time.time() - t0 < seconds and len(out["frames"]) < stop_after:
+            try:
+                msg = ws.recv(timeout=2)
+            except TimeoutError:
+                break
+            if isinstance(msg, str):
+                out["text"].append(json.loads(msg))
+            else:
+                out["frames"].append((decode_frame(msg)[0].frame, msg))
+
+
+@pytest.mark.carla
+def test_lidar_lifecycle_budget_and_two_viewers(live_world):
+    """Request -> active -> reconfigure 32->64 channels -> viewers leave -> auto-release; nothing leaks."""
+    sync = pytest.importorskip("websockets.sync.client")
+    status, j = live_world.json("POST", "/client/join", {"client_name": "pytest-lidar2"})
+    assert status == 200, j
+    sid = j["session_id"]
+    try:
+        status, schema = live_world.json("GET", "/api/lidar/schema")
+        assert status == 200 and schema["protocol_version"] == 3
+        keep_alive = schema["limits"]["keep_alive_s"]
+
+        # observers may not create; the admin may; the vehicle may on its own actor
+        assert live_world.json("POST", "/api/lidar/sensors", {"actor_id": j["actor_id"]})[0] == 403
+        status, created = live_world.json("POST", f"/api/sessions/{sid}/lidar", {"channels": 32})
+        assert status == 202, created
+        sensor_id = created["sensor_id"]
+
+        # over budget -> 409 with the documented body (ask for far more than the budget)
+        too_much = schema["limits"]["max_points_per_second"] + 1
+        status, body = live_world.json("POST", "/api/lidar/sensors",
+                                       {"actor_id": j["actor_id"], "config": {"points_per_second": min(too_much, 10_000_000)}},
+                                       admin=True)
+        assert status == 409 and body["error"] == "lidar_budget_exceeded", (status, body)
+        assert body["requested_pps"] > body["available_pps"]
+
+        # two viewers see byte-identical frames for the same frame id
+        a, b = {"frames": [], "text": []}, {"frames": [], "text": []}
+        import threading
+        url = live_world.ws_base + f"/ws/lidar/{sensor_id}"
+        ts = [threading.Thread(target=_ws_frames, args=(sync, url, 4.0, o)) for o in (a, b)]
+        [t.start() for t in ts]
+        [t.join() for t in ts]
+        assert len(a["frames"]) >= 3 and len(b["frames"]) >= 3, (len(a["frames"]), len(b["frames"]))
+        ids = [f for f, _ in a["frames"]]
+        assert ids == sorted(set(ids)), "frames must arrive once each, in order"
+        fa, fb = dict(a["frames"]), dict(b["frames"])
+        common = set(fa) & set(fb)
+        assert common, "the two viewers share no frame id"
+        assert all(fa[f] == fb[f] for f in common), "viewers on the same profile must get identical bytes"
+        assert any(m.get("state") == "active" for m in a["text"] if m.get("type") == "state")
+
+        # reconfigure while nobody is watching would auto-release; do it now
+        status, body = live_world.json("PUT", f"/api/lidar/sensors/{sensor_id}", {"channels": 64}, admin=True)
+        assert status == 202, body
+        deadline = time.time() + 10
+        info = None
+        while time.time() < deadline:
+            _, lst = live_world.json("GET", "/api/lidar/sensors")
+            info = next((s for s in lst["sensors"] if s["sensor_id"] == sensor_id), None)
+            if info and info["state"] == "active" and info["config"]["channels"] == 64:
+                break
+            time.sleep(0.2)
+        else:
+            pytest.fail(f"sensor did not become active with 64 channels: {info}")
+
+        # no viewers -> auto-release after keep_alive_s
+        deadline = time.time() + keep_alive + 15
+        while time.time() < deadline:
+            _, lst = live_world.json("GET", "/api/lidar/sensors")
+            if not any(s["sensor_id"] == sensor_id for s in lst["sensors"]):
+                break
+            time.sleep(0.5)
+        else:
+            pytest.fail(f"sensor was not auto-released {keep_alive + 15:.0f} s after the last viewer left")
+        assert lst["budget"]["used_pps"] == 0
+    finally:
+        live_world.json("DELETE", f"/client/leave/{sid}")
+        live_world.json("DELETE", "/admin/traffic", admin=True, timeout=60)

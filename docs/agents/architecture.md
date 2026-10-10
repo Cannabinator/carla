@@ -70,12 +70,13 @@ traffic/pedestrians/scenarios. **Client** routes let a device join and steer its
 Dataclasses: `SimulationConfig`, `VisualizationConfig`, `V2VConfig`, `VehicleConfig`,
 `DSRCConfig`. Export `DEFAULT_*` instances. **Edit here, not in module code.**
 
-Other utils: `utils/binary_protocol.py` (LiDAR point-cloud wire format).
+LiDAR: `src/lidar/` (see the LiDAR section of docs/science/CHANGELOG.md, Phase 4): `protocol.py` (wire format v3),
+`transforms.py`, `config.py`, `sensor.py` (`LidarManager`), `stream.py` (profiles), `carla_backend.py`.
 
 ### `src/server/` & `src/visualization/`
 - `server/app.py` — FastAPI app, `run_server()` and `set_persistent_world()` (wires the world
   into the admin/client routes). `server/persistent_world.py` — the simulation owner.
-- `visualization/lidar/collector.py` — LiDAR data collection.
+- `server/lidar_routes.py` — LiDAR REST + `/ws/lidar/{sensor_id}`.
 - `visualization/web/` — frontend pages `admin_panel.html`, `client_join.html`.
 
 ## Data flow (one tick)

@@ -424,3 +424,49 @@ A tick is 50 ms and an update runs every 10th tick on the simulation thread, so 
 loop falls behind real time for a couple of frames at every update. Levers: `v2x_penetration_rate`,
 `v2x_update_rate_hz`, `awareness_range_m`, `rsu_max_count`. Real CARLA adds per-vehicle calls
 (`get_control`) on top. Measure on the real server before relying on 100+ stations in real-time mode.
+
+## Phase 4 - LiDAR on request (2026-10-10)
+
+Before: a LiDAR sensor could only be created at join, with hard-coded settings, and it was never switched off;
+the per-session collector transformed points with a hand-rolled matrix, kept every 2nd point (stride), stamped
+frames with the wall clock, and read whichever measurement had arrived last. After: sensors exist only while
+requested, are configured per request, are collected frame-synchronously and are streamed in protocol v3.
+(`src/lidar/`, `src/server/lidar_routes.py`; handoff defects L1-L9.)
+
+- **L1 transform** (`src/lidar/transforms.py`): the old third matrix row was `[-sin p, cos p sin r, cos p cos r]`;
+  CARLA's own basis (forward/right/up vectors, tested against analytic values; a live test against the bounding box of a real
+  vehicle is written but not yet run) has `[sin p, -cos p sin r, cos p cos r]`. Error of the old matrix, 50 m ahead of the sensor:
+  yaw 30 / pitch 0 / roll 0: 0.00 m; pitch 5: 8.72 m; pitch 10 + roll 5: 17.36 m; 20 m to the side at pitch 10 +
+  roll 5: 3.43 m. On flat ground nothing changed, on slopes every point cloud was wrong.
+- **L2/L8 protocol v3** (`src/lidar/protocol.py`, JS decoder `src/web/static/js/lidar-decoder.js`): header carries
+  CARLA frame id, simulation time, wall time, sensor id, ego actor id, field mask, and says in which frame
+  (sensor/world) the points are; the sensor pose is sent as 6 doubles (the old one was 6 float32, and `tag`/`object_idx` were float32 per point; v3 uses u8/u32, 21 B per point against 20 B). The
+  JS decoder is tested against bytes produced by the Python encoder (Node 22).
+- **L3 frame synchronisation** (`LidarManager.collect`): after `world.tick()` returned frame F only the
+  measurement with `frame == F` is used; older ones are discarded, a missing one is a counted miss (40 in a row
+  put the sensor in `error`). A sensor spawned at that boundary is not waited for (found with the CARLA stub: it
+  would have stalled the simulation thread for `frame_timeout_s` = 0.5 s).
+- **L4/L5 runtime control, budget, ownership**: states `requested -> spawning -> warming_up -> active`,
+  `reconfiguring`, `stopping -> destroyed`, `error`, each transition logged with its frame. Over budget:
+  `409 {"error": "lidar_budget_exceeded", "requested_pps", "available_pps", ...}` (`lidar_max_sensors` = 4,
+  `lidar_max_points_per_second` = 2 000 000 by default: unmeasured, tune on the real server). A sensor without
+  viewers is released after `lidar_keep_alive_s` (10 s, wall clock) unless pinned or recording raw. Vehicles can
+  create sensors only on their own actor, observers only view, the admin anything (D9). Sensors are destroyed
+  before the vehicle they are attached to.
+- **Display subsampling** (`src/lidar/stream.py`): was every 2nd point of the array (CARLA orders points by
+  channel, so a stride keeps whole rings and drops others); now a fixed seeded random choice per sensor, order
+  preserved, and only for streaming, never for recordings. Profiles are quantised (10k / 25k / 50k / all points,
+  `max_hz` to a divisor of the simulation rate) so a frame is encoded once per profile and every viewer on it
+  gets the same bytes (tested).
+- Cost of encoding one frame on synthetic random data (a dev machine, not the target): 25 000 points, 21 B each:
+  0.3 ms uncompressed / 512 kB, 18 ms with zlib level 1 / 429 kB (random data compresses poorly; real clouds
+  should do better, measure). 100 000 points: 1.4 ms / 2.0 MB, 78 ms with zlib. At the default 500 000 points per
+  second and 20 Hz one unsubsampled viewer is about 10 MB/s; the default WebSocket profile is therefore the full
+  stream (explicit and unsurprising) and UIs should ask for less: the join page asks for 10 000 points at 1 Hz.
+- Removed: `src/visualization/lidar/collector.py`, `src/utils/binary_protocol.py` (v2: 28-byte header + 24-byte pose) and their tests; the cases that still mattered (rotation, round trip, header size) live in
+  the new tests.
+- Not verified on a real CARLA yet (`TODO(verify)`; the live tests in `tests/integration/test_lidar_live.py` and
+  `tests/server/test_deployed_server.py::test_lidar_lifecycle_budget_and_two_viewers` settle them): that
+  measurement coordinates need no y flip, that `object_idx` of the semantic sensor is the hit actor id, the
+  semantic tag table (0..28) and the attribute names for 0.9.16, spawning a sensor in synchronous mode between two
+  ticks, and the measurement callback timing relative to `tick()`.

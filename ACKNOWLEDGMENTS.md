@@ -63,7 +63,7 @@ The following algorithms are original implementations using standard techniques:
 | Algorithm | File | Description |
 |-----------|------|-------------|
 | Octree Downsampling | `src/utils/octree.py` | Voxel-based point cloud downsampling (common technique) |
-| Binary Protocol | `src/utils/binary_protocol.py` | Custom binary serialization for LiDAR data |
+| LiDAR wire protocol v3 | `src/lidar/protocol.py` | Custom binary serialization for LiDAR data |
 | Lazy Evaluation | `src/utils/lazy.py` | Standard Python descriptor and memoization patterns |
 
 These implementations do not derive from any copyrighted source code.
