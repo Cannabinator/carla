@@ -156,3 +156,21 @@ timestamp next to simulation-time BSMs.
 `register()` (`describe_vehicle` -> `VehicleStatic`).
 - Before: 1 RPC per vehicle per update (N vehicles at 2 Hz = 2N RPC/s, on the simulation thread).
 - After: 1 RPC per vehicle in total. BSM values unchanged (goldens unchanged).
+
+## Phase 3, model change S9 - BSM accelerations (2026-10-10)
+
+Before: `longitudinal_accel` = change of the speed MAGNITUDE over the update interval (contains
+lateral and vertical motion, low-passed by the 0.5 s interval); `lateral_accel` = v^2 / turning radius
+estimated from the steering input and 60 % of the vehicle length (non-zero whenever the wheel is turned,
+whatever the vehicle actually does).
+After: both are the snapshot's acceleration vector (`ActorSnapshot.get_acceleration()`) projected on the
+vehicle's forward and right axes (`v2x/geometry.py`, CARLA transform-matrix convention).
+Golden numbers (same input: acceleration (1, 2, 0) m/s^2, yaw -135 deg):
+- scenario 1: longitudinal 2.0 -> -2.1213, lateral 9.0336 -> -0.7071
+- scenario 2: longitudinal -4.0 -> -2.1213, lateral -25.3698 -> -0.7071
+  (the old values depended on speed history and steering, the new ones only on the snapshot; the
+  hand calculation of the new values is cos/sin(-135 deg) = -0.7071: 1*(-0.7071)+2*(-0.7071) = -2.1213)
+Removed: `prev_velocity`/`delta_time` parameters, the network's `prev_speeds` history.
+`vertical_accel` stays 0.0 (not part of this change). `steering_angle` unchanged.
+TODO(verify): `ActorSnapshot.get_acceleration()` units (m/s^2) and the axis convention against CARLA:
+`tests/integration/test_geometry_live.py` compares `v2x/geometry.py` with `carla.Transform` (needs `carla`).

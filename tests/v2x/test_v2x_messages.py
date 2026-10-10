@@ -132,6 +132,9 @@ class _ActorSnap:
     def get_angular_velocity(self):
         return self._a.get_angular_velocity()
 
+    def get_acceleration(self):
+        return _MockVector()
+
 
 class _MockSnapshot:
     """Snapshot that knows only the actors given (default: none, so find() returns None)."""

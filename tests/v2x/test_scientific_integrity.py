@@ -103,6 +103,9 @@ class MockActorSnapshot:
     def get_angular_velocity(self):
         return self.vehicle.get_angular_velocity()
 
+    def get_acceleration(self):
+        return MockVector(0.0, 0.0, 0.0)
+
 
 class MockSnapshotTimestamp:
     def __init__(self, elapsed_seconds):
@@ -195,7 +198,7 @@ class TestScientificIntegrity(unittest.TestCase):
         vehicle = MockVehicle(1, x=12.0, y=6.0, speed_x=8.0)
         empty_snapshot = MockWorldSnapshot([], elapsed_seconds=10.0)
 
-        bsm = create_bsm_from_carla(vehicle, vehicle_id=1, msg_count=3, snapshot=empty_snapshot, prev_velocity=6.0, delta_time=0.5)
+        bsm = create_bsm_from_carla(vehicle, vehicle_id=1, msg_count=3, snapshot=empty_snapshot)
         self.assertIsNone(bsm)
 
     def test_bsm_uses_snapshot_time_and_transform(self):
@@ -203,7 +206,7 @@ class TestScientificIntegrity(unittest.TestCase):
         snapshot_transform = MockTransform(x=123.0, y=45.0, z=1.0, yaw=10.0)
         snapshot = MockWorldSnapshot([vehicle], elapsed_seconds=42.5, transform_overrides={1: snapshot_transform})
 
-        bsm = create_bsm_from_carla(vehicle, vehicle_id=1, msg_count=7, snapshot=snapshot, prev_velocity=0.0, delta_time=0.5)
+        bsm = create_bsm_from_carla(vehicle, vehicle_id=1, msg_count=7, snapshot=snapshot)
 
         self.assertAlmostEqual(bsm.timestamp, 42.5)
         self.assertAlmostEqual(bsm.x_m, 123.0)
@@ -405,7 +408,7 @@ class TestV2XStatsScientificValidity(unittest.TestCase):
         """BSM speed field must be m/s to match SAE J2735 standard."""
         vehicle = MockVehicle(0, x=0.0, y=0.0, speed_x=10.0)  # 10 m/s ≈ 36 km/h
         snap = MockWorldSnapshot([vehicle], elapsed_seconds=1.0)
-        bsm = create_bsm_from_carla(vehicle, 0, 0, snapshot=snap, prev_velocity=0.0, delta_time=0.5)
+        bsm = create_bsm_from_carla(vehicle, 0, 0, snapshot=snap)
 
         # speed should be ~10 m/s, not ~36 km/h
         self.assertAlmostEqual(bsm.speed, 10.0, delta=0.5)

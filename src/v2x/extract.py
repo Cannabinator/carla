@@ -6,6 +6,7 @@ import math
 from dataclasses import dataclass
 from typing import Optional
 
+from .geometry import basis_vectors, dot
 from .messages.bsm import BrakingStatus, BSMCore, VehicleType
 
 
@@ -104,8 +105,7 @@ def describe_vehicle(vehicle) -> VehicleStatic:
 
 
 def create_bsm_from_carla(vehicle, vehicle_id: int, msg_count: int,
-                          snapshot, prev_velocity=None, delta_time=0.05,
-                          static: Optional[VehicleStatic] = None) -> Optional[BSMCore]:
+                          snapshot, static: Optional[VehicleStatic] = None) -> Optional[BSMCore]:
     """
     Create a BSM from a CARLA vehicle, using only data of one WorldSnapshot.
 
@@ -122,8 +122,6 @@ def create_bsm_from_carla(vehicle, vehicle_id: int, msg_count: int,
         vehicle_id: Unique vehicle identifier
         msg_count: Message counter
         snapshot: WorldSnapshot (required)
-        prev_velocity: Previous speed for the acceleration estimate
-        delta_time: Time since last update
         static: Cached VehicleStatic; computed on the spot (one RPC) if omitted
 
     Returns:
@@ -144,30 +142,22 @@ def create_bsm_from_carla(vehicle, vehicle_id: int, msg_count: int,
     # Calculate speed
     speed_ms = math.sqrt(velocity.x**2 + velocity.y**2 + velocity.z**2)
     
-    # Calculate accelerations
-    if prev_velocity is not None:
-        long_accel = (speed_ms - prev_velocity) / delta_time if delta_time > 0 else 0.0
-    else:
-        long_accel = 0.0
-    
     # Get vehicle control
     control = vehicle.get_control()
     
     # Vehicle-specific steering angle (max steer angle is cached, S11)
     steering_angle = control.steer * static.max_steer_angle_deg
 
-    # Calculate lateral acceleration (simplified centripetal acceleration)
-    if abs(control.steer) > 0.01 and speed_ms > 0.1:
-        # Use wheelbase from vehicle dimensions
-        wheelbase = static.length_m * 0.6  # Approximate 60% of length
-        try:
-            turn_radius = wheelbase / abs(math.tan(math.radians(steering_angle)))
-            lateral_accel = (speed_ms ** 2) / turn_radius * math.copysign(1, control.steer)
-        except (ZeroDivisionError, ValueError):
-            lateral_accel = 0.0
-    else:
-        lateral_accel = 0.0
-    
+    # Accelerations (S9): the simulator's acceleration vector of this snapshot projected on the
+    # vehicle's own axes. The old values (change of speed magnitude over the update interval,
+    # and a steering-angle estimate for the lateral part) were neither longitudinal nor lateral.
+    a = actor_snapshot.get_acceleration()
+    accel = (a.x, a.y, a.z)
+    rot = transform.rotation
+    forward, right, _up = basis_vectors(rot.yaw, rot.pitch, rot.roll)
+    long_accel = dot(accel, forward)
+    lateral_accel = dot(accel, right)
+
     # Yaw rate in deg/s. CARLA's get_angular_velocity() already returns deg/s, so no conversion
     # (the old math.degrees() inflated it by 57.3x, defect S2).
     # TODO(verify): confirm the unit against the 0.9.16 Python API reference / a live yaw test.

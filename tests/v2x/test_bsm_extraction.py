@@ -2,6 +2,7 @@
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace as NS
 
 import pytest
 
@@ -44,3 +45,39 @@ def test_missing_from_snapshot_returns_none_and_never_reads_the_actor_or_wall_cl
 def test_timestamp_is_the_snapshot_simulation_time():
     bsm = create_bsm_from_carla(_vehicle(), 7, 0, snapshot=_snapshot())
     assert bsm.timestamp == 12.35  # snapshot.timestamp.elapsed_seconds, not time.time()
+
+
+def _snap_with_pose_and_accel(yaw, accel, pitch=0.0, roll=0.0):
+    snap = _snapshot()
+    actor = snap.find(7)
+    actor.get_transform = lambda: NS(location=_vec(0.0, 0.0, 0.0), rotation=NS(pitch=pitch, yaw=yaw, roll=roll))
+    actor.get_acceleration = lambda: _vec(*accel)
+    snap.find = lambda i: actor if i == 7 else None
+    return snap
+
+
+@pytest.mark.parametrize("yaw,accel,long,lat", [
+    (0.0, (3.0, 0.0, 0.0), 3.0, 0.0),      # speeding up straight ahead
+    (0.0, (0.0, 2.0, 0.0), 0.0, 2.0),      # pushed to the right
+    (90.0, (0.0, 3.0, 0.0), 3.0, 0.0),     # heading +y, accelerating along +y
+    (90.0, (-2.0, 0.0, 0.0), 0.0, 2.0),    # heading +y: world -x is the vehicle's right
+    (180.0, (-4.0, 0.0, 0.0), 4.0, 0.0),
+    (0.0, (-5.0, 0.0, 0.0), -5.0, 0.0),    # braking = negative longitudinal
+])
+def test_acceleration_is_projected_on_vehicle_axes(yaw, accel, long, lat):
+    """S9: longitudinal/lateral come from the snapshot acceleration vector, not speed history."""
+    bsm = create_bsm_from_carla(_vehicle(), 7, 0, snapshot=_snap_with_pose_and_accel(yaw, accel))
+    assert bsm.longitudinal_accel == pytest.approx(long, abs=1e-9)
+    assert bsm.lateral_accel == pytest.approx(lat, abs=1e-9)
+
+
+def test_vertical_acceleration_does_not_leak_into_longitudinal_on_level_ground():
+    bsm = create_bsm_from_carla(_vehicle(), 7, 0, snapshot=_snap_with_pose_and_accel(0.0, (0.0, 0.0, 9.0)))
+    assert bsm.longitudinal_accel == pytest.approx(0.0) and bsm.lateral_accel == pytest.approx(0.0)
+
+
+def test_steering_input_no_longer_invents_lateral_acceleration():
+    """Before S9 a steering input produced a lateral value even with no lateral motion."""
+    veh = _vehicle(steer=0.8)
+    bsm = create_bsm_from_carla(veh, 7, 0, snapshot=_snap_with_pose_and_accel(0.0, (0.0, 0.0, 0.0)))
+    assert bsm.lateral_accel == 0.0

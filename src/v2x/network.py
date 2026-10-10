@@ -91,9 +91,6 @@ class V2XNetwork:
         # Threat assessment
         self.threats: Dict[Tuple[int, int], dict] = {}  # (ego, other) → threat_info
 
-        # Previous speeds for BSM acceleration estimation
-        self.prev_speeds: Dict[int, float] = {}
-
         # Timing
         self.last_update_time = 0.0
         self.last_update_sim_time: Optional[float] = None
@@ -156,7 +153,6 @@ class V2XNetwork:
         self._static[vehicle_id] = describe_vehicle(vehicle)
         self.msg_counters[vehicle_id] = 0
         self.neighbors[vehicle_id] = []
-        self.prev_speeds[vehicle_id] = 0.0
         
         if self.world is None:
             self.world = vehicle.get_world()
@@ -170,7 +166,6 @@ class V2XNetwork:
         self.enhanced_messages.pop(vehicle_id, None)
         self.msg_counters.pop(vehicle_id, None)
         self.neighbors.pop(vehicle_id, None)
-        self.prev_speeds.pop(vehicle_id, None)
         self._static.pop(vehicle_id, None)
 
         logger.debug(f"Vehicle {vehicle_id} unregistered from V2X network")
@@ -227,13 +222,6 @@ class V2XNetwork:
                 return False
 
         current_time = time.time()
-        if sim_time is not None and self.last_update_sim_time is not None:
-            delta_time = max(sim_time - self.last_update_sim_time, 1e-6)
-        elif self.last_update_time > 0.0:
-            delta_time = max(current_time - self.last_update_time, 1e-6)
-        else:
-            delta_time = self.update_interval
-
         self.last_update_time = current_time
         if sim_time is not None:
             self.last_update_sim_time = sim_time
@@ -242,7 +230,7 @@ class V2XNetwork:
 
         # ── Phase 1: Build BSMs from current CARLA snapshot ──────────────────
         for vehicle_id, vehicle in self.vehicles.items():
-            bsm = self._create_bsm(vehicle, vehicle_id, snapshot, delta_time)
+            bsm = self._create_bsm(vehicle, vehicle_id, snapshot)
             if bsm is None:
                 # Not in this snapshot: skip the station this frame and drop its previous BSM
                 # so a stale message is not transmitted again (S10).
@@ -254,7 +242,6 @@ class V2XNetwork:
 
             # Wrap SAE J2735 msg_count field (0-127)
             self.msg_counters[vehicle_id] = (self.msg_counters[vehicle_id] + 1) % 128
-            self.prev_speeds[vehicle_id] = bsm.speed
 
         # ── Phase 2: Run DSRC/WAVE channel model ─────────────────────────────
         # Positions come from bsm.x_m/y_m which carry CARLA world
@@ -284,16 +271,13 @@ class V2XNetwork:
         return True
     
     def _create_bsm(self, vehicle: carla.Actor, vehicle_id: int, 
-                    snapshot, delta_time: float) -> Optional[BSMCore]:
+                    snapshot) -> Optional[BSMCore]:
         """Create BSM message from CARLA vehicle"""
-        prev_speed = self.prev_speeds.get(vehicle_id, 0.0)
         msg_count = self.msg_counters.get(vehicle_id, 0)
         
         return create_bsm_from_carla(
             vehicle, vehicle_id, msg_count,
             snapshot=snapshot,  # Pass snapshot for fresh data
-            prev_velocity=prev_speed,
-            delta_time=delta_time,
             static=self._static.get(vehicle_id),
         )
 

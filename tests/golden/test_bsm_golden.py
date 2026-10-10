@@ -36,9 +36,10 @@ def _vehicle(actor_id=7, type_id="vehicle.tesla.model3", steer=0.2, brake=0.0,
 
 def _snapshot(actor_id=7):
     actor_snap = NS(
-        get_transform=lambda: NS(location=_vec(120.5, -33.25, 0.5), rotation=NS(yaw=-135.0)),
+        get_transform=lambda: NS(location=_vec(120.5, -33.25, 0.5), rotation=NS(pitch=0.0, yaw=-135.0, roll=0.0)),
         get_velocity=lambda: _vec(6.0, 8.0, 0.0),
         get_angular_velocity=lambda: _vec(0.0, 0.0, 0.5),
+        get_acceleration=lambda: _vec(1.0, 2.0, 0.0),
     )
     return NS(
         timestamp=NS(elapsed_seconds=12.35),
@@ -47,14 +48,12 @@ def _snapshot(actor_id=7):
 
 
 def test_bsm_from_snapshot_golden():
-    bsm = create_bsm_from_carla(_vehicle(), 7, 130, snapshot=_snapshot(),
-                                prev_velocity=9.0, delta_time=0.5)
+    bsm = create_bsm_from_carla(_vehicle(), 7, 130, snapshot=_snapshot())
     assert_matches_golden("bsm_from_snapshot", asdict(bsm))
 
 
 def test_bsm_braking_reverse_golden():
     v = _vehicle(actor_id=8, type_id="vehicle.ford.ambulance", steer=-0.5, brake=0.7,
                  throttle=0.0, reverse=True)
-    bsm = create_bsm_from_carla(v, 8, 5, snapshot=_snapshot(8),
-                                prev_velocity=12.0, delta_time=0.5)
+    bsm = create_bsm_from_carla(v, 8, 5, snapshot=_snapshot(8))
     assert_matches_golden("bsm_braking_reverse", asdict(bsm))
