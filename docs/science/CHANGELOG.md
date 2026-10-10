@@ -202,3 +202,22 @@ uncertainty window to report.
   after 108.0 / 108.0 / 108.0. Example (query fails): before likely 105.0; after null.
 - Assumption to check on live CARLA: a light that is externally frozen or switched by a script does not
   follow its program, so the remaining time can then be wrong. TODO(verify).
+
+## Phase 3, model change C7 + S12 - one exact update gate, simulation time only (2026-10-10)
+
+IMPORTANT for any results produced by the persistent server before this commit.
+Before: a V2X update was gated twice: the world loop (`frame % 10 == 0`) AND inside the network
+(`sim_time - last_sim_time < 0.5 s` -> skip), with `sim_time` accumulated as floats (0.05 per frame).
+After 10 steps the difference is 0.4999999... and the update was skipped.
+- Measured by replaying the logic for 100 simulated seconds at 20 FPS, 2 Hz target:
+  before: 126 of 200 updates performed (74 skipped), effective **1.26 Hz**;
+  after: 200 of 200, **2.00 Hz**. (The handoff's separate replay of 7200 updates gave 23 % skipped.)
+- Effect: BSM refresh, neighbour tables, threat levels and all channel statistics were computed at about
+  63 % of the nominal rate, and unevenly (the skips depend on float rounding, not on the scenario).
+After: the network has no internal timing decision by default; the world loop's exact integer frame
+gate is the only one. An optional `update_every_n_frames` (exact frame counts) exists for standalone use.
+S12: no wall clock in the model. `should_update`, `last_update_time` and the wall-clock fallback for
+timestamps are removed; `measured_update_hz` is now per SIMULATED second (it is exactly the target for a
+regular schedule; before it measured how fast the test or server ran). Wall-clock real-time factor
+belongs to the simulation loop (reported with the recorder in Phase 7).
+Config validation (already in `WorldConfig`) guarantees the update rate is a whole number of frames.

@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import logging
 import math
-import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 if TYPE_CHECKING:
@@ -55,7 +54,8 @@ class V2XNetwork:
                  update_rate_hz: float = 2.0,
                  enable_cooperative_perception: bool = True,
                  world=None,
-                 dsrc_config: Optional[DSRCConfig] = None):
+                 dsrc_config: Optional[DSRCConfig] = None,
+                 update_every_n_frames: Optional[int] = None):
         """
         Initialize enhanced V2X network.
 
@@ -72,7 +72,10 @@ class V2XNetwork:
         """
         self.max_range = max_range
         self.update_rate_hz = update_rate_hz
-        self.update_interval = 1.0 / update_rate_hz  # 0.5 s for 2 Hz
+        # Optional exact, frame-count based gate (C7). None = every call to update() runs; the
+        # normal caller (PersistentCARLAServer) already calls it once every N frames.
+        self.update_every_n_frames = update_every_n_frames
+        self.last_update_frame: Optional[int] = None
         self.enable_coop_perception = enable_cooperative_perception
 
         # Vehicle registry
@@ -92,7 +95,6 @@ class V2XNetwork:
         self.threats: Dict[Tuple[int, int], dict] = {}  # (ego, other) → threat_info
 
         # Timing
-        self.last_update_time = 0.0
         self.last_update_sim_time: Optional[float] = None
         self.world = world
 
@@ -105,10 +107,10 @@ class V2XNetwork:
             'max_neighbors': 0,
             'cooperative_shares': 0,
             'total_update_count': 0,          # number of 2 Hz ticks executed
-            'measured_update_hz': 0.0,        # achieved update rate (wall clock)
+            'measured_update_hz': 0.0,        # achieved update rate per SIMULATED second
             'skipped_not_in_snapshot': 0,     # station-frames skipped: actor missing from snapshot
         }
-        self._first_update_wall_time: Optional[float] = None
+        self._first_update_sim_time: Optional[float] = None
 
         # DENM store: (station_id, action_id) → DENM
         self.denm_store: Dict[Tuple[int, int], DENM] = {}
@@ -170,61 +172,54 @@ class V2XNetwork:
 
         logger.debug(f"Vehicle {vehicle_id} unregistered from V2X network")
     
-    def should_update(self) -> bool:
-        """Check if enough time has passed for 2 Hz update"""
-        current_time = time.time()
-        return (current_time - self.last_update_time) >= self.update_interval
-    
     # ── Update ─────────────────────────────────────────────────────────────────
 
     def update(self, snapshot=None, force: bool = False) -> bool:
         """
         V2X update — BSM tick + RSU MAP/SPAT + VRU VRUAM.
 
-        Uses the 2 Hz gate of the BSM update.
+        Gated only if ``update_every_n_frames`` was given (exact frame counts); otherwise every
+        call updates.
         Returns True only when an update was performed.
         """
-        updated = self._update_bsm(snapshot=snapshot, force=force)
-        if not updated:
+        sim_time = self._update_bsm(snapshot=snapshot, force=force)
+        if sim_time is None:
             return False
 
-        sim_time = self._last_sim_time()
         self._update_rsu(sim_time)
         self._update_vru(snapshot, sim_time)
         return True
 
-    def _update_bsm(self, snapshot=None, force: bool = False) -> bool:
+    def _update_bsm(self, snapshot=None, force: bool = False) -> Optional[float]:
         """
-        Update V2X network at 2 Hz rate.
+        BSM part of a V2X update.
         
         Args:
             snapshot: CARLA WorldSnapshot (fresh data)
             force: Force update regardless of timing
         
         Returns:
-            True if update was performed
+            The simulation time of the update, or None if no update was performed
         """
         if snapshot is None and self.world:
             snapshot = self.world.get_snapshot()
         
         if snapshot is None:
             logger.warning("No snapshot available for V2X update")
-            return False
+            return None
 
-        sim_time = self._extract_snapshot_time(snapshot)
+        sim_time = float(snapshot.timestamp.elapsed_seconds)
+        frame = getattr(snapshot, 'frame', None)
 
-        # Gate by simulation time when available for deterministic 2 Hz behavior.
-        if not force:
-            if sim_time is not None and self.last_update_sim_time is not None:
-                if (sim_time - self.last_update_sim_time) < self.update_interval:
-                    return False
-            elif not self.should_update():
-                return False
+        # Exact integer gate (C7): no floating-point simulation-time comparison, no wall clock.
+        if (not force and self.update_every_n_frames is not None
+                and frame is not None and self.last_update_frame is not None
+                and frame - self.last_update_frame < self.update_every_n_frames):
+            return None
 
-        current_time = time.time()
-        self.last_update_time = current_time
-        if sim_time is not None:
-            self.last_update_sim_time = sim_time
+        self.last_update_sim_time = sim_time
+        if frame is not None:
+            self.last_update_frame = frame
 
         successful_sends = 0
 
@@ -259,7 +254,7 @@ class V2XNetwork:
         self._assess_threats()
 
         # ── Phase 5: Statistics ───────────────────────────────────────────────
-        self._update_stats()
+        self._update_stats(sim_time)
         self.stats['total_messages_sent'] += successful_sends
 
         logger.debug(
@@ -268,7 +263,7 @@ class V2XNetwork:
             self.stats['average_neighbors'],
             self._dsrc_channel.stats.get('prr', 1.0),
         )
-        return True
+        return sim_time
     
     def _create_bsm(self, vehicle: carla.Actor, vehicle_id: int, 
                     snapshot) -> Optional[BSMCore]:
@@ -281,16 +276,6 @@ class V2XNetwork:
             static=self._static.get(vehicle_id),
         )
 
-    def _extract_snapshot_time(self, snapshot) -> Optional[float]:
-        """Extract simulation time in seconds from a CARLA WorldSnapshot."""
-        try:
-            if hasattr(snapshot, 'timestamp') and snapshot.timestamp is not None:
-                if hasattr(snapshot.timestamp, 'elapsed_seconds'):
-                    return float(snapshot.timestamp.elapsed_seconds)
-        except Exception:
-            return None
-        return None
-    
     def _discover_neighbors(self):
         """
         Discover neighbours within the cooperative awareness zone.
@@ -361,7 +346,7 @@ class V2XNetwork:
                     'timestamp': bsm1.timestamp
                 }
     
-    def _update_stats(self):
+    def _update_stats(self, sim_time: float):
         """Update network statistics (called once per 2 Hz update)."""
         n = self.stats['total_update_count'] + 1
         self.stats['total_update_count'] = n
@@ -382,15 +367,15 @@ class V2XNetwork:
         else:
             self.stats['average_neighbors'] = 0.0
 
-        # Measured update Hz (uses wall clock; available from 2nd update onward)
-        now = time.time()
-        if self._first_update_wall_time is None:
-            self._first_update_wall_time = now
-        elapsed_wall = now - self._first_update_wall_time
-        if n > 1 and elapsed_wall > 0.0:
+        # Achieved update rate per simulated second (from the 2nd update on). The wall-clock
+        # real-time factor is a property of the simulation loop, not of this model (S12).
+        if self._first_update_sim_time is None:
+            self._first_update_sim_time = sim_time
+        elapsed_sim = sim_time - self._first_update_sim_time
+        if n > 1 and elapsed_sim > 0.0:
             # Exclude the first update from the denominator to avoid startup skew
-            self.stats['measured_update_hz'] = (n - 1) / elapsed_wall
-        
+            self.stats['measured_update_hz'] = (n - 1) / elapsed_sim
+
     def get_neighbors(self, vehicle_id: int) -> List[BSMCore]:
         """
         Get BSM messages from neighboring vehicles.
@@ -613,14 +598,6 @@ class V2XNetwork:
         self.vru_messages.pop(vru_id, None)
 
     # ── Internal helpers ───────────────────────────────────────────────────────
-
-    def _last_sim_time(self) -> float:
-        """Return last known simulation time or fall back to wall clock."""
-        t = self.last_update_sim_time
-        if t is not None:
-            return t
-        import time
-        return time.time()
 
     def _update_rsu(self, sim_time: float) -> None:
         """Generate MAP and SPAT from all registered RSUs."""

@@ -113,8 +113,9 @@ class MockSnapshotTimestamp:
 
 
 class MockWorldSnapshot:
-    def __init__(self, vehicles, elapsed_seconds, transform_overrides=None):
+    def __init__(self, vehicles, elapsed_seconds, transform_overrides=None, frame=None):
         self.vehicles = vehicles
+        self.frame = frame
         self.timestamp = MockSnapshotTimestamp(elapsed_seconds)
         self.transform_overrides = transform_overrides or {}
 
@@ -232,20 +233,31 @@ class TestScientificIntegrity(unittest.TestCase):
         self.assertTrue(net.update(snapshot=snap2, force=True))
         self.assertAlmostEqual(net.get_distance(1, 2), 30.0)
 
-    def test_non_forced_update_respects_2hz_sim_time(self):
+    def test_frame_gate_is_exact_and_ignores_float_simulation_time(self):
+        """C7: the optional gate counts frames. 20 FPS, 2 Hz -> every 10th frame, no drift."""
+        world = MockWorld()
+        v1 = MockVehicle(1, x=0.0)
+        net = V2XNetwork(max_range=200.0, update_rate_hz=2.0, world=world,
+                         dsrc_config=_transparent_dsrc(), update_every_n_frames=10)
+        net.register(1, v1)
+        sim_t, performed = 0.0, []
+        for frame in range(1, 2001):                 # 100 simulated seconds at 20 FPS
+            sim_t += 0.05                            # float accumulation: 0.4999999... after 10 steps
+            snap = MockWorldSnapshot([v1], elapsed_seconds=sim_t, frame=frame)
+            if net.update(snapshot=snap, force=False):
+                performed.append(frame)
+        # the old sim-time gate compared (t - last) < 0.5 and skipped ~23 % of the updates
+        self.assertEqual(len(performed), 200)
+        self.assertEqual(performed[0], 1)
+        self.assertTrue(all(b - a == 10 for a, b in zip(performed, performed[1:])))
+
+    def test_no_gate_by_default_every_call_updates(self):
         world = MockWorld()
         v1 = MockVehicle(1, x=0.0)
         net = V2XNetwork(max_range=200.0, update_rate_hz=2.0, world=world, dsrc_config=_transparent_dsrc())
         net.register(1, v1)
-
-        snap0 = MockWorldSnapshot([v1], elapsed_seconds=0.0)
-        self.assertTrue(net.update(snapshot=snap0, force=False))
-
-        snap1 = MockWorldSnapshot([v1], elapsed_seconds=0.2)
-        self.assertFalse(net.update(snapshot=snap1, force=False))
-
-        snap2 = MockWorldSnapshot([v1], elapsed_seconds=0.5)
-        self.assertTrue(net.update(snapshot=snap2, force=False))
+        for i in range(5):
+            self.assertTrue(net.update(snapshot=MockWorldSnapshot([v1], elapsed_seconds=i * 0.01), force=False))
 
     def test_threat_timestamp_uses_bsm_sim_time(self):
         """Threat entries should use simulation BSM time, not wall-clock time."""
@@ -335,24 +347,18 @@ class TestV2XStatsScientificValidity(unittest.TestCase):
             net.update(snapshot=snap, force=True)
         self.assertEqual(net.stats['total_update_count'], 5)
 
-    def test_measured_update_hz_is_near_target(self):
-        """measured_update_hz should converge toward target_hz within ±20%."""
-        import time as _time
+    def test_measured_update_hz_is_in_simulated_time(self):
+        """S12: the achieved rate is per simulated second, independent of how fast we run."""
         net, vehicles, world = self._make_net_with_neighbors(n_vehicles=2)
-        target_hz = 2.0
-        interval = 1.0 / target_hz
-        # Simulate 10 updates, each separated by ~0.5 s wall time using mocked time.
-        # We can't control wall clock, so just assert the value is set after >1s elapsed.
-        # Use force=True with real wall time; run fast but accept any reasonable value.
-        for tick in range(1, 12):
-            snap = MockWorldSnapshot(vehicles, elapsed_seconds=tick * interval)
+        for tick in range(0, 11):
+            snap = MockWorldSnapshot(vehicles, elapsed_seconds=tick * 0.5)   # exactly 2 Hz sim time
             net.update(snapshot=snap, force=True)
-            _time.sleep(0.001)  # minimal real time to allow denominator growth
+        self.assertAlmostEqual(net.stats['measured_update_hz'], 2.0, places=9)
 
-        hz = net.stats['measured_update_hz']
-        # After minimal sleep the Hz will be very high; assert it is a positive finite number
-        self.assertGreater(hz, 0.0)
-        self.assertTrue(math.isfinite(hz))
+        net2, vehicles2, _ = self._make_net_with_neighbors(n_vehicles=2)
+        for tick in range(0, 11):
+            net2.update(snapshot=MockWorldSnapshot(vehicles2, elapsed_seconds=tick * 1.0), force=True)
+        self.assertAlmostEqual(net2.stats['measured_update_hz'], 1.0, places=9)
 
     # ------------------------------------------------------------------ #
     # Cumulative average neighbors (Welford running mean)                  #
