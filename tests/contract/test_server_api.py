@@ -260,3 +260,8 @@ def test_stop_with_world_requests_shutdown(client, world):
             break
         import time; time.sleep(0.05)
     assert world.stopped
+
+
+@pytest.mark.parametrize("rate", [-0.1, 1.5])
+def test_connect_rejects_penetration_rate_outside_0_1(client, rate):
+    assert client.post("/admin/connect", json={"v2x_penetration_rate": rate}, headers=AUTH).status_code == 422

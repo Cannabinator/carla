@@ -179,3 +179,76 @@ def test_v2x_failure_does_not_stop_the_simulation(env):
     assert srv._tick_thread.is_alive() and srv._running
     assert srv._frame > f0 + 10
     assert srv.submit(lambda: 42).result(5) == 42
+
+
+# ── S3: V2X penetration rate of background traffic (decision D2) ────────────────
+
+def _spawn_background(srv, n):
+    srv.submit(srv.spawn_background_traffic, n).result(5)
+    return sorted((a.transform.location.x, a.bp.id) for a in srv._background_vehicles)
+
+
+def test_default_penetration_equips_every_background_vehicle(env):
+    rec, make = env
+    srv = make()
+    _spawn_background(srv, 12)
+    assert len(srv.v2x_network.vehicles) == 12
+    assert srv.get_status()["v2x_stations"] == 12 and srv.get_status()["v2x_penetration_rate"] == 1.0
+
+
+def test_zero_penetration_equips_no_background_vehicle_but_clients_still_transmit(env):
+    rec, make = env
+    srv = make(v2x_penetration_rate=0.0)
+    _spawn_background(srv, 12)
+    assert len(srv.v2x_network.vehicles) == 0
+    session, actor_id = _join(srv)
+    assert set(srv.v2x_network.vehicles) == {actor_id}
+
+
+def test_partial_penetration_is_a_seeded_subset(env):
+    rec, make = env
+
+    def run(seed):
+        srv = make(v2x_penetration_rate=0.5, seed=seed)
+        _spawn_background(srv, 30)
+        chosen = sorted(srv.v2x_network.vehicles)
+        # identify the equipped ones by spawn position, since actor ids differ between runs
+        pos = sorted(srv._background_vehicles[[a.id for a in srv._background_vehicles].index(i)].transform.location.x
+                     for i in chosen)
+        srv.stop()
+        return pos
+
+    first = run(5)
+    assert 5 <= len(first) <= 25, "a rate of 0.5 should equip roughly half of 30 vehicles"
+    assert run(5) == first, "same seed must give the same equipped vehicles"
+    assert run(6) != first
+
+
+def test_penetration_rate_does_not_change_which_vehicles_spawn(env):
+    """The equipped choice has its own random stream (checked: traffic layout is identical)."""
+    rec, make = env
+
+    def layout(rate):
+        srv = make(v2x_penetration_rate=rate, seed=11)
+        out = _spawn_background(srv, 15)
+        srv.stop()
+        return out
+
+    assert layout(0.0) == layout(1.0) == layout(0.4)
+
+
+def test_stations_are_removed_when_the_traffic_is_cleared(env):
+    rec, make = env
+    srv = make()
+    _spawn_background(srv, 8)
+    session, actor_id = _join(srv)
+    assert len(srv.v2x_network.vehicles) == 9
+    srv.submit(srv.despawn_background_traffic).result(5)
+    assert set(srv.v2x_network.vehicles) == {actor_id}
+
+
+def test_penetration_with_v2x_disabled_is_harmless(env):
+    rec, make = env
+    srv = make(v2x_enabled=False)
+    _spawn_background(srv, 5)
+    assert srv.v2x_network is None and len(srv._background_vehicles) == 5

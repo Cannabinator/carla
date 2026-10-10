@@ -74,6 +74,9 @@ class PersistentCARLAServer:
 
         # Seeded RNG for spawn points / blueprints (defect C8)
         self._rng = random.Random(config.seed)
+        # separate stream for the V2X-equipped choice, so changing the penetration rate does not
+        # change which spawn points / blueprints the traffic gets
+        self._v2x_rng = random.Random(config.seed + 1)
 
         # CARLA handles
         self.client: Optional[carla.Client] = None
@@ -86,6 +89,7 @@ class PersistentCARLAServer:
 
         # Managed actors (touched only by the simulation thread; other threads may len() them)
         self._background_vehicles: List[carla.Actor] = []
+        self._v2x_background_ids: set = set()  # background vehicles registered as V2X stations
         self._pedestrians: List[carla.Actor] = []
         self._pedestrian_controllers: List[carla.Actor] = []
         self._client_vehicles: Dict[str, carla.Actor] = {}  # session_id → actor
@@ -393,10 +397,28 @@ class PersistentCARLAServer:
             actor = self.world.get_actor(r.actor_id)
             if actor:
                 self._background_vehicles.append(actor)
+                self._maybe_register_background(actor)
                 spawned += 1
 
-        logger.info("Spawned %d / %d background vehicles", spawned, count)
+        logger.info(
+            "Spawned %d / %d background vehicles (%d V2X stations in total)",
+            spawned, count, len(self._v2x_background_ids),
+        )
         return spawned
+
+    def _unregister_background_stations(self) -> None:
+        if self.v2x_network is not None:
+            for actor_id in self._v2x_background_ids:
+                self.v2x_network.unregister(actor_id)
+        self._v2x_background_ids.clear()
+
+    def _maybe_register_background(self, actor) -> None:
+        """S3: make a background vehicle a V2X station with probability penetration_rate (seeded)."""
+        if self.v2x_network is None:
+            return
+        if self._v2x_rng.random() < self.config.v2x_penetration_rate:
+            self.v2x_network.register(actor.id, actor)
+            self._v2x_background_ids.add(actor.id)
 
     def despawn_background_traffic(self) -> int:
         """Destroy all admin-managed background vehicles."""
@@ -404,6 +426,7 @@ class PersistentCARLAServer:
         count = len(self._background_vehicles)
         if count == 0:
             return 0
+        self._unregister_background_stations()
         batch = [carla.command.DestroyActor(v) for v in self._background_vehicles]
         self.client.apply_batch_sync(batch, False)
         self._background_vehicles.clear()
@@ -608,6 +631,8 @@ class PersistentCARLAServer:
             "active_sessions": len(self.sessions.get_active_sessions()),
             "client_vehicles": len(self._client_vehicles),
             "v2x_enabled": v2x is not None,
+            "v2x_stations": len(getattr(v2x, "vehicles", {})),
+            "v2x_penetration_rate": self.config.v2x_penetration_rate,
             "v2x_range": self.v2x_range if v2x else 0,
             "rsu_count": len(getattr(v2x, "_rsus", {})),
             "vru_count": len(getattr(v2x, "_vrus", {})),
@@ -804,6 +829,7 @@ class PersistentCARLAServer:
                 logger.warning("LiDAR cleanup for session %s: %s", sid, exc)
         self._client_lidar_collectors.clear()
 
+        self._unregister_background_stations()
         all_actors = (
             list(self._client_vehicles.values())
             + self._background_vehicles

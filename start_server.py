@@ -20,6 +20,7 @@ Options
 --port PORT         Web server port          (default: 8000)
 --no-v2x            Disable the V2X network
 --v2x-range M       V2X cooperative range in metres (default: 75)
+--v2x-penetration F Share of background vehicles that are V2X stations, 0..1 (default: 1.0)
 """
 
 import argparse
@@ -69,6 +70,8 @@ def _parse_args() -> argparse.Namespace:
                    help="Disable V2X network")
     p.add_argument("--v2x-range", type=float, default=75.0,
                    help="V2X cooperative range in metres")
+    p.add_argument("--v2x-penetration", type=float, default=1.0,
+                   help="Share of background vehicles that are V2X stations, 0..1 (default: 1.0)")
     p.add_argument("--tm-port", type=int, default=8001,
                    help="CARLA Traffic Manager port")
     return p.parse_args()
@@ -121,6 +124,7 @@ def main() -> None:
                 port=args.carla_port,
                 v2x_enabled=not args.no_v2x,
                 v2x_range_m=args.v2x_range,
+                v2x_penetration_rate=args.v2x_penetration,
                 tm_port=args.tm_port,
                 web_port=args.port,
             ))

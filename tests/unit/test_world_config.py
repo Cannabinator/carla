@@ -32,3 +32,13 @@ def test_v2x_every_n_frames(rate, n):
 def test_config_is_immutable():
     with pytest.raises(ValidationError):
         WorldConfig(host="h").port = 1
+
+
+@pytest.mark.parametrize("rate", [-0.1, 1.01, 5])
+def test_penetration_rate_must_be_a_fraction(rate):
+    with pytest.raises(ValidationError):
+        WorldConfig(host="h", v2x_penetration_rate=rate)
+
+
+def test_penetration_rate_default_is_all_equipped():
+    assert WorldConfig(host="h").v2x_penetration_rate == 1.0

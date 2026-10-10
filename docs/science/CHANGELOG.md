@@ -242,3 +242,23 @@ Documentation and naming only; the channel computes exactly what it did.
   Monte Carlo (0.7905) and the code path (0.7904) agree; the table uses the grid value.
 - Not done: recalibration (decision D5: keep parameters, fix documentation), correlated shadowing, a real MAC
   model, a decision threshold instead of the logistic.
+
+## Phase 3, model change S3 - background traffic can be V2X stations (decision D2, 2026-10-10)
+
+IMPORTANT: this changes what the persistent server simulates by default.
+Before: only the joined client vehicles were V2X stations. Background traffic (and its autopilot
+neighbours) never transmitted, so the channel saw only the clients: contender count N = number of clients
+(typically 1-5), neighbour tables existed only between clients, and the NLOS blocker set was the clients.
+After: each spawned background vehicle becomes a station with probability `v2x_penetration_rate`
+(default **1.0**, i.e. all equipped; `0.0` reproduces the old behaviour). The choice uses a seeded stream
+of its own (`seed + 1`), so changing the rate does not change which vehicles spawn. Clients are always
+stations. Option: `WorldConfig.v2x_penetration_rate`, `/admin/connect` field `v2x_penetration_rate`,
+CLI `--v2x-penetration`, status fields `v2x_stations`, `v2x_penetration_rate`.
+Effect on the contention factor (model.md, `p_csma(N)`), N = stations within 300 m of the transmitter:
+- 1 client + 0 equipped background: N = 1 -> 1.000 (before)
+- 1 client + 25 equipped background: N = 26 -> 0.882
+- 1 client + 50 equipped background: N = 51 -> 0.779
+- 1 client + 100 equipped background: N = 101 -> 0.607
+(the contention term is experimental, see model.md). Also: more stations means more BSMs per update, more
+neighbours, more NLOS blockers, and roughly N^2 channel evaluations per update (cost grows quadratically).
+Not changed: pedestrians remain VRUs registered as before (no penetration rate for them yet).
