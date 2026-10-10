@@ -13,7 +13,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from src.v2x.channel.dsrc_logdistance import DSRCChannel, DSRCConfig
+from src.v2x.channel.dsrc_logdistance import DSRCChannel
 
 CSMA_PINNED = {
     1: 1.0,
