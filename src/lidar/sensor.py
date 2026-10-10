@@ -525,6 +525,10 @@ class LidarManager:
                 return info
         return None
 
+    def record_raw_ids(self) -> set:
+        """Ids of sensors marked for raw recording (snapshot; any thread)."""
+        return {i["sensor_id"] for i in self._info if i["record_raw"]}
+
     def get_frame(self, sensor_id: int) -> Optional[LidarFrame]:
         return self._latest.get(sensor_id)
 

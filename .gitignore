@@ -69,3 +69,6 @@ V2V_IMPLEMENTATION.md
 *.notes
 
 .env
+
+# recorded runs
+runs/

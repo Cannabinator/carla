@@ -40,7 +40,7 @@ def test_admin_page_shows_every_card_and_runs_clean(new_page, fake_server):
     for card in ("connection", "run", "population", "config", "rsus", "denm", "sessions", "lidar", "hub"):
         assert pg.is_visible(f"#card-{card}"), card
     pg.wait_for_function("document.querySelector('#conn-state').textContent.includes('running')")
-    assert "not available" in pg.inner_text("#card-run")
+    assert pg.is_enabled("#run-start") and "Record" in pg.inner_text("#card-run")
     pg.wait_for_selector("#rsu-table tbody tr", timeout=15000)
     assert pg.locator("#rsu-table tbody tr").count() == 9
     pg.assert_clean(allow=("403",))

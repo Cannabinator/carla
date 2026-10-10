@@ -6,12 +6,13 @@ Public ones follow ``observer_public``: when it is false they need the admin tok
 
 import logging
 import sys
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from fastapi import APIRouter, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
+from src.recording.recorder import DEFAULT_RECORD, RunActiveError
 from src.server.admin_routes import check_admin_token
 from src.server.route_utils import on_sim_thread
 from src.server.world_config import HOT_FIELDS, config_schema
@@ -59,7 +60,7 @@ async def get_status(x_admin_token: Optional[str] = Header(default=None)):
         "sim_time": run.sim_time if run else None,
         "real_time_factor": run.data.get("real_time_factor") if run else None,
         "fixed_delta_seconds": _world.fixed_delta_seconds, "v2x_enabled": status["v2x_enabled"],
-        "active_sessions": status["active_sessions"], "run_active": False,     # recording: Phase 7
+        "active_sessions": status["active_sessions"], "run_active": _world.run_status() is not None,
         "observer_public": _world.observer_public,
         "fake": bool(getattr(sys.modules.get("carla"), "IS_FAKE", False)),   # a synthetic world, not CARLA
     }
@@ -184,3 +185,54 @@ async def cancel_denm(station_id: int, action_id: int, x_admin_token: str = Head
     if not await on_sim_thread(world, lambda: world.cancel_denm(station_id, action_id)):
         raise HTTPException(status_code=404, detail="no such DENM")
     return {"cancelled": True}
+
+
+# ── recorded runs ─────────────────────────────────────────────────────────────────────────────────
+
+class RunRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=64, description="Shown in the run id and the manifest")
+    record: List[str] = Field(default_factory=lambda: list(DEFAULT_RECORD),
+                              description="links, stations, messages, lidar_meta, raw_lidar")
+    config: Optional[Dict[str, Any]] = Field(default=None, description="Hot configuration fields applied before the run starts")
+
+
+@router.post("/api/runs", status_code=201, summary="Start recording a run (admin)")
+async def start_run(req: RunRequest, x_admin_token: str = Header(...)):
+    check_admin_token(x_admin_token)
+    world = _ready()
+    try:
+        return await on_sim_thread(world, lambda: world.start_run(req.name, req.record, req.config))
+    except RunActiveError as exc:
+        raise HTTPException(status_code=409, detail={"error": "run_active", "message": str(exc)})
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail={"error": "restart_required", "message": str(exc)})
+    except ValueError as exc:
+        errors = getattr(exc, "errors", None)
+        raise HTTPException(status_code=422, detail=errors(include_url=False, include_context=False) if callable(errors) else str(exc))
+
+
+@router.post("/api/runs/current/stop", summary="Stop the active run (admin)")
+async def stop_run(x_admin_token: str = Header(...)):
+    check_admin_token(x_admin_token)
+    world = _ready()
+    try:
+        return await on_sim_thread(world, lambda: world.stop_run("stopped by admin"))
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.get("/api/runs", summary="Recorded runs and the active one (admin)")
+async def list_runs(x_admin_token: str = Header(...)):
+    check_admin_token(x_admin_token)
+    world = _ready()
+    return {"active": world.run_status(), "runs": world.list_runs()}
+
+
+@router.get("/api/runs/{run_id}/manifest", summary="The manifest of a run (admin)")
+async def run_manifest(run_id: str, x_admin_token: str = Header(...)):
+    check_admin_token(x_admin_token)
+    world = _ready()
+    try:
+        return world.run_manifest(run_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))

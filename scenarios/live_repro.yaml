@@ -1,0 +1,13 @@
+# Used by tests/integration/test_reproducibility_live.py against a real CARLA (host/port are filled in by the test).
+name: live-repro
+seed: 11
+fake: false
+host: localhost
+port: 2000
+duration_frames: 400
+spawn:
+  vehicles: 20
+  pedestrians: 5
+record: [links, stations, messages]
+commands:
+  - {frame: 100, action: inject_denm, x: 0, y: 0, cause_code: ACCIDENT, relevance_distance_m: 300, duration_s: 5}

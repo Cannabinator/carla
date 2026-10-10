@@ -165,3 +165,39 @@ def test_rsu_list_and_patch(client, world):
     assert client.patch("/api/v2x/rsus/5", json={"enabled": True}, headers=ADMIN).status_code == 404       # vehicles are not RSUs
     assert client.patch("/api/v2x/rsus/-1", json={"tx_power_dbm": 99}, headers=ADMIN).status_code == 422
     assert client.patch("/api/v2x/rsus/-1", json={"enabled": True}).status_code == 422
+
+
+# ── runs ──────────────────────────────────────────────────────────────────────────────────────────
+
+def test_runs_need_the_admin_token(client, world):
+    assert client.post("/api/runs", json={"name": "x"}).status_code == 422
+    assert client.post("/api/runs", json={"name": "x"}, headers={"X-Admin-Token": "bad"}).status_code == 403
+    assert client.get("/api/runs", headers={"X-Admin-Token": "bad"}).status_code == 403
+    assert client.get("/api/runs/anything/manifest").status_code == 422
+    assert client.post("/api/runs/current/stop").status_code == 422
+
+
+def test_run_lifecycle_and_refusals(client, world):
+    assert client.get("/api/status").json()["run_active"] is False
+    r = client.post("/api/runs", json={"name": "cross", "record": ["links", "stations"]}, headers=ADMIN)
+    assert r.status_code == 201 and r.json()["run_id"].endswith("_cross")
+    assert client.get("/api/status").json()["run_active"] is True
+    again = client.post("/api/runs", json={"name": "second"}, headers=ADMIN)
+    assert again.status_code == 409 and again.json()["detail"]["error"] == "run_active"
+    listing = client.get("/api/runs", headers=ADMIN).json()
+    assert listing["active"]["name"] == "cross" and listing["runs"] == []
+    assert client.post("/api/runs/current/stop", headers=ADMIN).json()["status"] == "finished"
+    assert client.post("/api/runs/current/stop", headers=ADMIN).status_code == 404
+    rid = r.json()["run_id"]
+    assert client.get("/api/runs", headers=ADMIN).json()["runs"][0]["run_id"] == rid
+    assert client.get(f"/api/runs/{rid}/manifest", headers=ADMIN).json()["schema_version"] == 1
+    assert client.get("/api/runs/nope/manifest", headers=ADMIN).status_code == 404
+
+
+def test_run_request_is_validated(client, world):
+    assert client.post("/api/runs", json={"name": ""}, headers=ADMIN).status_code == 422
+    assert client.post("/api/runs", json={"name": "x", "record": ["nonsense"]}, headers=ADMIN).status_code == 422
+    r = client.post("/api/runs", json={"name": "x", "config": {"fixed_delta_seconds": 0.1}}, headers=ADMIN)
+    assert r.status_code == 409 and r.json()["detail"]["error"] == "restart_required"
+    ok = client.post("/api/runs", json={"name": "x", "config": {"awareness_range_m": 90.0}}, headers=ADMIN)
+    assert ok.status_code == 201 and client.get("/api/config").json()["awareness_range_m"] == 90.0

@@ -119,6 +119,36 @@ Road network: lane polylines and junction boxes
 * headers: `x-admin-token`
 * success: 200
 
+### `GET /api/runs`
+
+Recorded runs and the active one (admin)
+
+* headers: `x-admin-token`
+* success: 200
+
+### `POST /api/runs`
+
+Start recording a run (admin)
+
+* headers: `x-admin-token`
+* body: `RunRequest` (name, record, config)
+* success: 201
+
+### `POST /api/runs/current/stop`
+
+Stop the active run (admin)
+
+* headers: `x-admin-token`
+* success: 200
+
+### `GET /api/runs/{run_id}/manifest`
+
+The manifest of a run (admin)
+
+* headers: `x-admin-token`
+* parameters: run_id (path)
+* success: 200
+
 ### `GET /api/status`
 
 Server status (public)

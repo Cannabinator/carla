@@ -75,7 +75,7 @@ async function showAdmin() {
   page = initObserver(app, { role: 'admin' });
   if (new URLSearchParams(location.search).has('debug')) window.carlaDebug = { ...page, app, get config() { return config; } };
   app.hub.connect();
-  await Promise.all([connectionCard(), populationCard(), configCard(), rsuCard(), denmCard(), sessionsCard(), lidarCard(), hubCard()]);
+  await Promise.all([connectionCard(), runCard(), populationCard(), configCard(), rsuCard(), denmCard(), sessionsCard(), lidarCard(), hubCard()]);
 }
 
 // ── connection ──────────────────────────────────────────────────────────────────────────────────
@@ -107,6 +107,70 @@ async function connectionCard() {
   });
   await refresh();
   setInterval(refresh, 2000);
+}
+
+// ── run and recording ───────────────────────────────────────────────────────────────────────────
+const RECORD_KINDS = [['links', 'every link (v2x_links.jsonl)', true], ['stations', 'station ground truth', true], ['messages', 'sent messages', true],
+  ['lidar_meta', 'LiDAR frame metadata', true], ['raw_lidar', 'raw LiDAR frames (large)', false]];
+
+async function runCard() {
+  const box = $('run-record');
+  for (const [k, label, on] of RECORD_KINDS) {
+    const l = el('label');
+    l.style.display = 'block';
+    const cb = el('input');
+    cb.type = 'checkbox'; cb.checked = on; cb.value = k;
+    l.append(cb, ` ${label}`);
+    box.appendChild(l);
+  }
+  $('run-start').addEventListener('click', async () => {
+    const record = [...box.querySelectorAll('input:checked')].map((i) => i.value);
+    try {
+      const r = await api.post('/api/runs', { name: $('run-name').value, record });
+      toast(`run ${r.run_id} started at frame ${r.start_frame}`, 'ok', 5000);
+      refresh();
+    } catch { /* 409 when a run is active: shown */ }
+  });
+  $('run-stop').addEventListener('click', async () => {
+    try { const r = await api.post('/api/runs/current/stop'); toast(`run ${r.run_id}: ${r.status}`, r.status === 'finished' ? 'ok' : 'error', 6000); refresh(); } catch { /* shown */ }
+  });
+  async function refresh() {
+    let r;
+    try { r = await api.get('/api/runs', { quiet: true }); } catch { return; }
+    const a = r.active;
+    $('run-badge').textContent = a ? 'recording' : 'no run';
+    $('run-badge').className = `badge ${a ? 'state-active' : ''}`;
+    $('run-start').disabled = !!a;
+    $('run-stop').disabled = !a;
+    const dl = $('run-status');
+    dl.textContent = '';
+    if (a) {
+      const row = (k, v, title) => dl.append(Object.assign(el('dt'), { textContent: k }), Object.assign(el('dd'), { textContent: v, title: title || '' }));
+      row('run', a.run_id);
+      row('V2X updates written', u.count(a.v2x_updates));
+      row('links written', u.count(a.links_written));
+      row('LiDAR frames', u.count(a.lidar_frames));
+      row('written', u.bytes(a.bytes_written));
+      row('writer queue', `${u.percent(a.queue_fill, 0)} of ${a.queue_max}`, 'if it ever fills, the run FAILS instead of dropping data');
+      row('disk free', u.bytes(a.disk_free_bytes));
+      if (a.error) row('error', a.error);
+    }
+    setRows($('run-table').tBodies[0], r.runs.slice(0, 15), (run) => {
+      const tr = el('tr');
+      tr.append(td(run.run_id), td(run.status || u.DASH), td(String(run.frames ?? u.DASH), 'num'),
+        td(button('Manifest', async () => {
+          try {
+            const m = await api.get(`/api/runs/${run.run_id}/manifest`);
+            const pre = $('run-manifest');
+            pre.hidden = false;
+            pre.textContent = JSON.stringify(m, null, 2);
+          } catch { /* shown */ }
+        })));
+      return tr;
+    });
+  }
+  store.on('run.status', refresh);
+  await refresh();
 }
 
 // ── population ──────────────────────────────────────────────────────────────────────────────────

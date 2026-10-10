@@ -142,3 +142,15 @@ def test_ended_sessions_are_listed_for_a_while_then_forgotten():
     a.ended_at = datetime.now(timezone.utc) - timedelta(seconds=700)
     assert sm.prune_ended(600) == 1
     assert sm.get_session(a.session_id) is None and sm.get_session(b.session_id) is b
+
+
+def test_event_listeners_see_every_entry_and_a_broken_one_breaks_nothing():
+    log = EventLog(10)
+    seen = []
+    log.add_listener(seen.append)
+    log.add_listener(lambda e: 1 / 0)
+    assert log.add("a", x=1) == 1 and log.add("b") == 2
+    assert [e["kind"] for e in seen] == ["a", "b"] and seen[0]["data"] == {"x": 1}
+    log.remove_listener(seen.append)
+    log.add("c")
+    assert len(seen) == 2

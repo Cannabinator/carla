@@ -51,3 +51,21 @@ Things a reader of results from this platform must know. Items marked **fix plan
 * The LiDAR path is the old one until Phase 4: sensor-to-world transform written by hand (L1, **may be wrong
   on slopes**), wall-clock timestamps, not frame-synchronised with V2X (L2/L3), enabled only at join, fixed
   configuration (L4), points decimated before they are stored (L5).
+
+## Reproducibility of runs (Phase 7)
+
+- `python -m src.cli run scenario.yaml` starts the world paused, sets it up and starts the recording on the simulation
+  thread, then lets it tick without wall-clock pacing; each scripted command runs just before the tick with its index.
+  On the **fake world** two runs of one scenario give byte-identical `stations.jsonl`, `v2x_links.jsonl`, `messages.jsonl`,
+  `lidar_meta.jsonl` and raw LiDAR files (tested; `events.jsonl` carries wall-clock times and differs on purpose).
+- On a **real CARLA** this is *not verified*. CARLA's physics and its Traffic Manager are not guaranteed to be
+  deterministic, even with a fixed seed, synchronous mode and a fixed step. `tests/integration/test_reproducibility_live.py`
+  runs a scenario twice and prints the first diverging line. Until it has been run on the lab machine, treat runs on CARLA
+  as seeded but **not** reproducible, and write the first divergence frame and its cause here when it is known.
+- What the recording does guarantee even without that: every number in the V2X files was computed from the stations
+  recorded next to it (`stations.jsonl` is the ground truth of the same update), so an analysis never needs the simulator.
+- Scripted commands count ticks from the release of the paused loop. A command whose target does not exist at that tick
+  (for example "first vehicle" with none spawned) fails loudly (event `scripted_command_failed`, logged) and the run
+  continues; the manifest keeps the scenario so this is visible afterwards.
+- LiDAR sensors in scenarios are pinned by default: the wall-clock keep-alive release would make a run depend on wall time.
+

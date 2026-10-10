@@ -59,6 +59,12 @@ class WorldConfig(BaseModel):
     v2x_links_max_rows: int = Field(default=2000, ge=1)
     event_log_size: int = Field(default=1000, ge=10)
 
+    # Pace the simulation to wall-clock time (True) or tick as fast as possible (False: headless, reproducible runs)
+    realtime: bool = True
+    # Where runs are recorded (one directory per run) and how many items the writer queue holds before a run fails
+    runs_dir: str = "runs"
+    recorder_queue_max: int = Field(default=400, ge=10)
+
     # web server port, only used to reject a clashing tm_port
     web_port: int = 8000
 

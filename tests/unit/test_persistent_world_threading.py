@@ -649,3 +649,87 @@ def test_rsu_can_be_disabled_changed_and_enabled_again(env):
         srv.submit(srv.set_rsu, 5, True).result(5)
     kinds = [e["data"]["field"] for e in srv.events.since(0)[0] if e["kind"] == "rsu_changed"]
     assert kinds.count("enabled") == 2 and kinds.count("tx_power_dbm") == 1
+
+
+# ── recorded runs on the (stub) world ─────────────────────────────────────────────────────────────
+
+def test_a_run_records_v2x_updates_events_and_a_manifest_with_hashes(env, tmp_path):
+    import json
+    rec, make = env
+    srv = make(runs_dir=str(tmp_path / "runs"))
+    _join(srv)
+    info = srv.submit(srv.start_run, "unit run", ("links", "stations", "messages")).result(5)
+    run_dir = tmp_path / "runs" / info["run_id"]
+    assert info["run_id"].endswith("_unit-run") and (run_dir / "manifest.json").exists()
+    assert json.loads((run_dir / "manifest.json").read_text())["status"] == "running"
+    assert _wait(lambda: srv.get_run_status() and (srv.get_run_status().data["recording"] or {}).get("run_id") == info["run_id"], 10), "run.status shows the active run"
+    assert _wait(lambda: srv.run_status() and srv.run_status()["v2x_updates"] >= 3, 10)
+    srv.submit(srv.apply_config, {"awareness_range_m": 111.0}).result(5)
+    out = srv.submit(srv.stop_run, "test").result(10)
+    assert out["status"] == "finished" and srv.run_status() is None
+    m = json.loads((run_dir / "manifest.json").read_text())
+    assert m["status"] == "finished" and m["stop_reason"] == "test" and m["frames_recorded"] >= 3 and m["ended_utc"]
+    assert m["config"]["seed"] == 42 and m["config"]["runs_dir"].endswith("runs") and m["seeds"]["world_seed"] == 42
+    assert m["git"]["sha"] and m["versions"]["python"] and m["map"].endswith("TestTown") and m["start_frame"] > 0
+    assert set(m["files"]) == {"events.jsonl", "messages.jsonl", "stations.jsonl", "v2x_links.jsonl"}
+    assert m["files"]["stations.jsonl"]["lines"] == m["frames_recorded"] and len(m["files"]["stations.jsonl"]["sha256"]) == 64
+    assert [c["field"] for c in m["config_changes"]] == ["awareness_range_m"] and m["config_changes"][0]["new"] == 111.0
+    kinds = [json.loads(l)["kind"] for l in (run_dir / "events.jsonl").read_text().splitlines()]
+    assert kinds[0] == "run_started" and "config_changed" in kinds and kinds[-1] == "run_stopped"
+    with pytest.raises(LookupError):
+        srv.submit(srv.stop_run).result(5)
+
+
+def test_only_one_run_at_a_time_and_a_run_ends_with_the_world(env, tmp_path):
+    import json
+    from src.recording.recorder import RunActiveError
+    rec, make = env
+    srv = make(runs_dir=str(tmp_path / "runs"))
+    info = srv.submit(srv.start_run, "a").result(5)
+    with pytest.raises(RunActiveError):
+        srv.submit(srv.start_run, "b").result(5)
+    srv.stop()
+    m = json.loads((tmp_path / "runs" / info["run_id"] / "manifest.json").read_text())
+    assert m["status"] == "finished" and m["stop_reason"] == "world stopped"
+
+
+def test_a_failing_writer_stops_the_run_and_says_why(env, tmp_path, monkeypatch):
+    import json
+    from src.recording import recorder as recmod
+    rec, make = env
+    srv = make(runs_dir=str(tmp_path / "runs"))
+    monkeypatch.setattr(recmod.RunRecorder, "_v2x", lambda self, frame: (_ for _ in ()).throw(OSError("disk full")))
+    info = srv.submit(srv.start_run, "doomed", ("links",)).result(5)
+    assert _wait(lambda: srv.run_status() is None, 10), "the run must stop by itself"
+    m = json.loads((tmp_path / "runs" / info["run_id"] / "manifest.json").read_text())
+    assert m["status"] == "failed" and "disk full" in m["error"] and m["stop_reason"] == "writer error"
+    assert any(e["kind"] == "run_stopped" for e in srv.events.since(0)[0])
+
+
+def test_scripted_commands_run_before_the_tick_with_their_index_and_the_loop_can_start_paused(env):
+    rec, make = env
+    from src.server.world_config import WorldConfig
+    import src.server.persistent_world as pw
+    srv = pw.PersistentCARLAServer(WorldConfig(host="stub", realtime=False))
+    srv.start(paused=True)
+    try:
+        seen = []
+        srv.at_tick(0, lambda: seen.append(("t0", srv.tick_index, rec.frame)))
+        srv.at_tick(3, lambda: seen.append(("t3", srv.tick_index, rec.frame)))
+        f0 = rec.frame
+        time.sleep(0.3)
+        assert rec.frame == f0 and srv.tick_index == 0, "paused: no tick"
+        assert srv.submit(lambda: "ran while paused").result(5) == "ran while paused"
+        srv.resume()
+        assert _wait(lambda: srv.tick_index >= 5, 10)
+        assert seen == [("t0", 0, f0), ("t3", 3, f0 + 3)], seen
+    finally:
+        srv.stop()
+
+
+def test_realtime_false_ticks_much_faster_than_the_step(env):
+    rec, make = env
+    make(realtime=False)
+    f0 = rec.frame
+    time.sleep(1.0)
+    assert rec.frame - f0 > 100, "50 ms steps would give 20 frames per second"

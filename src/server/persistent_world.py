@@ -33,10 +33,12 @@ from __future__ import annotations
 import logging
 import math
 import random
+import re
 import threading
 import time
 from collections import deque
 from concurrent.futures import Future
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 import carla
@@ -45,6 +47,9 @@ from src.lidar.carla_backend import CarlaSensorBackend
 from src.lidar.sensor import LidarLimits, LidarManager
 from src.lidar.stream import SensorStream
 from src.server.events import EventLog
+from src.recording.manifest import (git_info, library_versions, read_manifest, run_id as make_run_id, sha256_file, utc_now,
+                                    write_manifest)
+from src.recording.recorder import DEFAULT_RECORD, RunActiveError, RunRecorder
 from src.server.map_geometry import build_map_geometry
 from src.server.published import Published
 from src.server.v2x_publisher import V2XPublisher
@@ -123,6 +128,11 @@ class PersistentCARLAServer:
         self._denm_action = 0
         self._denm_expiry: Dict[tuple, float] = {}     # (station_id, action_id) -> sim time at which it ends
         self._rsu_disabled: Dict[int, Any] = {}        # intersection_id -> RoadSideUnit taken out of the network
+        self._paused = False                           # headless runs: the loop drains commands but does not tick
+        self._tick_index = 0                           # ticks done by the loop since it started (0 = nothing ticked yet)
+        self._hooks: Dict[int, List[Callable[[], None]]] = {}   # scripted commands: run just before tick number N
+        self._hooks_lock = threading.Lock()
+        self._run: Optional[Dict[str, Any]] = None     # the active recorded run
 
         # V2X network (created in start())
         self.v2x_network = None
@@ -173,8 +183,10 @@ class PersistentCARLAServer:
     # Lifecycle                                                            #
     # ------------------------------------------------------------------ #
 
-    def start(self) -> None:
-        """Connect to CARLA, apply settings, start the simulation thread."""
+    def start(self, paused: bool = False) -> None:
+        """Connect to CARLA, apply settings, start the simulation thread. ``paused``: the thread only executes submitted
+        commands until ``resume()`` (reproducible runs set the world up first, then let it tick)."""
+        self._paused = paused
         cfg = self.config
         logger.info("Connecting to CARLA at %s:%s", self.host, self.port)
 
@@ -256,10 +268,13 @@ class PersistentCARLAServer:
         try:
             from src.v2x.network import V2XNetwork
             from src.v2x.rsu import RoadSideUnit, group_traffic_lights
+            from src.v2x.channel.dsrc_logdistance import DSRCConfig
             self.v2x_network = V2XNetwork(
                 awareness_range_m=self.awareness_range_m,
                 update_rate_hz=self.config.v2x_update_rate_hz,
                 world=self.world,
+                # the run seed seeds the radio too (its default, 42, equals WorldConfig's default seed: nothing changes there)
+                dsrc_config=DSRCConfig(random_seed=self.config.seed),
             )
             # One RSU per intersection (CARLA light group), deterministic order, optionally capped
             all_tl = list(self.world.get_actors().filter("traffic.traffic_light"))
@@ -300,24 +315,33 @@ class PersistentCARLAServer:
         logger.info("Tick loop running…")
         every_n = self.config.v2x_every_n_frames
         while self._running:
+            if self._paused:
+                self._exec.drain()
+                time.sleep(0.001)
+                continue
             # Real-time pacing: record wall-clock time before tick so we can
             # sleep the remainder of fixed_delta_seconds afterwards.
             tick_start = time.monotonic()
             try:
                 self._exec.drain()  # submitted work runs here, at a frame boundary
+                self._run_hooks()
                 self._tick()
+                self._tick_index += 1
                 snapshot = self.world.get_snapshot()
                 self._sim_time = float(snapshot.timestamp.elapsed_seconds)
                 self._publish_telemetry(snapshot)
                 self._collect_lidar(snapshot)
                 self._run_periodic_work(snapshot, every_n)
                 self._publish_hub_views(snapshot, tick_start)
+                self._check_run()
 
             except RuntimeError as exc:
                 logger.error("Tick error (frame %d): %s", self._frame, exc)
                 time.sleep(0.1)  # brief back-off before retry
                 continue
 
+            if not self.config.realtime:
+                continue                    # as fast as possible: no pacing
             elapsed = time.monotonic() - tick_start
             sleep_for = self.fixed_delta_seconds - elapsed
             if sleep_for > 0.001:
@@ -325,12 +349,155 @@ class PersistentCARLAServer:
 
         logger.info("Tick loop stopped at frame %d", self._frame)
 
+    # ------------------------------------------------------------------ #
+    # Scripted commands and recorded runs                                  #
+    # ------------------------------------------------------------------ #
+
+    def resume(self) -> None:
+        self._paused = False
+
+    @property
+    def tick_index(self) -> int:
+        return self._tick_index
+
+    def at_tick(self, index: int, fn: Callable[[], None]) -> None:
+        """Run ``fn`` on the simulation thread just before tick number ``index`` (0 = the first tick of the loop), after any
+        submitted command. Commands scripted this way execute at the same frame in every run."""
+        with self._hooks_lock:
+            self._hooks.setdefault(index, []).append(fn)
+
+    def _run_hooks(self) -> None:
+        with self._hooks_lock:
+            due = self._hooks.pop(self._tick_index, [])
+        for fn in due:
+            try:
+                fn()
+            except Exception:
+                logger.exception("scripted command failed before tick %d", self._tick_index)
+                self._event("scripted_command_failed", tick=self._tick_index)
+
+    def start_run(self, name: str, record=DEFAULT_RECORD, config_overrides: Optional[Dict[str, Any]] = None,
+                  scenario: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Start recording a run (simulation thread). One run at a time. ``config_overrides`` are hot fields applied first."""
+        self._require_sim_thread()
+        if self._run is not None:
+            raise RunActiveError(f"a run is already active ({self._run['run_id']})")
+        if config_overrides:
+            self.apply_config(config_overrides)
+        now = utc_now()
+        git = git_info()
+        rid = make_run_id(now, git["short_sha"], name)
+        root = Path(self.config.runs_dir)
+        recorder = RunRecorder(root / rid, record, self.config.recorder_queue_max)
+        dsrc = getattr(getattr(self.v2x_network, "_dsrc_channel", None), "config", None)
+        sensors = self.lidar.list_sensors() if self.lidar else []
+        manifest: Dict[str, Any] = {
+            "schema_version": 1, "run_id": rid, "name": name, "status": "running", "started_utc": now.isoformat(),
+            "ended_utc": None, "git": git, "versions": library_versions(), "carla": self._carla_info(),
+            "map": self._map_name, "fixed_delta_seconds": self.fixed_delta_seconds, "start_frame": self._frame,
+            "start_sim_time": self._sim_time, "recorded": sorted(recorder.record),
+            "config": self.config.model_dump(),
+            "seeds": {"world_seed": self.config.seed, "v2x_penetration_rng": self.config.seed + 1,
+                      "dsrc_channel": getattr(dsrc, "random_seed", None)},
+            "channel": {k: v for k, v in vars(dsrc).items() if isinstance(v, (int, float, bool, str))} if dsrc else None,
+            "lidar_sensors_at_start": sensors,
+            "warnings": sorted({w for s in sensors for w in self._lidar_warnings(s)}),
+            "scenario": scenario, "config_changes": [], "frames_recorded": None, "files": None,
+        }
+        write_manifest(root / rid, manifest)
+        listener = lambda e: recorder.submit("event", e)  # noqa: E731
+        self.events.add_listener(listener)
+        self._run = {"run_id": rid, "name": name, "recorder": recorder, "manifest": manifest, "dir": root / rid,
+                     "listener": listener, "start_frame": self._frame, "tick0": self._tick_index}
+        self._event("run_started", run_id=rid, name=name, recorded=sorted(recorder.record))
+        return {"run_id": rid, "dir": str(root / rid), "start_frame": self._frame}
+
+    def _carla_info(self) -> Dict[str, Any]:
+        info: Dict[str, Any] = {"module": getattr(carla, "__version__", "unknown"), "fake": bool(getattr(carla, "IS_FAKE", False))}
+        try:
+            info["server_version"] = self.client.get_server_version()
+        except Exception:
+            info["server_version"] = "unknown"
+        return info
+
+    def _lidar_warnings(self, sensor: Dict[str, Any]) -> List[str]:
+        from src.lidar.config import LidarConfig
+        return LidarConfig.model_validate(sensor["config"]).warnings(self.fixed_delta_seconds)
+
+    def stop_run(self, reason: str = "stopped") -> Dict[str, Any]:
+        """Finish the active run: write what is queued, hash the files, finalise the manifest (simulation thread)."""
+        self._require_sim_thread()
+        run = self._run
+        if run is None:
+            raise LookupError("no run is active")
+        self._run = None
+        rec: RunRecorder = run["recorder"]
+        self._event("run_stopped", run_id=run["run_id"], reason=reason)       # recorded too: the listener is still attached
+        self.events.remove_listener(run["listener"])
+        rec.close()
+        m = run["manifest"]
+        failed = rec.error is not None
+        files: Dict[str, Any] = {}
+        for f in sorted(run["dir"].iterdir()):
+            if f.is_file() and f.name != "manifest.json":
+                files[f.name] = sha256_file(f)
+        raw_dir = run["dir"] / "lidar"
+        if raw_dir.exists():
+            raws = [p for p in raw_dir.rglob("*.bin")]
+            files["lidar/"] = {"files": len(raws), "bytes": sum(p.stat().st_size for p in raws)}
+        changes = [{"frame": e["frame"], **e["data"]} for e in self.events.since(0, 100000)[0]
+                   if e["kind"] == "config_changed" and e["frame"] is not None and e["frame"] >= run["start_frame"]]
+        m.update({"status": "failed" if failed else "finished", "ended_utc": utc_now().isoformat(), "stop_reason": reason,
+                  "end_frame": self._frame, "end_sim_time": self._sim_time, "frames_recorded": rec.v2x_updates,
+                  "ticks": self._tick_index - run["tick0"], "files": files, "config_changes": changes,
+                  "error": rec.error, "writer": rec.status()})
+        write_manifest(run["dir"], m)
+        return {"run_id": run["run_id"], "status": m["status"], "error": rec.error, "frames_recorded": rec.v2x_updates}
+
+    def _check_run(self) -> None:
+        run = self._run
+        if run is not None and run["recorder"].error:
+            logger.error("stopping run %s: %s", run["run_id"], run["recorder"].error)
+            self.stop_run("writer error")
+
+    def _record(self, kind: str, payload: Any) -> None:
+        run = self._run
+        if run is None:
+            return
+        if kind == "v2x":
+            if run.get("last_v2x") == payload.frame:         # the same update twice is not two updates
+                return
+            run["last_v2x"] = payload.frame
+        run["recorder"].submit(kind, payload)
+
+    def run_status(self) -> Optional[Dict[str, Any]]:
+        run = self._run
+        if run is None:
+            return None
+        return {"run_id": run["run_id"], "name": run["name"], "start_frame": run["start_frame"], **run["recorder"].status()}
+
+    def list_runs(self) -> List[Dict[str, Any]]:
+        from src.recording.manifest import list_runs
+        return list_runs(Path(self.config.runs_dir))
+
+    def run_manifest(self, run_id: str) -> Dict[str, Any]:
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", run_id) or run_id.startswith("."):
+            raise LookupError("bad run id")
+        d = Path(self.config.runs_dir) / run_id
+        if not (d / "manifest.json").exists():
+            raise LookupError(f"no run {run_id}")
+        return read_manifest(d)
+
     def _collect_lidar(self, snapshot) -> None:
         """Sensor state machine and this frame's measurements. An error here must not stop the simulation."""
         if self.lidar is None:
             return
         try:
-            self.lidar.collect(snapshot.frame, float(snapshot.timestamp.elapsed_seconds))
+            frames = self.lidar.collect(snapshot.frame, float(snapshot.timestamp.elapsed_seconds))
+            if self._run is not None and frames:
+                raw_ids = self.lidar.record_raw_ids()
+                for f in frames:
+                    self._record("lidar", (f, f.sensor_id in raw_ids))
             for e in self.lidar.drain_events():
                 self.events.add("lidar_" + e["to"], frame=e["frame"], sim_time=snapshot.timestamp.elapsed_seconds,
                                 **{k: v for k, v in e.items() if k != "frame"})
@@ -375,6 +542,7 @@ class PersistentCARLAServer:
                     frame = self.v2x_network.get_frame()
                     if frame is not None:
                         self._v2x_pub.on_update(frame)
+                        self._record("v2x", frame)
                     self._v2x_ms.append((time.monotonic() - t0) * 1000.0)
                 except Exception:
                     logger.exception("V2X update failed at frame %d (simulation continues)", self._frame)
@@ -517,7 +685,7 @@ class PersistentCARLAServer:
             "sessions": len(self.sessions.get_active_sessions()),
             "background_vehicles": len(self._background_vehicles), "pedestrians": len(self._pedestrians),
             "lidar_budget": self.lidar.budget() if self.lidar else None,
-            "recording": None,                    # Phase 7: frames written, writer queue fill, disk usage
+            "recording": self.run_status(),
         })
 
     # ------------------------------------------------------------------ #
@@ -1138,6 +1306,11 @@ class PersistentCARLAServer:
     def _cleanup_all(self) -> None:
         """Destroy everything this server spawned (simulation thread, or start() failure)."""
         # Stop LiDAR sensor callbacks before batch-destroying vehicles
+        if self._run is not None:
+            try:
+                self.stop_run("world stopped")
+            except Exception:
+                logger.exception("could not finish the active run")
         if self.lidar is not None:
             self.lidar.shutdown()
 

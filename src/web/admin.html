@@ -92,8 +92,15 @@
   </section>
 
   <section class="panel" id="card-run" aria-labelledby="c-run-h">
-    <header><h2 id="c-run-h">Run and recording</h2><span class="badge">not available</span></header>
-    <p class="empty">Named, seeded runs with recording (links, stations, messages, raw LiDAR) and headless scenarios arrive with Phase 7 of the refactor; this server does not record yet. Nothing on this page claims otherwise.</p>
+    <header><h2 id="c-run-h">Run and recording</h2><span class="badge" id="run-badge">no run</span></header>
+    <div class="field"><label for="run-name">Name</label><input id="run-name" value="run" maxlength="64"><span></span></div>
+    <div class="field"><label>Record</label><span id="run-record"></span><span></span></div>
+    <div class="row"><button class="primary" id="run-start">Start run</button><button class="danger" id="run-stop" disabled>Stop run</button></div>
+    <dl class="kv" id="run-status"></dl>
+    <p class="stamp">Files go to <code>runs/&lt;time&gt;_&lt;git sha&gt;_&lt;name&gt;/</code> on the server. The seed and the other restart settings come from Connection; headless, reproducible runs: <code>python -m src.cli run scenario.yaml</code>.</p>
+    <h3>Earlier runs</h3>
+    <div class="scroll"><table id="run-table"><thead><tr><th>run</th><th>status</th><th class="num">updates</th><th></th></tr></thead><tbody></tbody></table></div>
+    <pre id="run-manifest" class="json" hidden></pre>
   </section>
 
   <section class="panel" id="card-population" aria-labelledby="c-pop-h">

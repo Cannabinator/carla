@@ -18,13 +18,30 @@ class EventLog:
         self._items: Deque[Dict[str, Any]] = deque(maxlen=max_size)
         self._lock = threading.Lock()
         self._seq = 0
+        self._listeners: list = []
 
     def add(self, kind: str, *, frame: Optional[int] = None, sim_time: Optional[float] = None, **data: Any) -> int:
         with self._lock:
             self._seq += 1
-            self._items.append({"seq": self._seq, "kind": kind, "frame": frame, "sim_time": sim_time,
-                                "wall_time": time.time(), "data": data})
-            return self._seq
+            entry = {"seq": self._seq, "kind": kind, "frame": frame, "sim_time": sim_time, "wall_time": time.time(), "data": data}
+            self._items.append(entry)
+            listeners = list(self._listeners)
+            seq = self._seq
+        for fn in listeners:                     # outside the lock: a listener may take its time (it must not block, though)
+            try:
+                fn(entry)
+            except Exception:                    # a broken listener must not break whoever logged the event
+                pass
+        return seq
+
+    def add_listener(self, fn) -> None:
+        with self._lock:
+            self._listeners.append(fn)
+
+    def remove_listener(self, fn) -> None:
+        with self._lock:
+            if fn in self._listeners:
+                self._listeners.remove(fn)
 
     @property
     def last_seq(self) -> int:

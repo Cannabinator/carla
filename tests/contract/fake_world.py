@@ -6,6 +6,7 @@ production code; only spawning and telemetry are faked.
 
 from concurrent.futures import Future
 
+from src.recording.recorder import RunActiveError
 from src.lidar.sensor import LidarLimits, LidarManager
 from src.server.events import EventLog
 from src.server.published import Published
@@ -39,6 +40,8 @@ class FakeWorld:
                              "lanes": [[[0.0, 0.0], [2.0, 0.0], [4.0, 0.0]]]}
         self._map_cached = False
         self.denms = {}
+        self._active_run = None
+        self._runs = []
         self._denm_action = 0
         self.rsus = {-1: {"station_id": -1, "intersection_id": 1, "x": 0.0, "y": 0.0, "z": 3.5, "enabled": True,
                           "tx_power_dbm": 33.0, "broadcast_range_m": 300.0}}
@@ -129,6 +132,37 @@ class FakeWorld:
             r["tx_power_dbm"] = tx_power_dbm
         self.publish_world_state([])
         return {"station_id": station_id, "applied_at_frame": self.frame_no, "enabled": r["enabled"], "tx_power_dbm": r["tx_power_dbm"]}
+
+    # --- recorded runs (in memory; the real recorder is tested on its own and end to end) ----
+    def run_status(self):
+        return self._active_run
+
+    def start_run(self, name, record=(), config_overrides=None, scenario=None):
+        if self._active_run is not None:
+            raise RunActiveError(f"a run is already active ({self._active_run['run_id']})")
+        if config_overrides:
+            self.apply_config(config_overrides)
+        bad = sorted(set(record) - {"links", "stations", "messages", "lidar_meta", "raw_lidar"})
+        if bad:
+            raise ValueError(f"cannot record {', '.join(bad)}")
+        self._active_run = {"run_id": f"20260101T000000Z_abc1234_{name}", "name": name, "recorded": sorted(record)}
+        return {"run_id": self._active_run["run_id"], "dir": "runs/x", "start_frame": self.frame_no}
+
+    def stop_run(self, reason="stopped"):
+        if self._active_run is None:
+            raise LookupError("no run is active")
+        run, self._active_run = self._active_run, None
+        self._runs.append({**run, "status": "finished"})
+        return {"run_id": run["run_id"], "status": "finished", "error": None, "frames_recorded": 0}
+
+    def list_runs(self):
+        return [{"run_id": r["run_id"], "name": r["name"], "status": r["status"]} for r in self._runs]
+
+    def run_manifest(self, run_id):
+        for r in self._runs:
+            if r["run_id"] == run_id:
+                return {**r, "schema_version": 1}
+        raise LookupError(f"no run {run_id}")
 
     # --- map / DENM -----------------------------------------------------------
     def get_map_geometry(self):
