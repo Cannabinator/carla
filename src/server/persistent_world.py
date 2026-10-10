@@ -35,6 +35,7 @@ import math
 import random
 import threading
 import time
+from collections import deque
 from concurrent.futures import Future
 from typing import Any, Callable, Dict, List, Optional
 
@@ -44,6 +45,9 @@ from src.lidar.carla_backend import CarlaSensorBackend
 from src.lidar.sensor import LidarLimits, LidarManager
 from src.lidar.stream import SensorStream
 from src.server.events import EventLog
+from src.server.map_geometry import build_map_geometry
+from src.server.published import Published
+from src.server.v2x_publisher import V2XPublisher
 from src.server.session_manager import SessionManager
 from src.server.sim_executor import SimThreadExecutor
 from src.server.world_config import WorldConfig
@@ -57,6 +61,7 @@ _FALLBACK_BLUEPRINTS = [
     "vehicle.lincoln.mkz_2020",
 ]
 
+_RUN_STATUS_EVERY_N_FRAMES = 20     # ~1 Hz at 20 FPS
 _SESSION_CHECK_EVERY_N_FRAMES = 20  # ~1 s at 20 FPS (expiry and the disconnect grace period)
 
 
@@ -103,6 +108,20 @@ class PersistentCARLAServer:
         self.session_disconnect_grace_s = config.session_disconnect_grace_s
         # things that happened (thread-safe; read by the "events" topic)
         self.events = EventLog(config.event_log_size)
+        # what the WebSocket hub reads (each is replaced as a whole by the simulation thread)
+        self.observer_public = config.observer_public
+        self.v2x_links_max_rows = config.v2x_links_max_rows
+        self._v2x_pub = V2XPublisher()
+        self._world_state: Optional[Published] = None
+        self._world_state_version = 0
+        self._run_status: Optional[Published] = None
+        self._tick_ms: deque = deque(maxlen=400)       # work time of recent ticks (without the pacing sleep)
+        self._tick_wall: deque = deque(maxlen=41)      # wall-clock start of recent ticks, for the real-time factor
+        self._v2x_ms: deque = deque(maxlen=50)
+        self._sim_time = 0.0                           # CARLA elapsed seconds of the last tick
+        self._map_geometry: Optional[dict] = None      # cached road network (built once per world)
+        self._denm_action = 0
+        self._denm_expiry: Dict[tuple, float] = {}     # (station_id, action_id) -> sim time at which it ends
 
         # V2X network (created in start())
         self.v2x_network = None
@@ -287,9 +306,11 @@ class PersistentCARLAServer:
                 self._exec.drain()  # submitted work runs here, at a frame boundary
                 self._tick()
                 snapshot = self.world.get_snapshot()
+                self._sim_time = float(snapshot.timestamp.elapsed_seconds)
                 self._publish_telemetry(snapshot)
                 self._collect_lidar(snapshot)
                 self._run_periodic_work(snapshot, every_n)
+                self._publish_hub_views(snapshot, tick_start)
 
             except RuntimeError as exc:
                 logger.error("Tick error (frame %d): %s", self._frame, exc)
@@ -340,10 +361,16 @@ class PersistentCARLAServer:
         """V2X update and session expiry. An error here must not stop the simulation."""
         if self._frame - self._last_v2x_frame >= every_n:
             self._last_v2x_frame = self._frame
+            self._expire_denms()
             if self.v2x_network is not None:
                 try:
+                    t0 = time.monotonic()
                     self.v2x_network.update(snapshot)
                     self._publish_v2x()
+                    frame = self.v2x_network.get_frame()
+                    if frame is not None:
+                        self._v2x_pub.on_update(frame)
+                    self._v2x_ms.append((time.monotonic() - t0) * 1000.0)
                 except Exception:
                     logger.exception("V2X update failed at frame %d (simulation continues)", self._frame)
 
@@ -407,8 +434,172 @@ class PersistentCARLAServer:
                 self._event("session_disconnected_removed", client=session.client_name,
                             actor_id=session.vehicle_actor_id, grace_s=self.session_disconnect_grace_s)
 
+    # ------------------------------------------------------------------ #
+    # Views for the WebSocket hub (built on the simulation thread)         #
+    # ------------------------------------------------------------------ #
+
+    def _publish_hub_views(self, snapshot, tick_start: float) -> None:
+        """Ground-truth world state (every ``world_state_every_n_frames``) and run status (about 1 Hz). Failures
+        are logged and never stop the simulation."""
+        self._tick_wall.append(tick_start)
+        self._tick_ms.append((time.monotonic() - tick_start) * 1000.0)
+        try:
+            if snapshot.frame % self.config.world_state_every_n_frames == 0:
+                self._publish_world_state(snapshot)
+            if snapshot.frame % _RUN_STATUS_EVERY_N_FRAMES == 0:
+                self._publish_run_status(snapshot)
+        except Exception:
+            logger.exception("Publishing hub views failed at frame %d (simulation continues)", self._frame)
+
+    def _station_entry(self, actor, snap, kind: str, role: str, name: Optional[str], v2x: bool) -> Optional[dict]:
+        if snap is None:
+            return None
+        t, v = snap.get_transform(), snap.get_velocity()
+        return {"id": actor.id, "kind": kind, "role": role, "name": name, "v2x": v2x,
+                "x": round(t.location.x, 2), "y": round(t.location.y, 2), "z": round(t.location.z, 2),
+                "yaw": round(t.rotation.yaw, 1), "speed_mps": round((v.x ** 2 + v.y ** 2 + v.z ** 2) ** 0.5, 2)}
+
+    def _publish_world_state(self, snapshot) -> None:
+        stations = []
+        names = {s.session_id: s.client_name for s in self.sessions.get_active_sessions()}
+        for sid, actor in self._client_vehicles.items():
+            e = self._station_entry(actor, snapshot.find(actor.id), "vehicle", "client", names.get(sid), True)
+            if e:
+                stations.append(e)
+        for actor in self._background_vehicles:
+            e = self._station_entry(actor, snapshot.find(actor.id), "vehicle", "background", None,
+                                    actor.id in self._v2x_background_ids)
+            if e:
+                stations.append(e)
+        vrus = getattr(self.v2x_network, "_vrus", {})
+        for actor in self._pedestrians:
+            e = self._station_entry(actor, snapshot.find(actor.id), "pedestrian", "background", None, actor.id in vrus)
+            if e:
+                stations.append(e)
+        rsus = []
+        for iid, rsu in getattr(self.v2x_network, "_rsus", {}).items():
+            x, y, z = rsu.config.position
+            rsus.append({"station_id": -int(iid), "intersection_id": iid, "x": round(x, 2), "y": round(y, 2), "z": round(z, 2)})
+        self._world_state_version += 1
+        self._world_state = Published(self._world_state_version, snapshot.frame,
+                                      float(snapshot.timestamp.elapsed_seconds),
+                                      {"map": self._map_name, "stations": stations, "rsus": rsus})
+
+    @staticmethod
+    def _percentiles(values) -> dict:
+        v = sorted(values)
+        if not v:
+            return {"n": 0, "p50": None, "p95": None, "max": None}
+        pick = lambda q: v[min(len(v) - 1, int(round(q * (len(v) - 1))))]  # noqa: E731
+        return {"n": len(v), "p50": round(pick(0.5), 2), "p95": round(pick(0.95), 2), "max": round(v[-1], 2)}
+
+    def _publish_run_status(self, snapshot) -> None:
+        walls = list(self._tick_wall)
+        rtf = None
+        if len(walls) >= 2 and walls[-1] > walls[0]:
+            rtf = round((len(walls) - 1) * self.fixed_delta_seconds / (walls[-1] - walls[0]), 3)
+        sim_time = float(snapshot.timestamp.elapsed_seconds)
+        self._run_status = Published(snapshot.frame // _RUN_STATUS_EVERY_N_FRAMES, snapshot.frame, sim_time, {
+            "running": self._running, "frame": snapshot.frame, "sim_time": sim_time, "map": self._map_name,
+            "fixed_delta_seconds": self.fixed_delta_seconds, "real_time_factor": rtf,
+            "tick_duration_ms": self._percentiles(self._tick_ms),
+            "v2x_update_ms": self._percentiles(self._v2x_ms),
+            "sessions": len(self.sessions.get_active_sessions()),
+            "background_vehicles": len(self._background_vehicles), "pedestrians": len(self._pedestrians),
+            "lidar_budget": self.lidar.budget() if self.lidar else None,
+            "recording": None,                    # Phase 7: frames written, writer queue fill, disk usage
+        })
+
+    # ------------------------------------------------------------------ #
+    # Map and DENM injection (decision D11)                                #
+    # ------------------------------------------------------------------ #
+
+    def get_map_geometry(self) -> dict:
+        """Road network for the map view; built once on the simulation thread, then cached."""
+        self._require_sim_thread()
+        if self._map_geometry is None:
+            self._map_geometry = build_map_geometry(self.world.get_map())
+        return self._map_geometry
+
+    def cached_map_geometry(self) -> Optional[dict]:
+        return self._map_geometry
+
+    def inject_denm(self, x: float, y: float, z: float, cause_code: int, subcause_code: int,
+                    relevance_distance_m: float, information_quality: int,
+                    station_id: Optional[int] = None, duration_s: Optional[float] = None) -> dict:
+        """Create a DENM at a map position (admin action). It is transmitted at every V2X update until it is
+        cancelled or ``duration_s`` of simulation time have passed. Without ``station_id`` a fixed roadside
+        transmitter at the event position sends it (ids -1_000_001 and below; they cannot clash with actors or
+        RSUs)."""
+        from src.v2x.messages.denm import DENM, DENMCauseCode
+        self._require_sim_thread()
+        if self.v2x_network is None:
+            raise ValueError("V2X is disabled")
+        self._denm_action += 1
+        action_id = self._denm_action
+        if station_id is None:
+            station_id = -(1_000_000 + action_id)
+        elif station_id >= 0 and station_id not in self.v2x_network.vehicles:
+            raise ValueError(f"station {station_id} is not a registered V2X vehicle")
+        elif station_id < 0 and -station_id not in getattr(self.v2x_network, "_rsus", {}):
+            raise ValueError(f"station {station_id} is not a registered RSU")
+        now = self._sim_time
+        denm = DENM(station_id=station_id, action_id=action_id, detection_time=now, reference_time=now,
+                    event_position=(x, y, z), cause_code=DENMCauseCode(cause_code), subcause_code=subcause_code,
+                    information_quality=information_quality, relevance_distance=relevance_distance_m)
+        self.v2x_network.publish_denm(denm)
+        expires = None
+        if duration_s is not None:
+            expires = now + duration_s
+            self._denm_expiry[(station_id, action_id)] = expires
+        self._event("denm_injected", station_id=station_id, action_id=action_id, cause_code=int(cause_code),
+                    x=x, y=y, relevance_distance_m=relevance_distance_m, expires_sim_time=expires)
+        return {"station_id": station_id, "action_id": action_id, "expires_sim_time": expires}
+
+    def cancel_denm(self, station_id: int, action_id: int) -> bool:
+        self._require_sim_thread()
+        if self.v2x_network is None:
+            return False
+        self._denm_expiry.pop((station_id, action_id), None)
+        ok = self.v2x_network.cancel_denm(station_id, action_id)
+        if ok:
+            self._event("denm_cancelled", station_id=station_id, action_id=action_id)
+        return ok
+
+    def list_denm(self) -> list:
+        """Active DENMs as plain dicts (any thread; reads the last V2X frame)."""
+        from src.server.published import message_to_dict
+        frame = self.get_v2x_frame()
+        if frame is None:
+            return []
+        return [message_to_dict(m) for msgs in frame.sent.values() for m in msgs if type(m).__name__ == "DENM"]
+
+    def _expire_denms(self) -> None:
+        if not self._denm_expiry or self.v2x_network is None:
+            return
+        for key, end in list(self._denm_expiry.items()):
+            if self._sim_time >= end:
+                del self._denm_expiry[key]
+                if self.v2x_network.cancel_denm(*key):
+                    self._event("denm_expired", station_id=key[0], action_id=key[1])
+
+    def get_world_state(self) -> Optional[Published]:
+        return self._world_state
+
+    def get_v2x_published(self) -> Optional[Published]:
+        return self._v2x_pub.summary
+
+    def get_v2x_frame(self):
+        return self._v2x_pub.frame
+
+    def get_v2x_stats(self) -> Optional[Published]:
+        return self._v2x_pub.stats
+
+    def get_run_status(self) -> Optional[Published]:
+        return self._run_status
+
     def _event(self, kind: str, **data: Any) -> None:
-        self.events.add(kind, frame=self._frame, sim_time=self._frame * self.fixed_delta_seconds, **data)
+        self.events.add(kind, frame=self._frame, sim_time=self._sim_time, **data)
 
     # ------------------------------------------------------------------ #
     # Admin — background traffic  (simulation thread only: use submit())  #

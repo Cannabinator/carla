@@ -1,7 +1,9 @@
 """Helpers for TestClient WebSocket tests: reads with a timeout (a missing message fails the test instead of
 hanging it) and a clean disconnect (see ``connect``)."""
 
+import asyncio
 import contextlib
+import json
 import threading
 import time
 
@@ -49,3 +51,26 @@ def connect(client, path, done=lambda: True):
                     break
                 time.sleep(0.005)
             time.sleep(0.01)
+
+
+class SlowSocket:
+    """Stands in for a WebSocket whose peer reads slowly. Messages from the client are fed by ``feed``."""
+    def __init__(self, send_delay):
+        self.send_delay, self.sent, self.closed_code = send_delay, [], None
+        self._in: "asyncio.Queue[str]" = asyncio.Queue()
+
+    async def accept(self):
+        pass
+
+    async def receive_text(self):
+        return await self._in.get()
+
+    async def send_text(self, text):
+        await asyncio.sleep(self.send_delay)
+        self.sent.append(json.loads(text))
+
+    async def close(self, code=1000):
+        self.closed_code = code
+
+    def feed(self, **msg):
+        self._in.put_nowait(json.dumps(msg))

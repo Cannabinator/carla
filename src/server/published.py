@@ -60,6 +60,12 @@ def link_to_dict(link: LinkResult) -> Dict[str, Any]:
     return {k: to_jsonable(v) for k, v in link._asdict().items()}
 
 
+def links_to_columns(links) -> Dict[str, Any]:
+    """Compact form for many links: ``{"columns": [...], "rows": [[...], ...]}`` (key names once, not per row)."""
+    return {"columns": list(LinkResult._fields),
+            "rows": [[to_jsonable(v) for v in l] for l in links]}
+
+
 def station_to_dict(s: Any) -> Dict[str, Any]:
     return to_jsonable(s)
 

@@ -470,3 +470,43 @@ requested, are configured per request, are collected frame-synchronously and are
   measurement coordinates need no y flip, that `object_idx` of the semantic sensor is the hit actor id, the
   semantic tag table (0..28) and the attribute names for 0.9.16, spawning a sensor in synchronous mode between two
   ticks, and the measurement callback timing relative to `tick()`.
+
+## Phase 5 - API and WebSocket hub (2026-10-10)
+
+No change to any model number. What the server now guarantees (`src/server/ws_hub.py`, `topics.py`, `roles.py`,
+`api_routes.py`, `docs/api.md`, `docs/openapi.json`):
+
+- **Roles and tokens**: admin (`ADMIN_TOKEN`), vehicle (`session_token`, a separate secret returned by join; the
+  session id in the admin list is not a credential for the new API), observer (nobody; read-only, switchable with
+  `observer_public`). WebSocket auth is the first message, never the URL. Nothing an observer can read contains a
+  session id or token (tested for world.state and the LiDAR sensor list; the LiDAR owner is the client name).
+- **Ground truth is not for vehicles** (D10): `world.state`, `v2x.frame`, `v2x.links`, `v2x.stats`, `events` and
+  `run.status` are refused for a vehicle token, a vehicle reads its own telemetry and its own inbox only. A test per
+  ground-truth topic, and mutation checks (removing the role check or the filter rule fails the suite).
+- **`v2x.links` needs a filter** and is capped (`v2x_links_max_rows` = 2000, `truncated` says so). Measured: 2000
+  link rows as keyed objects are 668 kB of JSON, as `columns` + `rows` 208 kB (3.2x smaller, so that is the format).
+- **Slow readers** (acceptance of the phase): delivery is latest-wins per connection and topic, `seq` gaps show the
+  skipped updates, a send that stalls for `send_timeout_s` closes the connection (1013). With the real world on the
+  recording stub, a client that never finishes a read leaves the simulation at the same frame rate (>= 90 % of the
+  frames of an undisturbed run in 2 s; the hub only reads published snapshots).
+- **C11 disconnect grace (D4)**: closing the telemetry socket no longer removes the vehicle at once. The simulation
+  thread removes a session that has had no WebSocket and no sign of life (REST poll, hub auth) for
+  `session_disconnect_grace_s` = 30 s (0 restores the old behaviour); reconnecting in time keeps the session.
+  Session/expiry checks run every second now, not every 5 s.
+- **Published views** are built on the simulation thread: `world.state` (all vehicles and pedestrians at
+  `world_state_rate_hz` = 10, RSUs), V2X summary and `v2x.stats` after each V2X update, `run.status` at 1 Hz with
+  tick duration p50/p95/max, V2X update duration and the real-time factor. Cost per V2X update of the extra work on
+  12,000 links: statistics 8.8 ms, summary 0.01 ms (the update itself is 136 ms at that size, see above).
+- **Channel statistics** (`src/v2x/stats.py`): PRR per 20 m distance bin, separately LOS/NLOS and per link type,
+  drop causes, receive-margin histogram, over the last 20 updates. Links removed by the awareness filter are not
+  counted in the PRR (the radio did not decide them); this is printed with the numbers.
+- **DENM injection (F10, D11)**: `POST /api/v2x/denm` (admin) puts a DENM at a map position with cause code,
+  relevance distance, optional originator and optional duration in simulation seconds; without originator a fixed
+  roadside transmitter at the event sends it. It goes through the channel model like every other message
+  (tested: the receiver sees an I2V link).
+- **`/api/map/geometry`**: lane polylines (a point about every 2 m) and junction boxes, built once on the
+  simulation thread and cached, ETag + gzip. TODO(verify) on CARLA 0.9.16: waypoint stepping, junction box rotation,
+  cost on the real maps (the live test prints lanes/points/seconds).
+- Event log fed by sessions, population changes, DENMs and every LiDAR transition, readable as the `events` topic.
+- `docs/openapi.json` and `docs/api.md` are generated and a test fails when they are out of date, so an API change is
+  always a reviewable diff.

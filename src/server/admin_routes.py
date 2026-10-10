@@ -74,6 +74,11 @@ class TrafficRequest(BaseModel):
 class PedestrianRequest(BaseModel):
     count: int = Field(default=15, ge=1, le=100)
 
+_OPTIONAL_CONFIG_FIELDS = ("lidar_max_sensors", "lidar_max_points_per_second", "lidar_keep_alive_s",
+                           "session_disconnect_grace_s", "observer_public", "world_state_rate_hz",
+                           "v2x_links_max_rows")
+
+
 class ConnectRequest(BaseModel):
     carla_host: str = Field(default="192.168.1.110")
     carla_port: int = Field(default=2000, ge=1, le=65535)
@@ -87,6 +92,14 @@ class ConnectRequest(BaseModel):
     v2x_penetration_rate: float = Field(default=1.0, ge=0.0, le=1.0,
                                         description="Share of background vehicles that are V2X stations")
     tm_port: int = Field(default=8001, ge=1024, le=65535)
+    # optional overrides of the matching WorldConfig fields (null = the default)
+    lidar_max_sensors: Optional[int] = Field(default=None, ge=0, le=64)
+    lidar_max_points_per_second: Optional[int] = Field(default=None, ge=0)
+    lidar_keep_alive_s: Optional[float] = Field(default=None, ge=0.0)
+    session_disconnect_grace_s: Optional[float] = Field(default=None, ge=0.0)
+    observer_public: Optional[bool] = None
+    world_state_rate_hz: Optional[float] = Field(default=None, gt=0)
+    v2x_links_max_rows: Optional[int] = Field(default=None, ge=1)
 
 
 # ------------------------------------------------------------------ #
@@ -136,6 +149,7 @@ async def connect_world(req: ConnectRequest):
             rsu_max_count=req.rsu_max_count,
             v2x_penetration_rate=req.v2x_penetration_rate,
             tm_port=req.tm_port,
+            **{k: v for k, v in req.model_dump().items() if k in _OPTIONAL_CONFIG_FIELDS and v is not None},
         )
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors(include_url=False, include_context=False))

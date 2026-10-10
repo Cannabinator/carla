@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, FrozenSet, List, Optional
 
 from src.lidar.sensor import Principal
-from src.server.published import Published, link_to_dict, message_to_dict, to_jsonable
+from src.server.published import Published, link_to_dict, links_to_columns, message_to_dict, to_jsonable
 
 ADMIN_R, OBSERVER_R, VEHICLE_R = "admin", "observer", "vehicle"
 
@@ -189,7 +189,7 @@ def _links(ctx: ProviderContext) -> Optional[Published]:
             continue
         rows.append(l)
     cap = ctx.source.v2x_links_max_rows
-    data = {"links": [link_to_dict(l) for l in rows[:cap]], "matching": len(rows), "total_links": len(frame.links),
+    data = {**links_to_columns(rows[:cap]), "matching": len(rows), "total_links": len(frame.links),
             "max_rows": cap, "truncated": len(rows) > cap}
     pub = ctx.cache[key] = Published(frame.frame, frame.frame, frame.sim_time, data)
     return pub

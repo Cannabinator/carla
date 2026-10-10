@@ -10,6 +10,7 @@ from src.lidar.sensor import LidarLimits, LidarManager
 from src.server.events import EventLog
 from src.server.published import Published
 from src.server.v2x_publisher import V2XPublisher
+from src.server.world_config import WorldConfig
 from src.server.session_manager import SessionManager
 from tests.unit.lidar_fake import FakeBackend
 
@@ -33,6 +34,12 @@ class FakeWorld:
         self.lidar = LidarManager(self.lidar_backend, LidarLimits(max_sensors=2, max_points_per_second=1_000_000,
                                                                    keep_alive_s=10.0), 0.05, frame_timeout_s=0.0)
         self._streams = {}
+        self.config = WorldConfig(host="fake")
+        self.map_geometry = {"map_name": "Fake", "version": "abc123", "step_m": 2.0, "junctions": [],
+                             "lanes": [[[0.0, 0.0], [2.0, 0.0], [4.0, 0.0]]]}
+        self._map_cached = False
+        self.denms = {}
+        self._denm_action = 0
         # what the hub reads (the real world publishes the same things from its simulation thread)
         self.observer_public = True
         self.v2x_links_max_rows = 2000
@@ -93,6 +100,30 @@ class FakeWorld:
     def get_vehicle_v2x_data(self, session_id):
         return {"neighbors": [], "threats": []}
 
+    # --- map / DENM -----------------------------------------------------------
+    def get_map_geometry(self):
+        self._map_cached = True
+        return self.map_geometry
+
+    def cached_map_geometry(self):
+        return self.map_geometry if self._map_cached else None
+
+    def inject_denm(self, x, y, z, cause_code, subcause_code, relevance_distance_m, information_quality,
+                    station_id=None, duration_s=None):
+        if station_id is not None and station_id not in self.spawned.values():
+            raise ValueError(f"station {station_id} is not a registered V2X vehicle")
+        self._denm_action += 1
+        sid = station_id if station_id is not None else -(1_000_000 + self._denm_action)
+        self.denms[(sid, self._denm_action)] = {"x": x, "y": y, "cause_code": cause_code,
+                                                "relevance_distance_m": relevance_distance_m}
+        return {"station_id": sid, "action_id": self._denm_action, "expires_sim_time": None}
+
+    def cancel_denm(self, station_id, action_id):
+        return self.denms.pop((station_id, action_id), None) is not None
+
+    def list_denm(self):
+        return [{"station_id": k[0], "action_id": k[1], **v} for k, v in self.denms.items()]
+
     # --- published views for the hub ---------------------------------------
     def publish_world_state(self, stations):
         self._world_state_version += 1
@@ -116,7 +147,7 @@ class FakeWorld:
 
     def get_run_status(self):
         return Published(self.frame_no // 20, self.frame_no, self.frame_no * 0.05,
-                         {"running": self._running, "frame": self.frame_no})
+                         {"running": self._running, "frame": self.frame_no, "real_time_factor": 1.0})
 
     # --- LiDAR: the real manager over a fake CARLA backend ---------------
     def lidar_request(self, principal, actor_id, config=None, **kw):

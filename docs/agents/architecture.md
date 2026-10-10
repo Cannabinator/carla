@@ -77,6 +77,10 @@ LiDAR: `src/lidar/` (see the LiDAR section of docs/science/CHANGELOG.md, Phase 4
 - `server/app.py` — FastAPI app, `run_server()` and `set_persistent_world()` (wires the world
   into the admin/client routes). `server/persistent_world.py` — the simulation owner.
 - `server/lidar_routes.py` — LiDAR REST + `/ws/lidar/{sensor_id}`.
+- `server/ws_hub.py`, `topics.py`, `roles.py`, `hub_routes.py` — the multiplexed `/ws` hub (auth first message, topics,
+  latest-wins delivery); `server/api_routes.py` — status, config, map geometry, DENM injection; the whole API is in
+  `docs/api.md` (generated: `python -m src.server.api_docs`).
+- Anything a client reads is *published* by the simulation thread (`Published`, `V2XFrame`) and only read by the hub.
 - `visualization/web/` — frontend pages `admin_panel.html`, `client_join.html`.
 
 ## Data flow (one tick)

@@ -310,3 +310,95 @@ def test_lidar_lifecycle_budget_and_two_viewers(live_world):
     finally:
         live_world.json("DELETE", f"/client/leave/{sid}")
         live_world.json("DELETE", "/admin/traffic", admin=True, timeout=60)
+
+
+# ── API and WebSocket hub (Phase 5) ────────────────────────────────────────────────────────────────
+
+def _hub_collect(sync, ws_base, messages, topics_wanted, seconds=8.0, auth=None):
+    """Connect to /ws, send ``messages``, return {topic: [envelopes]} for ``topics_wanted`` (plus 'error')."""
+    got = {}
+    with sync.connect(ws_base + "/ws", open_timeout=10, max_size=None) as ws:
+        if auth:
+            ws.send(json.dumps({"op": "auth", **auth}))
+        for m in messages:
+            ws.send(json.dumps(m))
+        t0 = time.time()
+        while time.time() - t0 < seconds:
+            try:
+                msg = json.loads(ws.recv(timeout=2))
+            except TimeoutError:
+                break
+            got.setdefault(msg["topic"], []).append(msg)
+            if all(got.get(t) for t in topics_wanted):
+                break
+    return got
+
+
+@pytest.mark.carla
+def test_status_config_and_map_geometry(live_world):
+    status, s = live_world.json("GET", "/api/status")
+    assert status == 200 and s["connected"] is True and s["map"]
+    status, c = live_world.json("GET", "/api/config")
+    assert status == 200 and c["fixed_delta_seconds"] > 0
+    t0 = time.time()
+    status, g = live_world.json("GET", "/api/map/geometry", timeout=120)
+    took = time.time() - t0
+    assert status == 200 and g["lanes"] and g["map_name"], "no road network"
+    pts = sum(len(l) for l in g["lanes"])
+    print(f"\nmap {g['map_name']}: {len(g['lanes'])} lanes, {pts} points, {len(g['junctions'])} junctions, {took:.1f} s")
+    xs = [p[0] for l in g["lanes"] for p in l]
+    assert max(xs) - min(xs) > 50, "lane coordinates look degenerate"
+    status, _, _ = live_world.request("GET", "/api/map/geometry")
+    assert status == 200                              # second call is served from the cache
+
+
+@pytest.mark.carla
+def test_hub_observer_gets_world_state_and_vehicle_is_refused_ground_truth(live_world):
+    sync = pytest.importorskip("websockets.sync.client")
+    status, j = live_world.json("POST", "/client/join", {"client_name": "pytest-hub"})
+    assert status == 200, j
+    try:
+        got = _hub_collect(sync, live_world.ws_base,
+                           [{"op": "subscribe", "topic": "world.state", "max_hz": 5},
+                            {"op": "subscribe", "topic": "run.status"}], ["world.state", "run.status"])
+        ws_msg = got["world.state"][0]
+        assert ws_msg["frame"] and any(s["id"] == j["actor_id"] and s["name"] == "pytest-hub"
+                                       for s in ws_msg["data"]["stations"]), "the joined vehicle is not in world.state"
+        assert j["session_id"] not in json.dumps(ws_msg) and j["session_token"] not in json.dumps(ws_msg)
+        rs = got["run.status"][0]["data"]
+        print(f"\nrun.status: tick p50/p95 {rs['tick_duration_ms']['p50']}/{rs['tick_duration_ms']['p95']} ms, "
+              f"real-time factor {rs['real_time_factor']}")
+
+        veh = _hub_collect(sync, live_world.ws_base,
+                           [{"op": "subscribe", "topic": "world.state"},
+                            {"op": "subscribe", "topic": "session.self"},
+                            {"op": "subscribe", "topic": "v2x.inbox"}],
+                           ["session.self", "v2x.inbox"], auth={"session_token": j["session_token"]})
+        assert veh["error"][0]["code"] == "forbidden" and veh["error"][0]["request"]["topic"] == "world.state"
+        assert veh["session.self"][0]["data"]["telemetry"]["actor_id"] == j["actor_id"]
+        assert veh["v2x.inbox"][0]["data"]["station_id"] == j["actor_id"]
+    finally:
+        live_world.json("DELETE", f"/client/leave/{j['session_id']}")
+
+
+@pytest.mark.carla
+def test_denm_injection_reaches_the_frames_and_can_be_cancelled(live_world):
+    sync = pytest.importorskip("websockets.sync.client")
+    status, j = live_world.json("POST", "/client/join", {"client_name": "pytest-denm"})
+    assert status == 200, j
+    try:
+        # put the event on the joined vehicle: it is certainly inside the relevance area
+        _, st = live_world.json("GET", f"/client/vehicle/{j['session_id']}")
+        status, d = live_world.json("POST", "/api/v2x/denm", {"x": st["x"], "y": st["y"], "cause_code": "OBSTACLE_ON_ROAD",
+                                                               "relevance_distance_m": 300, "duration_s": 600}, admin=True)
+        assert status == 201, d
+        got = _hub_collect(sync, live_world.ws_base,
+                           [{"op": "subscribe", "topic": "v2x.inbox", "filter": {"station_id": j["actor_id"]}}],
+                           [], seconds=6.0, auth={"admin_token": live_world.token})
+        denms = [m for env in got.get("v2x.inbox", []) for m in env["data"]["messages"] if m["msg_type"] == "DENM"]
+        assert denms, "the joined vehicle never received the injected DENM (check the awareness range / channel)"
+        assert denms[0]["message"]["cause_code"] == "OBSTACLE_ON_ROAD" and denms[0]["link"]["link_type"] == "I2V"
+        status, _ = live_world.json("DELETE", f"/api/v2x/denm/{d['station_id']}/{d['action_id']}", admin=True)
+        assert status == 200
+    finally:
+        live_world.json("DELETE", f"/client/leave/{j['session_id']}")

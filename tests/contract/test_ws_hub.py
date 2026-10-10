@@ -301,7 +301,8 @@ def test_links_filters(client, world):
         with connect(client) as ws:
             send(ws, op="subscribe", topic="v2x.links", filter=f)
             m, _ = recv(ws, "v2x.links")
-            return m["data"]
+            d = m["data"]
+            return {**d, "links": [dict(zip(d["columns"], r)) for r in d["rows"]]}
 
     assert [(l["tx_id"], l["rx_id"]) for l in rows(outcome="dropped")["links"]] == [(102, 101)]
     assert len(rows(outcome="delivered")["links"]) == 3
@@ -322,7 +323,7 @@ def test_links_are_capped_and_say_so(client, world):
     with connect(client) as ws:
         send(ws, op="subscribe", topic="v2x.links", filter={"outcome": "all"})
         d = recv(ws, "v2x.links")[0]["data"]
-        assert len(d["links"]) == 3 and d["truncated"] is True and d["matching"] == 14 and d["max_rows"] == 3
+        assert len(d["rows"]) == 3 and d["truncated"] is True and d["matching"] == 14 and d["max_rows"] == 3
 
 
 @pytest.mark.parametrize("bad", [{"station_ids": "101"}, {"station_ids": [1.5]}, {"msg_types": ["XYZ"]},
@@ -406,35 +407,12 @@ def test_no_world_gives_a_not_ready_error(client):
 
 # ── delivery: latest wins, slow clients ───────────────────────────────────────────────────────────
 
-class SlowSocket:
-    """Stands in for a WebSocket whose peer reads slowly. Messages from the client are fed by ``feed``."""
-    def __init__(self, send_delay):
-        self.send_delay, self.sent, self.closed_code = send_delay, [], None
-        self._in: "asyncio.Queue[str]" = asyncio.Queue()
-
-    async def accept(self):
-        pass
-
-    async def receive_text(self):
-        return await self._in.get()
-
-    async def send_text(self, text):
-        await asyncio.sleep(self.send_delay)
-        self.sent.append(json.loads(text))
-
-    async def close(self, code=1000):
-        self.closed_code = code
-
-    def feed(self, **msg):
-        self._in.put_nowait(json.dumps(msg))
-
-
 def test_slow_client_gets_the_latest_state_and_seq_gaps_show_the_skips():
     world = FakeWorld()
 
     async def scenario():
         hub = Hub(world)
-        ws = SlowSocket(send_delay=0.25)
+        ws = ws_helpers.SlowSocket(send_delay=0.25)
         task = asyncio.create_task(hub.serve(ws))
         ws.feed(op="subscribe", topic="world.state", max_hz=10)
         stop = time.monotonic() + 1.6
@@ -463,7 +441,7 @@ def test_a_stalled_client_is_disconnected_instead_of_piling_up():
 
     async def scenario():
         hub = Hub(world, send_timeout_s=0.2)
-        ws = SlowSocket(send_delay=5.0)
+        ws = ws_helpers.SlowSocket(send_delay=5.0)
         task = asyncio.create_task(hub.serve(ws))
         ws.feed(op="subscribe", topic="world.state")
         await asyncio.wait_for(task, timeout=3)

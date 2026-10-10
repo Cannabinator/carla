@@ -433,3 +433,147 @@ def test_lidar_transitions_end_up_in_the_event_log(env):
     _, actor_id = _join(srv)
     srv.submit(srv.lidar_request, ADMIN, actor_id, LidarConfig(), pinned=True).result(5)
     assert _wait(lambda: any(e["kind"] == "lidar_active" for e in srv.events.since(0)[0]))
+
+
+# ── what the WebSocket hub reads ──────────────────────────────────────────────────────────────────
+
+def test_published_world_state_run_status_and_v2x_views(env):
+    import json
+    rec, make = env
+    srv = make()
+    session, actor_id = _join(srv, "car-a")
+    srv.submit(srv.spawn_background_traffic, 3).result(5)
+    srv.submit(srv.spawn_pedestrians, 2).result(5)
+    assert _wait(lambda: srv.get_v2x_frame() is not None and srv.get_run_status() is not None
+                 and srv.get_world_state() is not None, 8)
+
+    ws = srv.get_world_state()
+    by_id = {s["id"]: s for s in ws.data["stations"]}
+    me = by_id[actor_id]
+    assert me["kind"] == "vehicle" and me["role"] == "client" and me["name"] == "car-a" and me["v2x"] is True
+    assert sum(1 for s in ws.data["stations"] if s["role"] == "background" and s["kind"] == "vehicle") == 3
+    assert ws.frame is not None and ws.sim_time == pytest.approx(ws.frame * 0.05, abs=1e-6)
+    text = json.dumps(ws.data)
+    assert session.session_id not in text and session.session_token not in text
+
+    rs = srv.get_run_status().data
+    assert rs["tick_duration_ms"]["p50"] is not None and rs["tick_duration_ms"]["p50"] < 25
+    assert rs["real_time_factor"] is None or 0.5 < rs["real_time_factor"] < 1.5
+    assert rs["sessions"] == 1 and rs["lidar_budget"]["max_sensors"] == 4
+
+    summary = srv.get_v2x_published()
+    assert actor_id in {s["station_id"] for s in summary.data["stations"]} and summary.frame == srv.get_v2x_frame().frame
+    assert srv.get_v2x_stats().data["window_updates"] >= 1
+
+
+def test_world_state_versions_increase_and_follow_the_configured_rate(env):
+    rec, make = env
+    srv = make(world_state_rate_hz=10.0)
+    _join(srv)
+    assert _wait(lambda: srv.get_world_state() is not None)
+    v0, f0 = srv.get_world_state().version, srv.get_world_state().frame
+    time.sleep(1.0)
+    v1, f1 = srv.get_world_state().version, srv.get_world_state().frame
+    assert v1 > v0 and (f1 - f0) / (v1 - v0) == pytest.approx(2.0, abs=0.01)     # every 2nd frame at 20 FPS
+
+
+def test_a_stalled_hub_client_does_not_slow_the_simulation(env):
+    import asyncio
+    from src.server.ws_hub import Hub
+    from tests.contract.ws_helpers import SlowSocket
+    rec, make = env
+    srv = make()
+    _join(srv)
+    srv.submit(srv.spawn_background_traffic, 5).result(5)
+    time.sleep(1.0)
+
+    def frames_in(seconds):
+        f0 = rec.frame
+        time.sleep(seconds)
+        return rec.frame - f0
+
+    baseline = frames_in(2.0)
+
+    async def scenario():
+        hub = Hub(srv, send_timeout_s=30.0)
+        ws = SlowSocket(send_delay=30.0)            # a reader that never finishes reading
+        task = asyncio.create_task(hub.serve(ws))
+        for topic, flt in [("world.state", {}), ("v2x.frame", {}), ("v2x.stats", {}), ("run.status", {}),
+                           ("lidar.sensors", {}), ("events", {}), ("v2x.links", {"outcome": "all"})]:
+            ws.feed(op="subscribe", topic=topic, filter=flt, max_hz=10)
+        await asyncio.sleep(0.3)
+        # the simulation keeps its pace while the hub is blocked in a send
+        loop = asyncio.get_running_loop()
+        f0 = rec.frame
+        await loop.run_in_executor(None, time.sleep, 2.0)
+        advanced = rec.frame - f0
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        return advanced
+
+    with_client = asyncio.run(scenario())
+    assert baseline >= 30, baseline
+    assert with_client >= 0.9 * baseline, (baseline, with_client)
+    p95 = srv.get_run_status()
+    assert p95 is None or p95.data["tick_duration_ms"]["p95"] < 30
+
+
+# ── DENM injection and map geometry on the (stub) world ───────────────────────────────────────────
+
+def test_injected_denm_is_transmitted_listed_and_cancelled(env):
+    rec, make = env
+    srv = make()
+    session, actor_id = _join(srv)
+    assert _wait(lambda: srv.get_v2x_frame() is not None)
+    loc = rec.actors[actor_id].transform.location
+    out = srv.submit(srv.inject_denm, loc.x + 5, loc.y, 0.0, 10, 0, 200.0, 7).result(5)
+    assert out["action_id"] == 1 and out["station_id"] <= -1_000_001 and out["expires_sim_time"] is None
+
+    def denm_links():
+        f = srv.get_v2x_frame()
+        return [l for l in f.links if l.msg_type == "DENM"] if f else []
+    # the stub world has only one V2X vehicle, which is the only possible receiver
+    assert _wait(lambda: srv.list_denm() != []), "DENM never showed up in a V2X frame"
+    assert srv.list_denm()[0]["cause_code"] == "OBSTACLE_ON_ROAD"
+    assert _wait(lambda: any(l.rx_id == actor_id for l in denm_links()))
+    assert any(e["kind"] == "denm_injected" for e in srv.events.since(0)[0])
+
+    assert srv.submit(srv.cancel_denm, out["station_id"], out["action_id"]).result(5) is True
+    assert srv.submit(srv.cancel_denm, out["station_id"], out["action_id"]).result(5) is False
+    assert _wait(lambda: srv.list_denm() == [])
+
+
+def test_injected_denm_with_duration_ends_by_itself(env):
+    rec, make = env
+    srv = make()
+    _join(srv)
+    srv.submit(srv.inject_denm, 0.0, 0.0, 0.0, 2, 0, 100.0, 7, None, 1.0).result(5)
+    assert _wait(lambda: srv.list_denm() != [])
+    assert _wait(lambda: srv.list_denm() == [], 8), "a DENM with duration_s must end"
+    assert any(e["kind"] == "denm_expired" for e in srv.events.since(0)[0])
+
+
+def test_denm_injection_validates_the_originator(env):
+    rec, make = env
+    srv = make()
+    _join(srv)
+    with pytest.raises(ValueError, match="not a registered V2X vehicle"):
+        srv.submit(srv.inject_denm, 0, 0, 0, 2, 0, 100.0, 7, 424242).result(5)
+    with pytest.raises(ValueError, match="not a registered RSU"):
+        srv.submit(srv.inject_denm, 0, 0, 0, 2, 0, 100.0, 7, -5).result(5)
+    with pytest.raises(RuntimeError, match="simulation thread"):
+        srv.inject_denm(0, 0, 0, 2, 0, 100.0, 7)
+
+
+def test_map_geometry_is_built_on_the_sim_thread_once_and_cached(env, monkeypatch):
+    import src.server.persistent_world as pw
+    rec, make = env
+    srv = make()
+    calls = []
+    monkeypatch.setattr(pw, "build_map_geometry", lambda m: calls.append(1) or {"version": "v1", "lanes": []})
+    assert srv.cached_map_geometry() is None
+    a = srv.submit(srv.get_map_geometry).result(5)
+    b = srv.submit(srv.get_map_geometry).result(5)
+    assert a is b and srv.cached_map_geometry() is a and len(calls) == 1
+    with pytest.raises(RuntimeError, match="simulation thread"):
+        srv.get_map_geometry()
