@@ -577,3 +577,75 @@ def test_map_geometry_is_built_on_the_sim_thread_once_and_cached(env, monkeypatc
     assert a is b and srv.cached_map_geometry() is a and len(calls) == 1
     with pytest.raises(RuntimeError, match="simulation thread"):
         srv.get_map_geometry()
+
+
+# ── hot configuration and RSU management on the (stub) world ─────────────────────────────────────
+
+def test_hot_config_changes_are_applied_on_the_sim_thread_and_logged_with_the_frame(env):
+    rec, make = env
+    srv = make()
+    out = srv.submit(srv.apply_config, {"awareness_range_m": 120.0, "lidar_max_sensors": 2, "lidar_keep_alive_s": 3.0,
+                                         "v2x_penetration_rate": 0.5, "observer_public": False}).result(5)
+    assert set(out["applied"]) == {"awareness_range_m", "lidar_max_sensors", "lidar_keep_alive_s", "v2x_penetration_rate", "observer_public"}
+    assert srv.v2x_network.awareness_range_m == 120.0 and srv.awareness_range_m == 120.0
+    assert srv.lidar.limits.max_sensors == 2 and srv.lidar.limits.keep_alive_s == 3.0
+    assert srv.config.v2x_penetration_rate == 0.5 and srv.observer_public is False
+    ev = [e for e in srv.events.since(0)[0] if e["kind"] == "config_changed"]
+    assert {e["data"]["field"] for e in ev} == set(out["applied"]) and all(e["data"]["applied_at_frame"] == out["applied_at_frame"] for e in ev)
+    assert srv.get_status()["awareness_range_m"] == 120.0
+
+
+def test_hot_config_is_all_or_nothing_and_refuses_restart_fields(env):
+    rec, make = env
+    srv = make()
+    before = srv.config
+    with pytest.raises(PermissionError, match="fixed_delta_seconds"):
+        srv.submit(srv.apply_config, {"awareness_range_m": 100.0, "fixed_delta_seconds": 0.1}).result(5)
+    with pytest.raises(ValueError):
+        srv.submit(srv.apply_config, {"awareness_range_m": 1.0}).result(5)
+    with pytest.raises(ValueError, match="unknown"):
+        srv.submit(srv.apply_config, {"bogus": 1}).result(5)
+    assert srv.config == before and srv.v2x_network.awareness_range_m == before.awareness_range_m
+    assert not [e for e in srv.events.since(0)[0] if e["kind"] == "config_changed"]
+    with pytest.raises(RuntimeError, match="simulation thread"):
+        srv.apply_config({"awareness_range_m": 100.0})
+
+
+def test_lowering_the_lidar_budget_does_not_kill_running_sensors_but_refuses_new_ones(env):
+    from src.lidar.config import LidarConfig
+    from src.lidar.sensor import ADMIN, LidarBudgetExceeded
+    rec, make = env
+    srv = make()
+    _, actor_id = _join(srv)
+    srv.submit(srv.lidar_request, ADMIN, actor_id, LidarConfig(points_per_second=500_000), pinned=True).result(5)
+    srv.submit(srv.apply_config, {"lidar_max_points_per_second": 100_000}).result(5)
+    time.sleep(0.3)
+    assert srv.lidar.list_sensors()[0]["state"] in ("active", "warming_up")
+    with pytest.raises(LidarBudgetExceeded):
+        srv.submit(srv.lidar_request, ADMIN, actor_id, LidarConfig(points_per_second=50_000)).result(5)
+
+
+def test_rsu_can_be_disabled_changed_and_enabled_again(env):
+    rec, make = env
+    srv = make()
+    _join(srv)
+    # the stub world has no traffic lights, so register one RSU by hand
+    from src.v2x.rsu import RoadSideUnit, RSUConfig
+    rsu = RoadSideUnit(RSUConfig(intersection_id=5, position=(10.0, 20.0, 3.0)))
+    srv.submit(srv.v2x_network.register_rsu, rsu).result(5)
+    assert _wait(lambda: any(r["station_id"] == -5 for r in srv.get_world_state().data["rsus"]))
+    r = srv.submit(srv.set_rsu, -5, False, 20.0).result(5)
+    assert r["enabled"] is False and r["tx_power_dbm"] == 20.0 and set(r["changes"]) == {"enabled", "tx_power_dbm"}
+    assert 5 not in srv.v2x_network._rsus
+    assert _wait(lambda: next(x for x in srv.get_world_state().data["rsus"] if x["station_id"] == -5)["enabled"] is False)
+    assert _wait(lambda: -5 not in srv.get_v2x_frame().stations)
+    r = srv.submit(srv.set_rsu, -5, True).result(5)
+    assert r["enabled"] is True and 5 in srv.v2x_network._rsus and r["changes"] == {"enabled": {"old": False, "new": True}}
+    assert _wait(lambda: -5 in srv.get_v2x_frame().stations)
+    assert srv.submit(srv.set_rsu, -5, True).result(5)["changes"] == {}, "no change, no event"
+    with pytest.raises(LookupError):
+        srv.submit(srv.set_rsu, -77, True).result(5)
+    with pytest.raises(LookupError):
+        srv.submit(srv.set_rsu, 5, True).result(5)
+    kinds = [e["data"]["field"] for e in srv.events.since(0)[0] if e["kind"] == "rsu_changed"]
+    assert kinds.count("enabled") == 2 and kinds.count("tx_power_dbm") == 1

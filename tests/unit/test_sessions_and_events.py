@@ -128,3 +128,17 @@ def test_world_state_rate_must_be_whole_frames():
         WorldConfig(host="h", world_state_rate_hz=7.0)
     assert WorldConfig(host="h", world_state_rate_hz=20.0).world_state_every_n_frames == 1
     assert WorldConfig(host="h").session_disconnect_grace_s == 30.0 and WorldConfig(host="h").observer_public is True
+
+
+def test_ended_sessions_are_listed_for_a_while_then_forgotten():
+    sm = SessionManager()
+    a, b = make_session(sm, "a"), make_session(sm, "b")
+    sm.end_session(a.session_id)
+    assert a.ended_at is not None and b.ended_at is None and a.to_dict()["ended_at"] and b.to_dict()["ended_at"] is None
+    first = a.ended_at
+    sm.end_session(a.session_id)                       # ending twice keeps the first time
+    assert a.ended_at == first
+    assert sm.prune_ended(600) == 0
+    a.ended_at = datetime.now(timezone.utc) - timedelta(seconds=700)
+    assert sm.prune_ended(600) == 1
+    assert sm.get_session(a.session_id) is None and sm.get_session(b.session_id) is b

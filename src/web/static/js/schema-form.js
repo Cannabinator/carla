@@ -33,6 +33,8 @@ export function fieldsFromJsonSchema(schema) {
       options: prop.enum || null,
       default: raw.default === undefined ? null : raw.default,
       unit: '',
+      apply: raw['x-apply'] || null,                 // 'hot' (changeable while running) or 'restart' (needs a new world)
+      effect: raw['x-effect'] || '',
     });
   }
   return out;

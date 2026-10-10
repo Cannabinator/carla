@@ -132,6 +132,23 @@ async def reconfigure_sensor(sensor_id: int, config: LidarConfig, x_admin_token:
                                                   "warnings": config.warnings(world.fixed_delta_seconds)})
 
 
+class SensorFlags(BaseModel):
+    pinned: Optional[bool] = None
+    record_raw: Optional[bool] = None
+
+
+@router.patch("/api/lidar/sensors/{sensor_id}", summary="Pin a sensor / mark it for raw recording (admin)")
+async def patch_sensor(sensor_id: int, body: SensorFlags, x_admin_token: Optional[str] = Header(default=None),
+                       x_session_token: Optional[str] = Header(default=None)):
+    world = _ready()
+    principal = principal_from_headers(x_admin_token, x_session_token)
+    try:
+        await on_sim_thread(world, lambda: world.lidar_set_flags(principal, sensor_id, body.pinned, body.record_raw))
+    except LidarError as exc:
+        return _lidar_errors(exc)
+    return JSONResponse(status_code=202, content={"sensor_id": sensor_id, "pinned": body.pinned, "record_raw": body.record_raw})
+
+
 @router.delete("/api/lidar/sensors/{sensor_id}", summary="Release a sensor")
 async def release_sensor(sensor_id: int, x_admin_token: Optional[str] = Header(default=None),
                          x_session_token: Optional[str] = Header(default=None)):

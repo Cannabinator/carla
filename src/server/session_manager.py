@@ -34,6 +34,7 @@ class ClientSession:
     # the id is shown in the admin list, the token only goes to the client that joined (never in a URL).
     session_token: str = field(default_factory=lambda: secrets.token_urlsafe(24), repr=False)
     ws_connections: int = 0
+    ended_at: Optional[datetime] = None
 
     # ------------------------------------------------------------------ #
     # Computed properties                                                  #
@@ -65,6 +66,7 @@ class ClientSession:
             "remaining_seconds": self.remaining_seconds,
             "last_seen": self.last_seen.isoformat(),
             "connected": self.ws_connections > 0,
+            "ended_at": self.ended_at.isoformat() if self.ended_at else None,
         }
 
 
@@ -118,6 +120,8 @@ class SessionManager:
             session = self._sessions.get(session_id)
             if not session:
                 return False
+            if session.is_active:
+                session.ended_at = datetime.now(timezone.utc)
             session.is_active = False
         logger.info("Session ended: %s (%s)", session_id, session.client_name)
         return True
@@ -166,6 +170,15 @@ class SessionManager:
             if session:
                 session.ws_connections = max(0, session.ws_connections - 1)
                 session.last_seen = datetime.now(timezone.utc)
+
+    def prune_ended(self, older_than_s: float = 600.0) -> int:
+        """Forget sessions that ended more than ``older_than_s`` ago (they are listed for a while, then dropped)."""
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=older_than_s)
+        with self._lock:
+            stale = [k for k, s in self._sessions.items() if not s.is_active and s.ended_at and s.ended_at < cutoff]
+            for k in stale:
+                del self._sessions[k]
+        return len(stale)
 
     def get_grace_expired(self, grace_s: float) -> List[ClientSession]:
         """Active sessions with no WebSocket and no sign of life (``touch``) for longer than ``grace_s``."""

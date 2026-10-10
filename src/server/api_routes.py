@@ -6,7 +6,7 @@ Public ones follow ``observer_public``: when it is false they need the admin tok
 
 import logging
 import sys
-from typing import Optional, Union
+from typing import Any, Dict, Optional, Union
 
 from fastapi import APIRouter, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from src.server.admin_routes import check_admin_token
 from src.server.route_utils import on_sim_thread
-from src.server.world_config import WorldConfig
+from src.server.world_config import HOT_FIELDS, config_schema
 from src.v2x.messages.denm import DENMCauseCode
 
 logger = logging.getLogger(__name__)
@@ -75,7 +75,49 @@ async def get_config(x_admin_token: Optional[str] = Header(default=None)):
 @router.get("/api/config/schema", summary="JSON schema of the configuration (for forms)")
 async def get_config_schema(x_admin_token: Optional[str] = Header(default=None)):
     _read_gate(x_admin_token)
-    return WorldConfig.model_json_schema()
+    return config_schema()
+
+
+@router.patch("/api/config", summary="Change hot configuration fields of the running world (admin)")
+async def patch_config(changes: Dict[str, Any], x_admin_token: str = Header(...)):
+    """Body: ``{"field": value, ...}`` with fields marked ``x-apply: hot`` in /api/config/schema. All or nothing; every
+    change becomes an event with the frame at which it was applied. Fields that need a restart answer 409."""
+    check_admin_token(x_admin_token)
+    world = _ready()
+    try:
+        return await on_sim_thread(world, lambda: world.apply_config(changes))
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail={"error": "restart_required", "message": str(exc),
+                                                     "hot_fields": sorted(HOT_FIELDS)})
+    except ValueError as exc:                                  # unknown field or a value the configuration rules reject
+        errors = getattr(exc, "errors", None)                 # pydantic.ValidationError has .errors(); plain ValueError does not
+        detail = errors(include_url=False, include_context=False) if callable(errors) else str(exc)
+        raise HTTPException(status_code=422, detail=detail)
+
+
+@router.get("/api/v2x/rsus", summary="RSUs: position, power, range, enabled")
+async def list_rsus(x_admin_token: Optional[str] = Header(default=None)):
+    world = _ready()
+    _read_gate(x_admin_token)
+    state = world.get_world_state()
+    return {"rsus": state.data.get("rsus", []) if state else [], "frame": state.frame if state else None}
+
+
+class RsuPatch(BaseModel):
+    enabled: Optional[bool] = None
+    tx_power_dbm: Optional[float] = Field(default=None, ge=0.0, le=40.0)
+
+
+@router.patch("/api/v2x/rsus/{station_id}", summary="Enable/disable an RSU or change its transmit power (admin)")
+async def patch_rsu(station_id: int, body: RsuPatch, x_admin_token: str = Header(...)):
+    check_admin_token(x_admin_token)
+    world = _ready()
+    try:
+        return await on_sim_thread(world, lambda: world.set_rsu(station_id, body.enabled, body.tx_power_dbm))
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
 
 @router.get("/api/map/geometry", summary="Road network: lane polylines and junction boxes")

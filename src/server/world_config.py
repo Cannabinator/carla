@@ -96,3 +96,28 @@ class WorldConfig(BaseModel):
     @property
     def v2x_every_n_frames(self) -> int:
         return round(1.0 / (self.v2x_update_rate_hz * self.fixed_delta_seconds))
+
+
+# Fields that can change while the world runs (PATCH /api/config); everything else needs a new world (restart).
+# "next V2X update" fields take effect when the V2X network runs next, "immediately" fields from the next frame.
+HOT_FIELDS = {
+    "awareness_range_m": "next V2X update",
+    "v2x_penetration_rate": "for background vehicles spawned from now on",
+    "session_disconnect_grace_s": "immediately",
+    "observer_public": "immediately",
+    "world_state_rate_hz": "immediately",
+    "v2x_links_max_rows": "immediately",
+    "lidar_max_sensors": "for new requests (running sensors keep running)",
+    "lidar_max_points_per_second": "for new requests (running sensors keep running)",
+    "lidar_keep_alive_s": "immediately",
+}
+
+
+def config_schema() -> dict:
+    """JSON schema of WorldConfig with ``x-apply`` on every property: "hot" or "restart", plus ``x-effect``."""
+    schema = WorldConfig.model_json_schema()
+    for name, prop in schema.get("properties", {}).items():
+        prop["x-apply"] = "hot" if name in HOT_FIELDS else "restart"
+        if name in HOT_FIELDS:
+            prop["x-effect"] = HOT_FIELDS[name]
+    return schema

@@ -292,3 +292,17 @@ def test_nothing_an_observer_can_read_contains_a_session_id_or_token(client, wor
     world.lidar_tick(1)
     text = client.get("/api/lidar/sensors").text
     assert j["session_id"] not in text and j["session_token"] not in text
+
+
+def test_admin_pins_and_unpins_a_sensor_others_cannot(client, world):
+    j = join(client)
+    mine = {"X-Session-Token": j["session_token"]}
+    sid = client.post("/api/lidar/sensors", json={}, headers=mine).json()["sensor_id"]
+    assert client.patch(f"/api/lidar/sensors/{sid}", json={"pinned": True}, headers=mine).status_code == 403
+    assert client.patch(f"/api/lidar/sensors/{sid}", json={"pinned": True}).status_code == 403
+    r = client.patch(f"/api/lidar/sensors/{sid}", json={"pinned": True, "record_raw": True}, headers=ADMIN)
+    assert r.status_code == 202
+    world.lidar_tick(1)
+    (info,) = client.get("/api/lidar/sensors").json()["sensors"]
+    assert info["pinned"] is True and info["record_raw"] is True
+    assert client.patch("/api/lidar/sensors/99", json={"pinned": True}, headers=ADMIN).status_code == 404

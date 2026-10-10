@@ -14,7 +14,7 @@ import pytest
 
 from src.lidar.config import lidar_schema
 from src.lidar.transforms import to_world, transform_matrix
-from src.server.world_config import WorldConfig
+from src.server.world_config import config_schema
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -34,7 +34,9 @@ def write_fixtures(path: Path) -> None:
                     "points": pts.tolist(), "world": to_world(pts, loc, pyr).tolist()})
     (path / "coords.json").write_text(json.dumps({"poses": out}))
     write_lidar_frames(path)
-    (path / "world_config_schema.json").write_text(json.dumps(WorldConfig.model_json_schema()))
+    (path / "world_config_schema.json").write_text(json.dumps(config_schema()))
+    from src.v2x.messages.denm import DENMCauseCode
+    (path / "denm_causes.json").write_text(json.dumps([[c.value, c.name] for c in DENMCauseCode]))
     (path / "lidar_schema.json").write_text(json.dumps(lidar_schema()))
 
 

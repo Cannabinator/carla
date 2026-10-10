@@ -572,6 +572,64 @@
         "title": "PedestrianRequest",
         "type": "object"
       },
+      "RsuPatch": {
+        "properties": {
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "tx_power_dbm": {
+            "anyOf": [
+              {
+                "maximum": 40.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tx Power Dbm"
+          }
+        },
+        "title": "RsuPatch",
+        "type": "object"
+      },
+      "SensorFlags": {
+        "properties": {
+          "pinned": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pinned"
+          },
+          "record_raw": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Record Raw"
+          }
+        },
+        "title": "SensorFlags",
+        "type": "object"
+      },
       "SensorRequest": {
         "properties": {
           "actor_id": {
@@ -1242,6 +1300,57 @@
         "tags": [
           "api"
         ]
+      },
+      "patch": {
+        "description": "Body: ``{\"field\": value, ...}`` with fields marked ``x-apply: hot`` in /api/config/schema. All or nothing; every\nchange becomes an event with the frame at which it was applied. Fields that need a restart answer 409.",
+        "operationId": "patch_config_api_config_patch",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-admin-token",
+            "required": true,
+            "schema": {
+              "title": "X-Admin-Token",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Changes",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Change hot configuration fields of the running world (admin)",
+        "tags": [
+          "api"
+        ]
       }
     },
     "/api/config/schema": {
@@ -1514,6 +1623,86 @@
           }
         },
         "summary": "Release a sensor",
+        "tags": [
+          "lidar"
+        ]
+      },
+      "patch": {
+        "operationId": "patch_sensor_api_lidar_sensors__sensor_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sensor_id",
+            "required": true,
+            "schema": {
+              "title": "Sensor Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Admin-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-session-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Session-Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SensorFlags"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pin a sensor / mark it for raw recording (admin)",
         "tags": [
           "lidar"
         ]
@@ -1934,6 +2123,112 @@
           }
         },
         "summary": "Cancel a DENM (admin)",
+        "tags": [
+          "api"
+        ]
+      }
+    },
+    "/api/v2x/rsus": {
+      "get": {
+        "operationId": "list_rsus_api_v2x_rsus_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Admin-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "RSUs: position, power, range, enabled",
+        "tags": [
+          "api"
+        ]
+      }
+    },
+    "/api/v2x/rsus/{station_id}": {
+      "patch": {
+        "operationId": "patch_rsu_api_v2x_rsus__station_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "station_id",
+            "required": true,
+            "schema": {
+              "title": "Station Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-admin-token",
+            "required": true,
+            "schema": {
+              "title": "X-Admin-Token",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RsuPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Enable/disable an RSU or change its transmit power (admin)",
         "tags": [
           "api"
         ]

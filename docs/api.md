@@ -149,6 +149,13 @@ Cancel a DENM (admin)
 * parameters: station_id (path), action_id (path)
 * success: 200
 
+### `GET /api/v2x/rsus`
+
+RSUs: position, power, range, enabled
+
+* headers: `x-admin-token`
+* success: 200
+
 ## REST: client
 
 ### `GET /client/blueprints`

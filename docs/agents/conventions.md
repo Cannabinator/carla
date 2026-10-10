@@ -31,7 +31,7 @@
 - **Message model:** V2V messages are SAE J2735-style (BSM/DENM/CAM). V2X adds MAP/SPAT/VRUAM/CPM.
   Keep the `V2XNetworkEnhanced(V2VNetworkEnhanced)` inheritance so the V2V pipeline stays
   backward compatible.
-- **Frontend:** plain static HTML in `src/visualization/web/` + Jinja/HTTP responses; no
+- **Frontend:** plain static HTML and ES modules in `src/web/` (no build step); no
   build step.
 
 ## Git workflow

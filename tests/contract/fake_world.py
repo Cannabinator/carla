@@ -40,6 +40,8 @@ class FakeWorld:
         self._map_cached = False
         self.denms = {}
         self._denm_action = 0
+        self.rsus = {-1: {"station_id": -1, "intersection_id": 1, "x": 0.0, "y": 0.0, "z": 3.5, "enabled": True,
+                          "tx_power_dbm": 33.0, "broadcast_range_m": 300.0}}
         # what the hub reads (the real world publishes the same things from its simulation thread)
         self.observer_public = True
         self.v2x_links_max_rows = 2000
@@ -100,6 +102,34 @@ class FakeWorld:
     def get_vehicle_v2x_data(self, session_id):
         return {"neighbors": [], "threats": []}
 
+    # --- hot configuration and RSUs (same exceptions as the real world raises) ------------
+    def apply_config(self, changes):
+        from src.server.world_config import HOT_FIELDS
+        unknown = [k for k in changes if k not in WorldConfig.model_fields]
+        if unknown:
+            raise ValueError(f"unknown configuration fields: {', '.join(unknown)}")
+        restart = [k for k in changes if k not in HOT_FIELDS]
+        if restart:
+            raise PermissionError(f"these fields need a new world (restart): {', '.join(restart)}")
+        new = WorldConfig.model_validate({**self.config.model_dump(), **changes})
+        applied = {k: {"old": getattr(self.config, k), "new": getattr(new, k), "effective": HOT_FIELDS[k]}
+                   for k in changes if getattr(self.config, k) != getattr(new, k)}
+        self.config = new
+        if "observer_public" in applied:
+            self.observer_public = new.observer_public
+        return {"applied": applied, "applied_at_frame": self.frame_no, "sim_time": self.frame_no * 0.05}
+
+    def set_rsu(self, station_id, enabled=None, tx_power_dbm=None):
+        if station_id >= 0 or station_id not in self.rsus:
+            raise LookupError(f"no RSU with station id {station_id}")
+        r = self.rsus[station_id]
+        if enabled is not None:
+            r["enabled"] = enabled
+        if tx_power_dbm is not None:
+            r["tx_power_dbm"] = tx_power_dbm
+        self.publish_world_state([])
+        return {"station_id": station_id, "applied_at_frame": self.frame_no, "enabled": r["enabled"], "tx_power_dbm": r["tx_power_dbm"]}
+
     # --- map / DENM -----------------------------------------------------------
     def get_map_geometry(self):
         self._map_cached = True
@@ -128,7 +158,7 @@ class FakeWorld:
     def publish_world_state(self, stations):
         self._world_state_version += 1
         self._world_state = Published(self._world_state_version, self.frame_no, self.frame_no * 0.05,
-                                      {"stations": stations, "rsus": []})
+                                      {"stations": stations, "rsus": list(self.rsus.values())})
 
     def get_world_state(self):
         return self._world_state
@@ -155,6 +185,9 @@ class FakeWorld:
 
     def lidar_reconfigure(self, principal, sensor_id, config):
         self.lidar.reconfigure(principal, sensor_id, config)
+
+    def lidar_set_flags(self, principal, sensor_id, pinned=None, record_raw=None):
+        self.lidar.set_flags(principal, sensor_id, pinned, record_raw)
 
     def lidar_release(self, principal, sensor_id):
         self.lidar.release(principal, sensor_id)

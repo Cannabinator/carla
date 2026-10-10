@@ -307,6 +307,21 @@ class LidarManager:
             self._event(s, SensorState.RECONFIGURING, "config changed")
         self._publish_info()
 
+    def set_flags(self, principal: Principal, sensor_id: int, pinned: Optional[bool] = None,
+                  record_raw: Optional[bool] = None) -> None:
+        """Pin a sensor (never auto-released) / mark it for raw recording. Admin only (D9: pinning is a resource decision)."""
+        s = self._get(sensor_id)
+        if principal.kind != "admin":
+            raise LidarForbidden("only an admin may pin a sensor or mark it for raw recording")
+        if s.state not in _LIVE or s.state == SensorState.STOPPING:
+            raise LidarError(f"cannot change a sensor in state {s.state.value}")
+        if pinned is not None:
+            s.pinned = pinned
+        if record_raw is not None:
+            s.record_raw = record_raw
+        s.idle_since = self._clock()
+        self._publish_info()
+
     def release(self, principal: Principal, sensor_id: int) -> None:
         s = self._get(sensor_id)
         self._may_modify(principal, s)

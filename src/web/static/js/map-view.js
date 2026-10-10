@@ -45,6 +45,7 @@ export class MapView {
     this.drawnLinks = [];
     this.drawnStations = [];
     this.selectedLink = null;
+    this.pickHandler = null;           // admin: the next click on empty map returns world coordinates instead of selecting
     this.dirty = true;
     this.fitted = false;
     this.lastTrailFrame = null;
@@ -157,6 +158,14 @@ export class MapView {
   _click(e) {
     const r = this.canvas.getBoundingClientRect();
     const sx = e.clientX - r.left, sy = e.clientY - r.top;
+    if (this.pickHandler) {
+      const [wx, wy] = screenToWorld(this.vp, sx, sy);
+      const h = this.pickHandler;
+      this.pickHandler = null;
+      this.canvas.style.cursor = '';
+      h(wx, wy);
+      return;
+    }
     const st = hitTestStations(this.drawnStations, this.vp, sx, sy, 11);
     if (st) { this.onSelect(st.id, st); return; }
     const l = hitTestLinks(this.drawnLinks, sx, sy, 5);
@@ -516,6 +525,12 @@ export class MapView {
     // north-up note: CARLA +x is east, +y is south on screen (not mirrored)
     ctx.fillText('x →   y ↓', this.vp.width - 60, this.vp.height - 8);
     ctx.restore();
+  }
+
+  /** The next click on the map calls ``handler(x, y)`` with CARLA world coordinates (metres). */
+  pick(handler) {
+    this.pickHandler = handler;
+    this.canvas.style.cursor = 'crosshair';
   }
 
   /** For tests and the HUD: where a station is drawn on screen. */

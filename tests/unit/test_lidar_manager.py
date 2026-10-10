@@ -426,3 +426,29 @@ def test_info_version_bumps_on_change_but_not_every_frame(env):
     mgr.attach_viewer(sid, "b")
     tick(mgr, backend, 12)
     assert mgr.info_version == v + 1         # viewers 1 -> 2
+
+
+def test_pinning_is_admin_only_and_keeps_an_unwatched_sensor_alive(env):
+    mgr, backend, clock = env
+    sid = mgr.request(VEH, 10)
+    mgr.collect(1, 0.05)
+    with pytest.raises(LidarForbidden):
+        mgr.set_flags(VEH, sid, pinned=True)                    # even the owner may not pin
+    with pytest.raises(LidarForbidden):
+        mgr.set_flags(OBS, sid, record_raw=True)
+    mgr.set_flags(ADMIN, sid, pinned=True)
+    assert mgr.list_sensors()[0]["pinned"] is True
+    clock.t += 1000
+    tick(mgr, backend, 2)
+    assert mgr.state_of(sid) == SensorState.ACTIVE
+    mgr.set_flags(ADMIN, sid, pinned=False)                     # unpinning starts the idle clock again
+    clock.t += 5
+    tick(mgr, backend, 3)
+    assert mgr.state_of(sid) == SensorState.ACTIVE
+    clock.t += 6
+    tick(mgr, backend, 4)
+    assert mgr.state_of(sid) == SensorState.STOPPING
+    with pytest.raises(LidarError):
+        mgr.set_flags(ADMIN, sid, pinned=True)
+    with pytest.raises(LidarNotFound):
+        mgr.set_flags(ADMIN, 99, pinned=True)

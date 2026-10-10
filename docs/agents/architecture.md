@@ -23,7 +23,7 @@ V2P (VRU) extensions.
                  │  admin_routes.py  (token-gated control)     │
                  │  client_routes.py (join / control vehicle)  │
                  │  v2v/api.py        (V2V REST + WebSocket)   │
-                 │  visualization/web/*.html (dashboards)      │
+                 │  web/*.html (observer, vehicle, admin)      │
                  └───────────────┬─────────────────────────────┘
                                  │ HTTP / WebSocket
                        Clients (laptop / raspi / workstation)
@@ -73,7 +73,7 @@ Dataclasses: `SimulationConfig`, `VisualizationConfig`, `V2VConfig`, `VehicleCon
 LiDAR: `src/lidar/` (see the LiDAR section of docs/science/CHANGELOG.md, Phase 4): `protocol.py` (wire format v3),
 `transforms.py`, `config.py`, `sensor.py` (`LidarManager`), `stream.py` (profiles), `carla_backend.py`.
 
-### `src/server/` & `src/visualization/`
+### `src/server/` & `src/web/`
 - `server/app.py` — FastAPI app, `run_server()` and `set_persistent_world()` (wires the world
   into the admin/client routes). `server/persistent_world.py` — the simulation owner.
 - `server/lidar_routes.py` — LiDAR REST + `/ws/lidar/{sensor_id}`.
@@ -81,7 +81,8 @@ LiDAR: `src/lidar/` (see the LiDAR section of docs/science/CHANGELOG.md, Phase 4
   latest-wins delivery); `server/api_routes.py` — status, config, map geometry, DENM injection; the whole API is in
   `docs/api.md` (generated: `python -m src.server.api_docs`).
 - Anything a client reads is *published* by the simulation thread (`Published`, `V2XFrame`) and only read by the hub.
-- `visualization/web/` — frontend pages `admin_panel.html`, `client_join.html`.
+- `web/` — frontend pages `index.html`, `observer.html`, `vehicle.html`, `admin.html`; plain ES modules in `web/static/js`,
+  vendored Three.js and uPlot in `web/static/vendor` (no build step); Node tests in `tests/js`, Playwright tests in `tests/e2e`.
 
 ## Data flow (one tick)
 1. `PersistentCARLAServer` ticks CARLA (fixed dt) → updates each leading vehicle's state.

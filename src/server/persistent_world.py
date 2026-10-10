@@ -50,7 +50,7 @@ from src.server.published import Published
 from src.server.v2x_publisher import V2XPublisher
 from src.server.session_manager import SessionManager
 from src.server.sim_executor import SimThreadExecutor
-from src.server.world_config import WorldConfig
+from src.server.world_config import HOT_FIELDS, WorldConfig
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +122,7 @@ class PersistentCARLAServer:
         self._map_geometry: Optional[dict] = None      # cached road network (built once per world)
         self._denm_action = 0
         self._denm_expiry: Dict[tuple, float] = {}     # (station_id, action_id) -> sim time at which it ends
+        self._rsu_disabled: Dict[int, Any] = {}        # intersection_id -> RoadSideUnit taken out of the network
 
         # V2X network (created in start())
         self.v2x_network = None
@@ -345,6 +346,10 @@ class PersistentCARLAServer:
         self._require_sim_thread()
         self.lidar.reconfigure(principal, sensor_id, config)
 
+    def lidar_set_flags(self, principal, sensor_id, pinned=None, record_raw=None) -> None:
+        self._require_sim_thread()
+        self.lidar.set_flags(principal, sensor_id, pinned, record_raw)
+
     def lidar_release(self, principal, sensor_id) -> None:
         self._require_sim_thread()
         self.lidar.release(principal, sensor_id)
@@ -418,6 +423,7 @@ class PersistentCARLAServer:
         self._v2x_payloads = payloads
 
     def _check_expired_sessions(self) -> None:
+        self.sessions.prune_ended()
         for session in self.sessions.get_expired_sessions():
             logger.info("Session %s expired — removing vehicle", session.session_id)
             self._despawn_client_vehicle(session.session_id)
@@ -477,9 +483,13 @@ class PersistentCARLAServer:
             if e:
                 stations.append(e)
         rsus = []
-        for iid, rsu in getattr(self.v2x_network, "_rsus", {}).items():
-            x, y, z = rsu.config.position
-            rsus.append({"station_id": -int(iid), "intersection_id": iid, "x": round(x, 2), "y": round(y, 2), "z": round(z, 2)})
+        for enabled, group in ((True, getattr(self.v2x_network, "_rsus", {})), (False, self._rsu_disabled)):
+            for iid, rsu in list(group.items()):
+                x, y, z = rsu.config.position
+                rsus.append({"station_id": -int(iid), "intersection_id": iid, "x": round(x, 2), "y": round(y, 2), "z": round(z, 2),
+                             "enabled": enabled, "tx_power_dbm": rsu.config.tx_power_dbm,
+                             "broadcast_range_m": rsu.config.broadcast_range_m})
+        rsus.sort(key=lambda r: r["intersection_id"])
         self._world_state_version += 1
         self._world_state = Published(self._world_state_version, snapshot.frame,
                                       float(snapshot.timestamp.elapsed_seconds),
@@ -509,6 +519,76 @@ class PersistentCARLAServer:
             "lidar_budget": self.lidar.budget() if self.lidar else None,
             "recording": None,                    # Phase 7: frames written, writer queue fill, disk usage
         })
+
+    # ------------------------------------------------------------------ #
+    # Hot configuration and RSU management (admin)                         #
+    # ------------------------------------------------------------------ #
+
+    def apply_config(self, changes: Dict[str, Any]) -> Dict[str, Any]:
+        """Change hot fields of the configuration (simulation thread). Everything is validated first (the cross-field
+        rules of WorldConfig included) and either all of it is applied or none. Every change is an event with the frame
+        at which it was applied."""
+        self._require_sim_thread()
+        unknown = sorted(k for k in changes if k not in WorldConfig.model_fields)
+        if unknown:
+            raise ValueError(f"unknown configuration fields: {', '.join(unknown)}")
+        restart = sorted(k for k in changes if k not in HOT_FIELDS)
+        if restart:
+            raise PermissionError(f"these fields need a new world (restart): {', '.join(restart)}")
+        merged = {**self.config.model_dump(), **changes}
+        new = WorldConfig.model_validate(merged)               # raises pydantic.ValidationError (a ValueError)
+        applied: Dict[str, Any] = {}
+        for k in changes:
+            old, val = getattr(self.config, k), getattr(new, k)
+            if old != val:
+                applied[k] = {"old": old, "new": val, "effective": HOT_FIELDS[k]}
+        self.config = new
+        if "awareness_range_m" in applied:
+            self.awareness_range_m = new.awareness_range_m
+            if self.v2x_network is not None:
+                self.v2x_network.awareness_range_m = new.awareness_range_m
+        if "session_disconnect_grace_s" in applied:
+            self.session_disconnect_grace_s = new.session_disconnect_grace_s
+        if "observer_public" in applied:
+            self.observer_public = new.observer_public
+        if "v2x_links_max_rows" in applied:
+            self.v2x_links_max_rows = new.v2x_links_max_rows
+        if self.lidar is not None:
+            lim = self.lidar.limits
+            lim.max_sensors, lim.max_points_per_second, lim.keep_alive_s = (
+                new.lidar_max_sensors, new.lidar_max_points_per_second, new.lidar_keep_alive_s)
+        frame = self._frame
+        for k, v in applied.items():
+            self._event("config_changed", field=k, old=v["old"], new=v["new"], applied_at_frame=frame, effective=v["effective"])
+        return {"applied": applied, "applied_at_frame": frame, "sim_time": self._sim_time}
+
+    def set_rsu(self, station_id: int, enabled: Optional[bool] = None, tx_power_dbm: Optional[float] = None) -> Dict[str, Any]:
+        """Enable/disable one RSU or change its transmit power (simulation thread)."""
+        self._require_sim_thread()
+        if self.v2x_network is None:
+            raise ValueError("V2X is disabled")
+        iid = -int(station_id)
+        net = self.v2x_network
+        rsu = net._rsus.get(iid) or self._rsu_disabled.get(iid)
+        if station_id >= 0 or rsu is None:
+            raise LookupError(f"no RSU with station id {station_id}")
+        changes: Dict[str, Any] = {}
+        if tx_power_dbm is not None and rsu.config.tx_power_dbm != tx_power_dbm:
+            changes["tx_power_dbm"] = {"old": rsu.config.tx_power_dbm, "new": tx_power_dbm}
+            rsu.config.tx_power_dbm = tx_power_dbm
+        if enabled is not None:
+            now_enabled = iid in net._rsus
+            if enabled and not now_enabled:
+                net.register_rsu(self._rsu_disabled.pop(iid))
+                changes["enabled"] = {"old": False, "new": True}
+            elif not enabled and now_enabled:
+                self._rsu_disabled[iid] = net._rsus[iid]
+                net.unregister_rsu(iid)
+                changes["enabled"] = {"old": True, "new": False}
+        for k, v in changes.items():
+            self._event("rsu_changed", station_id=station_id, field=k, old=v["old"], new=v["new"], applied_at_frame=self._frame)
+        return {"station_id": station_id, "changes": changes, "applied_at_frame": self._frame,
+                "enabled": iid in net._rsus, "tx_power_dbm": rsu.config.tx_power_dbm}
 
     # ------------------------------------------------------------------ #
     # Map and DENM injection (decision D11)                                #

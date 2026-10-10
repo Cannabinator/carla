@@ -55,3 +55,10 @@ test('validateAll collects every error', { skip: !lidar }, () => {
   const e = validateAll(fields, { channels: '0', range_m: '1000', points_per_second: '10000' });
   assert.ok(e.channels && e.range_m && !e.points_per_second);
 });
+
+test('fields carry whether they are hot or need a restart, and when a hot change takes effect', { skip: !world }, () => {
+  const f = byName(fieldsFromJsonSchema(world));
+  assert.equal(f.awareness_range_m.apply, 'hot'); assert.equal(f.awareness_range_m.effect, 'next V2X update');
+  assert.equal(f.fixed_delta_seconds.apply, 'restart'); assert.equal(f.fixed_delta_seconds.effect, '');
+  assert.ok(Object.values(f).every((x) => x.apply === 'hot' || x.apply === 'restart'));
+});
